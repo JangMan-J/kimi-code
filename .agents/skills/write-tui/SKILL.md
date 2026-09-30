@@ -16,15 +16,18 @@ For any list dialog, selector, input box, or status/toggle list, the interaction
 - `src/tui/kimi-tui.ts` — the `KimiTUI` coordinator. Holds `state`, owns startup/shutdown order, layout/editor wiring, user-input entry, sending/queueing, session lifecycle, and the slash-command handler dispatch. It should **not** accumulate event-routing or rendering logic — those live in controllers.
 - `src/tui/tui-state.ts` — `TUIState`, `createTUIState`, `createInitialAppState`. The single global UI state shape. Before adding a new global field, decide whether it truly belongs here vs. local component state.
 - `src/tui/controllers/` — the independently-testable responsibilities. Each controller owns one slice:
-  - `session-event-handler.ts` — routes SDK session events (`handleEvent` dispatch + the per-event `handleXxx`). Concrete event handling goes here, not in `KimiTUI`.
+  - `session-event-handler.ts` — subscribes the v3 session event surface and routes it into state/streaming: agent-tier machine events (`agent.on(...)`: `turn.started`, `step.started`, `llm.streaming.part`, `llm.retrying`, `llm.done`, `turn.spawn_tools`, `tool.update`/`detached`/`done`, `turn.done`, `prompt.blocked`), session-tier node events (`session.handle.on(...)`: `agent.opened`/`closed`, `goal.updated`, `skill.activated`, `cron.fired`, `shell.output`, plus session-journal commits bridged to the node by SessionUnit: `session.meta_updated`, `compaction.started`/`completed`/`cancelled`), and facade watchers (kernel `watch` over `AgentModelRef`/`PermissionRef`/`PlanRef`/`TokenCountingRef`/`UsageRef`/`TaskRef`/`TodoRef`/`GoalRef` state). Concrete event handling goes here, not in `KimiTUI`.
+  - `subagent-event-handler.ts` — subagent lifecycle and sub-tool routing (spawn/close, per-agent tool update/done), driven by the same session event surface.
   - `streaming-ui.ts` — streaming render: assistant delta, thinking, tool call / result, compaction, subagent, background agent, transcript aggregation.
-  - `session-replay.ts` — resume/replay orchestration; drives replay records through the same live render hooks. Stateless replay parsing/limiting/projection helpers belong in `src/tui/utils/message-replay.ts`.
-  - `tasks-browser.ts` — the tasks browser controller.
+  - `session-replay.ts` — resume/replay orchestration; drives v3 history entries through the same live render hooks. Stateless replay parsing/limiting/projection helpers belong in `src/tui/utils/message-replay.ts`.
+  - `tasks-browser.ts` — the tasks browser controller (background Bash/Agent tasks from `TaskRef`).
+  - `btw-panel.ts` — the `/btw` side-question panel controller.
   - `editor-keyboard.ts` — editor keyboard handling, exit shortcuts, external editor, clipboard image.
   - `auth-flow.ts` — login/auth orchestration (`refreshConfigAfterLogin`, etc.).
+  - `survey-controller.ts`, `mcp-status.ts`, `clipboard-image-hint.ts` — feedback survey prompts, MCP status summary, and the clipboard-image hint.
 - `src/tui/commands/` — slash-command declaration, parsing, ordering, and dynamic skill-command generation. Parsing and types only; execution is dispatched from `KimiTUI`'s slash-command handler section, and complex execution sinks into `utils` or focused components.
 - `src/tui/components/` — pi-tui components by UI type: `chrome/` (footer, todo, welcome, loader, device code), `dialogs/` (selectors, approval/question panels, settings popups that replace the editor), `editor/` (input box + mention provider), `media/` (image, diff, code highlight), `messages/` (transcript blocks + tool-renderers), `panes/` (activity, queue).
-- `src/tui/reverse-rpc/` — adapts SDK approval/question callbacks into UI panel data and the user's choice back into an SDK response.
+- `src/tui/reverse-rpc/` — converts harness-core interaction requests (permission approvals, plan reviews, AskUserQuestion) into the data shape a UI panel/dialog needs, and converts the user's choice back into an interaction response.
 - `src/tui/theme/` — themes, color tokens, style helpers, pi-tui markdown theme, terminal-background detection. The single source of truth for color.
 - `src/tui/utils/` — TUI-only utilities (need `TUIState` or a component). App-wide, UI-independent helpers go in `src/utils/`.
 
@@ -40,8 +43,8 @@ The feature type decides the landing spot:
 - **Skill-derived commands** → hook into `buildSkillSlashCommands` / the skill command map; do not hard-code a single skill.
 - **Transcript message types** → define the shape in `src/tui/types.ts`, add/extend a `components/messages/` component, register the renderer in the transcript builder.
 - **Tool-result display** → extend `components/messages/tool-renderers/registry.ts` and the renderer; do not stack branches inside `ToolCallComponent`.
-- **Popup / selector** → `components/dialogs/`, mounted via `mountEditorReplacement`; follow [DESIGN.md](./DESIGN.md). If triggered by an SDK callback, check whether `reverse-rpc/` needs an adapter/controller/handler.
-- **SDK event handling** → add the dispatch in `session-event-handler.ts`'s `handleEvent`, then the matching `handleXxx`.
+- **Popup / selector** → `components/dialogs/`, mounted via `mountEditorReplacement`; follow [DESIGN.md](./DESIGN.md). If triggered by a harness-core interaction request, check whether `reverse-rpc/` needs an adapter/controller/handler.
+- **Engine event handling** → subscribe in `session-event-handler.ts`'s `startSubscription` at the right tier — agent machine events via `agent.on`, session-tier node events via `session.handle.on` (session-journal commits like `session.meta_updated` / `compaction.*` arrive here too, via SessionUnit's onCommit→fire bridge; `stores.session.onCommit` itself is only for in-tree features that node events cannot reach), facade state via kernel `watch` in `watchFacades` — then route into state/streaming.
 - **Streaming render** → `controllers/streaming-ui.ts`.
 - **Session start / resume behavior** → the session-management section of `KimiTUI`; replay behavior → `controllers/session-replay.ts`, reusing live render paths.
 - **Status bar / activity / queue** → `chrome/footer`, `panes/activity`, `panes/queue`, and the matching `updateXxx`.
@@ -68,7 +71,7 @@ Themes are managed centrally under `src/tui/theme/`:
 - `bundle.ts` — packs `colors`, `styles`, `markdownTheme` into a `KimiTUIThemeBundle`.
 - `index.ts` / `detect.ts` — theme type and auto/dark/light resolution.
 
-> **Keep the color-token set in sync.** `ColorPalette` in `colors.ts` is the source of truth for color tokens. When you add, rename, or remove one, update its mirrors in the same change: the custom-theme JSON schema (`apps/kimi-code/src/tui/theme/theme-schema.json`), the token tables in the custom-theme docs (`docs/en/customization/themes.md` and `docs/zh/customization/themes.md`), and the token table in the `custom-theme` built-in skill (`packages/agent-core-v2/src/features/skill/catalog/builtin/custom-theme.md`).
+> **Keep the color-token set in sync.** `ColorPalette` in `colors.ts` is the source of truth for color tokens. When you add, rename, or remove one, update its mirrors in the same change: the custom-theme JSON schema (`apps/kimi-code/src/tui/theme/theme-schema.json`), the token tables in the custom-theme docs (`docs/en/customization/themes.md` and `docs/zh/customization/themes.md`), and the token table in the `custom-theme` built-in skill (`packages/harness-core/src/features/skill/builtin/custom-theme.md`).
 
 Apply / switch flow:
 
