@@ -1,7 +1,7 @@
 /**
  * Scenario: the VS Code host and another Node SDK client share one in-process Kimi home.
- * Responsibilities: outbound host identity, config/session interoperability, MCP credential/edit compatibility, and terminal provider failures.
- * Wiring: KimiRuntime, KimiHarness, core, storage, and HTTP provider adapter are real; only the remote provider is local.
+ * Responsibilities: outbound provider credentials, config/session interoperability, MCP credential/edit compatibility, and terminal provider failures.
+ * Wiring: KimiRuntime, KimiHarness, engine, storage, and HTTP provider adapter are real; only the remote provider is local.
  * Run: pnpm --filter kimi-code exec vitest run test/kimi-harness.integration.test.ts
  */
 
@@ -45,7 +45,8 @@ import type { HandlerContext } from "../src/handlers/types";
 import { KimiRuntime } from "../src/runtime/kimi-runtime";
 import type { SessionRuntime } from "../src/runtime/session-runtime";
 
-const MODEL_ALIAS = "vscode-test";
+const MODEL_ALIAS = "local/mock-model";
+const ALT_MODEL_ALIAS = "local/alt-model";
 const PROVIDER_TOKEN = "sk-vscode-boundary-secret";
 
 interface BroadcastRecord {
@@ -72,7 +73,8 @@ interface RuntimeRig {
 
 interface McpHandlerRig {
   readonly homeDir: string;
-  readonly harness: KimiHarness;
+  readonly workDir: string;
+  readonly runtime: KimiRuntime;
   readonly broadcasts: BroadcastRecord[];
   readonly logs: LogRecord[];
 }
@@ -83,13 +85,15 @@ afterEach(async () => {
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
+  vi.unstubAllEnvs();
 });
 
-async function createRuntimeRig(extraAliases: readonly string[] = []): Promise<RuntimeRig> {
+async function createRuntimeRig(extraModels = false): Promise<RuntimeRig> {
   const rootDir = await mkdtemp(join(tmpdir(), "kimi-vscode-harness-"));
   const homeDir = join(rootDir, "home");
   const workDir = join(rootDir, "workspace");
   await Promise.all([mkdir(homeDir), mkdir(workDir)]);
+  vi.stubEnv("KIMI_CODE_HOME", homeDir);
 
   const provider = await createFakeProviderHarness();
   let providerOpen = true;
@@ -99,7 +103,7 @@ async function createRuntimeRig(extraAliases: readonly string[] = []): Promise<R
     await provider.close();
   };
 
-  await writeProviderConfig(homeDir, `${provider.baseUrl}/v1`, extraAliases);
+  await writeProviderConfig(homeDir, `${provider.baseUrl}/v1`, extraModels);
   const version = await readExtensionVersion();
   const broadcasts: BroadcastRecord[] = [];
   const logs: LogRecord[] = [];
@@ -139,22 +143,34 @@ async function createRuntimeRig(extraAliases: readonly string[] = []): Promise<R
   };
 }
 
-async function createPlainHarness(homeDir: string): Promise<KimiHarness> {
-  const harness = createKimiHarness({
-    homeDir,
-    identity: { productName: "kimi-code-cli", version: "test", platform: "kimi_code_cli" },
-  });
+async function createPlainHarness(homeDir: string, workDir: string): Promise<KimiHarness> {
+  const harness = await createKimiHarness({ homeDir, workDir });
   cleanups.push(() => harness.close());
   return harness;
 }
 
 async function createMcpHandlerRig(): Promise<McpHandlerRig> {
-  const homeDir = await mkdtemp(join(tmpdir(), "kimi-vscode-mcp-handler-"));
-  cleanups.push(() => rm(homeDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
-  const harness = await createPlainHarness(homeDir);
+  const rootDir = await mkdtemp(join(tmpdir(), "kimi-vscode-mcp-handler-"));
+  const homeDir = join(rootDir, "home");
+  const workDir = join(rootDir, "workspace");
+  await Promise.all([mkdir(homeDir), mkdir(workDir)]);
+  vi.stubEnv("KIMI_CODE_HOME", homeDir);
+  cleanups.push(() => rm(rootDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
   const broadcasts: BroadcastRecord[] = [];
   const logs: LogRecord[] = [];
-  return { homeDir, harness, broadcasts, logs };
+  const runtime = new KimiRuntime({
+    version: "test",
+    homeDir,
+    broadcast: (event: string, data: unknown, webviewId?: string) => {
+      broadcasts.push({ event, data, webviewId });
+    },
+    captureBaseline: () => undefined,
+    log: (message, error) => {
+      logs.push({ message, error });
+    },
+  });
+  cleanups.push(() => runtime.dispose());
+  return { homeDir, workDir, runtime, broadcasts, logs };
 }
 
 async function updateMcpServer(
@@ -168,29 +184,33 @@ async function getMcpServers(rig: McpHandlerRig): Promise<MCPServerConfig[]> {
   return mcpHandlers[Methods.GetMCPServers]!(undefined, mcpHandlerContext(rig)) as Promise<MCPServerConfig[]>;
 }
 
-/**
- * `harness.listMcpServers()` without the management-plane tags (`source` /
- * `origin` / `mutable`) — these tests assert the stored config payload only.
- */
-async function listStoredMcpServers(rig: McpHandlerRig): Promise<unknown[]> {
-  return (await rig.harness.listMcpServers()).map(
-    ({ source: _source, origin: _origin, mutable: _mutable, ...entry }) => entry,
-  );
+async function addStoredMcpServer(
+  rig: McpHandlerRig,
+  server: Parameters<Awaited<ReturnType<KimiRuntime["mcp"]>>["addServer"]>[0],
+): Promise<void> {
+  const mcp = await rig.runtime.mcp(rig.workDir);
+  await mcp.addServer(server);
 }
 
-/**
- * The Webview payload minus the management-plane tags — most handler tests
- * assert the config payload only; the tags have their own passthrough test.
- */
+async function listStoredMcpServers(rig: McpHandlerRig): Promise<unknown[]> {
+  const mcp = await rig.runtime.mcp(rig.workDir);
+  return (await mcp.listServers()).map((server) => ({
+    name: server.name,
+    ...server.config,
+  }));
+}
+
 function stripMcpTags(servers: MCPServerConfig[]): unknown[] {
   return servers.map(
     ({ source: _source, origin: _origin, mutable: _mutable, ...entry }) => entry,
   );
 }
 
-function mcpHandlerContext(rig: McpHandlerRig): HandlerContext {
+function mcpHandlerContext(rig: McpHandlerRig, workDir = rig.workDir): HandlerContext {
   return {
-    harness: rig.harness,
+    runtime: rig.runtime,
+    workDir,
+    webviewId: "view-1",
     broadcast: (event: string, data: unknown, webviewId?: string) => {
       rig.broadcasts.push({ event, data, webviewId });
     },
@@ -212,20 +232,17 @@ async function readExtensionVersion(): Promise<string> {
 async function writeProviderConfig(
   homeDir: string,
   baseUrl: string,
-  extraAliases: readonly string[] = [],
+  extraModels = false,
 ): Promise<void> {
-  const extra = extraAliases
-    .map(
-      (alias) => `
-[models."${alias}"]
+  const extra = extraModels
+    ? `
+[models."alt"]
 provider = "local"
-model = "mock-model"
+model = "alt-model"
 max_context_size = 128000
-capabilities = ["thinking"]
 support_efforts = ["low", "high"]
-`,
-    )
-    .join("\n");
+`
+    : "";
   await writeFile(
     join(homeDir, "config.toml"),
     `default_model = "${MODEL_ALIAS}"
@@ -235,16 +252,11 @@ type = "kimi"
 base_url = "${baseUrl}"
 api_key = "${PROVIDER_TOKEN}"
 
-[models."${MODEL_ALIAS}"]
+[models."main"]
 provider = "local"
 model = "mock-model"
 max_context_size = 128000
-${extra}
-[loop_control]
-# The v1 engine reads max_retries_per_step; v2 renamed it to max_attempts_per_step.
-max_retries_per_step = 1
-max_attempts_per_step = 1
-`,
+${extra}`,
     "utf8",
   );
 }
@@ -363,7 +375,7 @@ async function runSlash(
   return runHostSlashCommand(runtime, command, ctx);
 }
 
-describe("VS Code Kimi harness integration (shares one in-process SDK home)", () => {
+describe("VS Code Kimi harness integration (shares one in-process engine home)", () => {
   it("only intercepts released slash commands and user-invoked skills", () => {
     expect(parseHostSlashCommand("/plan on")).toEqual({ name: "plan", args: "on", raw: "/plan on" });
     expect(parseHostSlashCommand(" /skill:review carefully ")).toEqual({
@@ -378,7 +390,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
   it("combines the released slash commands with user-activatable workspace skills", async () => {
     const commands = await configHandlers[Methods.GetSlashCommands]!(undefined, {
       workDir: "/workspace",
-      harness: {
+      runtime: {
         listWorkspaceSkills: async () => [
           { name: "review", description: "Review changes", path: "/skills/review", source: "user", type: "prompt" },
           { name: "reference-only", description: "Reference", path: "/skills/ref", source: "user", type: "reference" },
@@ -401,34 +413,39 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     ]);
   });
 
-  it("sends the package version in User-Agent when VS Code prompts the provider", async () => {
+  it("sends the configured credentials when VS Code prompts the provider", async () => {
     const rig = await createRuntimeRig();
     routeSuccessfulPrompt(rig.provider);
     const session = await openRuntimeSession(rig);
 
     await expect(session.prompt("hello")).resolves.toEqual({ status: "finished" });
 
-    expect(rig.provider.requests[0]?.headers["user-agent"]).toBe(
-      `kimi-code-vscode/${rig.version}`,
-    );
+    expect(rig.provider.requests[0]?.headers["authorization"]).toBe(`Bearer ${PROVIDER_TOKEN}`);
   });
 
   it("reloads sequential config writes from either harness sharing one home", async () => {
     const rig = await createRuntimeRig();
-    const plain = await createPlainHarness(rig.homeDir);
+    const plain = await createPlainHarness(rig.homeDir, rig.workDir);
 
-    await plain.setConfig({ thinking: { enabled: true, effort: "high" } });
-    await expect(rig.runtime.harness.getConfig({ reload: true })).resolves.toMatchObject({
-      thinking: { enabled: true, effort: "high" },
+    await plain.config.set("thinking", { enabled: true, effort: "high" }, "user");
+    await expect(rig.runtime.getModels()).resolves.toMatchObject({
+      defaultThinking: true,
+      defaultThinkingEffort: "high",
     });
 
-    await rig.runtime.harness.setConfig({ yolo: true });
-    await expect(plain.getConfig({ reload: true })).resolves.toMatchObject({ yolo: true });
+    await rig.runtime.setConfig({
+      defaultModel: MODEL_ALIAS,
+      thinking: { enabled: false },
+    });
+    await plain.config.reload();
+    // The store's scalar writeback patches the on-disk [thinking] table in
+    // place: `enabled` flips while the previously written `effort` is kept.
+    expect(plain.config.get("thinking")).toEqual({ enabled: false, effort: "high" });
   });
 
   it("masks credential-valued MCP fields at the Webview list boundary while leaving ordinary values visible", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://example.test/mcp",
@@ -439,7 +456,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
         "X-Workspace": "workspace-visible",
       },
     });
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "local",
       transport: "stdio",
       command: "example-mcp",
@@ -478,7 +495,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("passes the management-plane tags through to the Webview payload", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://example.test/mcp",
@@ -509,15 +526,10 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
         mcpServers: { "project-api": { transport: "http", url: "https://example.test/project" } },
       }),
     );
-    const ctx = { ...mcpHandlerContext(rig), workDir: project } as HandlerContext;
+    const ctx = mcpHandlerContext(rig, project);
     const call = <T>(handler: string, params: unknown) =>
       mcpHandlers[handler]!(params, ctx) as Promise<T>;
 
-    await rig.harness.trustWorkspace(project);
-
-    // The initial workspace-aware list shows the project entry as read-only,
-    // and every mutation's refreshed list keeps showing it (the mutation RPCs
-    // return a cwd-less list, so the handler must re-list with the workspace).
     const assertList = (servers: MCPServerConfig[]): void => {
       const projectEntry = servers.find((server) => server.name === "project-api");
       expect(projectEntry).toMatchObject({ mutable: false, url: "https://example.test/project" });
@@ -539,7 +551,8 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("logs a failed MCP test without returning credential values to the Webview", async () => {
     const rig = await createMcpHandlerRig();
-    vi.spyOn(rig.harness, "testMcpServer").mockResolvedValue({
+    const mcp = await rig.runtime.mcp(rig.workDir);
+    vi.spyOn(mcp, "testServer").mockResolvedValue({
       success: false,
       output: [
         "spawn missing-mcp ENOENT",
@@ -565,7 +578,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("preserves an unchanged masked HTTP credential without exposing it in the response or broadcast", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://old.example.test/mcp",
@@ -617,7 +630,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("preserves an unchanged masked stdio credential in the host configuration", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "local",
       transport: "stdio",
       command: "old-command",
@@ -666,7 +679,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("replaces an HTTP credential when the Webview submits a new literal value", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://example.test/mcp",
@@ -696,7 +709,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("replaces a stdio credential when the Webview submits a new literal value", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "local",
       transport: "stdio",
       command: "example-mcp",
@@ -726,7 +739,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("preserves existing HTTP MCP headers when the released form updates the server", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://old.example.test/mcp",
@@ -755,7 +768,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("removes stored stdio arguments when the structured edit omits them", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "local",
       transport: "stdio",
       command: "old-command",
@@ -785,7 +798,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("removes stored stdio environment variables when the structured edit omits them", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "local",
       transport: "stdio",
       command: "old-command",
@@ -815,7 +828,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("removes stored HTTP headers when the structured edit omits them", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://old.example.test/mcp",
@@ -848,7 +861,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("removes the stored bearer token reference when the structured edit omits it", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://old.example.test/mcp",
@@ -881,7 +894,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("switches an OAuth HTTP server back to ordinary HTTP when auth is omitted", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "remote",
       transport: "http",
       url: "https://old.example.test/mcp",
@@ -914,7 +927,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("moves an edited server from its original name to the new name", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "old-name",
       transport: "stdio",
       command: "old-command",
@@ -954,7 +967,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("preserves a Windows executable path containing spaces through a structured edit", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "windows",
       transport: "stdio",
       command: "old-command",
@@ -980,7 +993,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
   it("preserves Windows arguments containing spaces through a structured edit", async () => {
     const rig = await createMcpHandlerRig();
-    await rig.harness.addMcpServer({
+    await addStoredMcpServer(rig, {
       name: "windows",
       transport: "stdio",
       command: "node.exe",
@@ -1010,9 +1023,9 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const rig = await createRuntimeRig();
     const vscodeSession = await openRuntimeSession(rig);
     await rig.runtime.detachView("view-1");
-    const plain = await createPlainHarness(rig.homeDir);
+    const plain = await createPlainHarness(rig.homeDir, rig.workDir);
 
-    const listed = await plain.listSessions({ workDir: rig.workDir });
+    const listed = await plain.listSessions();
 
     expect(listed).toContainEqual(expect.objectContaining({ id: vscodeSession.id }));
   });
@@ -1021,36 +1034,28 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const rig = await createRuntimeRig();
     const vscodeSession = await openRuntimeSession(rig);
     await rig.runtime.detachView("view-1");
-    const plain = await createPlainHarness(rig.homeDir);
+    const plain = await createPlainHarness(rig.homeDir, rig.workDir);
 
-    const resumed = await plain.resumeSession({ id: vscodeSession.id });
+    const resumed = await plain.resumeSession(vscodeSession.id);
 
     expect(resumed.id).toBe(vscodeSession.id);
   });
 
   it("lists a closed plain-harness session from VS Code", async () => {
     const rig = await createRuntimeRig();
-    const plain = await createPlainHarness(rig.homeDir);
-    const plainSession = await plain.createSession({
-      id: "ses_plain_to_vscode",
-      workDir: rig.workDir,
-      model: MODEL_ALIAS,
-    });
+    const plain = await createPlainHarness(rig.homeDir, rig.workDir);
+    const plainSession = await plain.createSession();
     await plainSession.close();
 
-    const listed = await rig.runtime.harness.listSessions({ workDir: rig.workDir });
+    const listed = await rig.runtime.listSessions(rig.workDir);
 
     expect(listed).toContainEqual(expect.objectContaining({ id: plainSession.id }));
   });
 
   it("resumes a closed plain-harness session from VS Code", async () => {
     const rig = await createRuntimeRig();
-    const plain = await createPlainHarness(rig.homeDir);
-    const plainSession = await plain.createSession({
-      id: "ses_plain_to_vscode",
-      workDir: rig.workDir,
-      model: MODEL_ALIAS,
-    });
+    const plain = await createPlainHarness(rig.homeDir, rig.workDir);
+    const plainSession = await plain.createSession();
     await plainSession.close();
 
     const resumed = await openRuntimeSession(rig, plainSession.id);
@@ -1067,10 +1072,9 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
       JSON.stringify({ approval: { yolo: false, afk: true } }),
       "utf8",
     );
-    const plain = await createPlainHarness(rig.homeDir);
+    const plain = await createPlainHarness(rig.homeDir, rig.workDir);
     const migrated = await plain.createSession({
-      id: "ses_preexisting_migration",
-      workDir: rig.workDir,
+      sessionId: "ses_preexisting_migration",
       metadata: { kimi_cli_source_path: legacySessionDir },
     });
     await migrated.close();
@@ -1078,7 +1082,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const resumed = await openRuntimeSession(rig, migrated.id);
 
     expect(resumed.legacyApprovalFlags).toEqual({ yolo: false, afk: true });
-    expect(resumed.summary?.metadata?.["vscode_legacy_approval"]).toEqual({
+    expect(resumed.summary.metadata?.["vscode_legacy_approval"]).toEqual({
       yolo: false,
       afk: true,
     });
@@ -1089,10 +1093,9 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const legacySessionDir = join(rig.workDir, "corrupt-legacy-session");
     await mkdir(legacySessionDir);
     await writeFile(join(legacySessionDir, "state.json"), "{not-json", "utf8");
-    const plain = await createPlainHarness(rig.homeDir);
+    const plain = await createPlainHarness(rig.homeDir, rig.workDir);
     const migrated = await plain.createSession({
-      id: "ses_corrupt_preexisting_migration",
-      workDir: rig.workDir,
+      sessionId: "ses_corrupt_preexisting_migration",
       metadata: { kimi_cli_source_path: legacySessionDir },
     });
     await migrated.close();
@@ -1113,19 +1116,17 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
     await expect(runSlash(runtime, "/import notes.md")).resolves.toBe(true);
 
-    await expect(runtime.session.getContext()).resolves.toMatchObject({
-      history: [
-        {
-          role: "user",
-          content: expect.arrayContaining([
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining("Keep the public API stable."),
-            }),
-          ]),
-        },
-      ],
-    });
+    expect(runtime.getContext().history).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: expect.arrayContaining([
+          expect.objectContaining({
+            type: "text",
+            text: expect.stringContaining("Keep the public API stable."),
+          }),
+        ]),
+      }),
+    ]);
     expect(rig.provider.requests).toHaveLength(0);
     expect(streamEvents(rig.broadcasts)).toContainEqual({
       type: "TurnBegin",
@@ -1137,55 +1138,53 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
   it("clears imported context without replacing the current session", async () => {
     const rig = await createRuntimeRig();
     const runtime = await openRuntimeSession(rig);
-    await runtime.session.importContext("Prior context.", "file 'prior.md'");
+    await runtime.importContext("Prior context.", "file 'prior.md'");
     const sessionId = runtime.id;
 
     await expect(runSlash(runtime, "/clear")).resolves.toBe(true);
 
     expect(runtime.id).toBe(sessionId);
-    await expect(runtime.session.getContext()).resolves.toEqual({ history: [], tokenCount: 0 });
+    expect(runtime.getContext()).toEqual({ history: [], tokenCount: 0 });
   });
 
   it("applies the composer-submitted model before the turn starts", async () => {
-    const rig = await createRuntimeRig(["vscode-alt"]);
+    const rig = await createRuntimeRig(true);
     routeSuccessfulPrompt(rig.provider);
     const runtime = await openRuntimeSession(rig);
 
     const result = await chatHandlers[Methods.StreamChat]!(
-      { content: "hi", model: "vscode-alt", effort: "high" },
+      { content: "hi", model: ALT_MODEL_ALIAS, effort: "high" },
       streamChatContext(rig),
     );
 
     expect(result).toEqual({ done: true });
-    await expect(runtime.session.getStatus()).resolves.toMatchObject({
-      model: "vscode-alt",
+    expect(runtime.getStatus()).toMatchObject({
+      model: ALT_MODEL_ALIAS,
       thinkingEffort: "high",
     });
   });
 
-  it("toggles plan mode through the public session without calling the model", async () => {
+  it("toggles plan mode through the session facade without calling the model", async () => {
     const rig = await createRuntimeRig();
     const runtime = await openRuntimeSession(rig);
 
     await expect(runSlash(runtime, "/plan on")).resolves.toBe(true);
-    await expect(runtime.session.getStatus()).resolves.toMatchObject({ planMode: true });
+    expect(runtime.getStatus()).toMatchObject({ planMode: true });
     await expect(runSlash(runtime, "/plan off")).resolves.toBe(true);
-    await expect(runtime.session.getStatus()).resolves.toMatchObject({ planMode: false });
+    expect(runtime.getStatus()).toMatchObject({ planMode: false });
     expect(rig.provider.requests).toHaveLength(0);
   });
 
-  it("keeps a slash-added directory after VS Code closes and resumes the session", async () => {
+  it("reports that /add-dir is unavailable without wedging the runtime", async () => {
     const rig = await createRuntimeRig();
-    const additionalDir = join(rig.workDir, "directory with spaces");
-    await mkdir(additionalDir);
     const runtime = await openRuntimeSession(rig);
 
-    await expect(runSlash(runtime, `/add-dir "${additionalDir}"`)).resolves.toBe(true);
-    const sessionId = runtime.id;
-    await rig.runtime.detachView("view-1");
-    const resumed = await openRuntimeSession(rig, sessionId);
+    await expect(runSlash(runtime, `/add-dir "${join(rig.workDir, "extra")}"`)).rejects.toThrow(
+      "/add-dir is unavailable",
+    );
 
-    expect(resumed.session.summary?.additionalDirs).toContain(additionalDir);
+    expect(runtime.isBusy).toBe(false);
+    await expect(runSlash(runtime, "/clear")).resolves.toBe(true);
   });
 
   it("rejects an invalid plan subcommand without leaving the runtime busy", async () => {
@@ -1208,7 +1207,6 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
     await expect(runtime.prompt("concurrent message")).resolves.toEqual({ status: "failed" });
 
-    // The rejection surfaces as a mid-turn warning; the active turn is untouched.
     expect(runtime.isBusy).toBe(true);
     expect(streamEvents(rig.broadcasts)).toContainEqual(
       expect.objectContaining({ type: "error", terminal: false }),
@@ -1238,7 +1236,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const rig = await createRuntimeRig();
     const blocked = routeBlockedPrompt(rig.provider);
     const runtime = await openRuntimeSession(rig);
-    await runtime.session.importContext("Enough prior context to compact.", "file 'prior.md'");
+    await runtime.importContext("Enough prior context to compact.", "file 'prior.md'");
     const command = runSlash(runtime, "/compact keep decisions");
     await blocked.started;
 
@@ -1253,7 +1251,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const rig = await createRuntimeRig();
     routeSuccessfulPrompt(rig.provider);
     const runtime = await openRuntimeSession(rig);
-    await runtime.session.importContext("Enough prior context to compact.", "file 'prior.md'");
+    await runtime.importContext("Enough prior context to compact.", "file 'prior.md'");
 
     const command = runSlash(runtime, "/compact keep decisions");
     expect(runtime.isBusy).toBe(true);
@@ -1273,15 +1271,15 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
     await runSlash(runtime, "/yolo");
     expect(runtime.legacyApprovalFlags).toEqual({ yolo: true, afk: false });
-    await expect(runtime.session.getStatus()).resolves.toMatchObject({ permission: "yolo" });
+    expect(runtime.getStatus()).toMatchObject({ permission: "yolo" });
 
     await runSlash(runtime, "/afk");
     expect(runtime.legacyApprovalFlags).toEqual({ yolo: true, afk: true });
-    await expect(runtime.session.getStatus()).resolves.toMatchObject({ permission: "auto" });
+    expect(runtime.getStatus()).toMatchObject({ permission: "auto" });
 
     await runSlash(runtime, "/afk");
     expect(runtime.legacyApprovalFlags).toEqual({ yolo: true, afk: false });
-    await expect(runtime.session.getStatus()).resolves.toMatchObject({ permission: "yolo" });
+    expect(runtime.getStatus()).toMatchObject({ permission: "yolo" });
   });
 
   it("applies the global yolo setting when a closed VS Code session reopens", async () => {
@@ -1292,18 +1290,18 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
 
     const reopened = await openRuntimeSession(rig, first.id);
     expect(reopened.legacyApprovalFlags).toEqual({ yolo: false, afk: false });
-    await expect(reopened.session.getStatus()).resolves.toMatchObject({ permission: "manual" });
+    expect(reopened.getStatus()).toMatchObject({ permission: "manual" });
     await rig.runtime.detachView("view-1");
 
     const yoloReopened = await openRuntimeSession(rig, first.id, true);
     expect(yoloReopened.legacyApprovalFlags).toEqual({ yolo: true, afk: false });
-    await expect(yoloReopened.session.getStatus()).resolves.toMatchObject({ permission: "yolo" });
+    expect(yoloReopened.getStatus()).toMatchObject({ permission: "yolo" });
   });
 
   it("exports current context as Markdown under the workspace", async () => {
     const rig = await createRuntimeRig();
     const runtime = await openRuntimeSession(rig);
-    await runtime.session.importContext("Prior context.", "file 'prior.md'");
+    await runtime.importContext("Prior context.", "file 'prior.md'");
 
     await expect(runSlash(runtime, "/export exported.md")).resolves.toBe(true);
 
@@ -1317,7 +1315,6 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const runtime = await openRuntimeSession(rig);
 
     await expect(runSlash(runtime, "/import missing.md", {
-      harness: rig.runtime.harness,
       runtime: rig.runtime,
     } as HandlerContext)).rejects.toThrow(
       "is not a valid file path or session ID",
@@ -1335,7 +1332,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     await expect(runSlash(runtime, "/import archive.zip")).rejects.toThrow(
       "/import only supports text-based files",
     );
-    await expect(runtime.session.getContext()).resolves.toEqual({ history: [], tokenCount: 0 });
+    expect(runtime.getContext()).toEqual({ history: [], tokenCount: 0 });
   });
 
   it("rejects invalid UTF-8 import bytes with a readable error", async () => {
@@ -1362,7 +1359,7 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
     const rig = await createRuntimeRig();
     await writeFile(join(rig.workDir, "not-a-directory"), "blocking file", "utf8");
     const runtime = await openRuntimeSession(rig);
-    await runtime.session.importContext("Prior context.", "file 'prior.md'");
+    await runtime.importContext("Prior context.", "file 'prior.md'");
 
     await expect(runSlash(runtime, "/export not-a-directory/export.md")).rejects.toThrow();
 
@@ -1426,22 +1423,5 @@ describe("VS Code Kimi harness integration (shares one in-process SDK home)", ()
       message: "Session turn failed",
       error: expect.objectContaining({ message: expect.stringContaining("mock request rejected") }),
     }));
-  });
-
-  it("settles the prompt as failed when the provider connection is unavailable", async () => {
-    const rig = await createRuntimeRig();
-    const session = await openRuntimeSession(rig);
-    await rig.closeProvider();
-
-    await expect(session.prompt("connection test")).resolves.toEqual({ status: "failed" });
-
-    expect(session.isBusy).toBe(false);
-    expect(streamEvents(rig.broadcasts)).toContainEqual(
-      expect.objectContaining({
-        type: "error",
-        code: "provider.connection_error",
-        phase: "runtime",
-      }),
-    );
   });
 });

@@ -1,4 +1,15 @@
-import type { Session } from '@moonshot-ai/kimi-code-sdk';
+import {
+  createMessageAccumulator,
+  extractText,
+  type AssistantEntry,
+  type MessageAccumulator,
+  type StreamedMessagePart,
+  type ToolCall,
+  type ToolUpdate,
+} from '@moonshot-ai/agent-core';
+import type { ToolOutput } from '@moonshot-ai/agent-core/agent-machine/tool';
+import { SUBAGENT_UPDATE_KEY } from '@moonshot-ai/harness-core';
+import type { KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import { AgentGroupComponent } from '../components/messages/agent-group';
 import { AssistantMessageComponent } from '../components/messages/assistant-message';
@@ -9,14 +20,12 @@ import { ThinkingComponent } from '../components/messages/thinking';
 import { ToolCallComponent } from '../components/messages/tool-call';
 import { STREAMING_UI_FLUSH_MS } from '../constant/streaming';
 import { hasDispose } from '../utils/component-capabilities';
-import { appendStreamingArgsPreview, parseStreamingArgs } from '../utils/event-payload';
 import { notifyTerminalOnce } from '../utils/terminal-notification';
 import { nextTranscriptId } from '../utils/transcript-id';
 import type { TodoItem } from '../components/chrome/todo-panel';
 import type {
   AppState,
   LivePaneState,
-  QueuedMessage,
   ToolCallBlockData,
   ToolResultBlockData,
   TranscriptEntry,
@@ -25,18 +34,49 @@ import type { TUIState } from '../tui-state';
 
 export interface StreamingUIHost {
   state: TUIState;
-  session: Session | undefined;
+  session: KimiSession | undefined;
   setAppState(patch: Partial<AppState>): void;
   patchLivePane(patch: Partial<LivePaneState>): void;
   resetLivePane(): void;
   updateActivityPane(): void;
   updateQueueDisplay(): void;
-  requireSession(): Session;
-  deferUserMessages: boolean;
-  shiftQueuedMessage(): QueuedMessage | undefined;
   pushTranscriptEntry(entry: TranscriptEntry): void;
   mergeCurrentTurnSteps(): void;
   mergeCompletedTurnAssistants(): void;
+}
+
+export function parseToolCallArgs(call: ToolCall): Record<string, unknown> {
+  const raw = call.arguments;
+  if (raw === null || raw.trim().length === 0) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+export function toolOutcomeToResult(toolCallId: string, outcome: ToolOutput): ToolResultBlockData {
+  if (outcome.type === 'succeeded') {
+    return {
+      tool_call_id: toolCallId,
+      output: extractText(outcome.result),
+      is_error: outcome.result.isError === true ? true : undefined,
+    };
+  }
+  if (outcome.type === 'failed') {
+    const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error);
+    return { tool_call_id: toolCallId, output: message, is_error: true };
+  }
+  const reason = outcome.reason instanceof Error ? outcome.reason.message : outcome.reason;
+  return {
+    tool_call_id: toolCallId,
+    output: typeof reason === 'string' && reason.length > 0 ? reason : 'Tool call aborted.',
+    is_error: true,
+    synthetic: true,
+  };
 }
 
 export class StreamingUIController {
@@ -44,7 +84,6 @@ export class StreamingUIController {
   private lastFlushAt: number | undefined;
   private pendingAssistantFlush = false;
   private pendingThinkingFlush = false;
-  readonly pendingToolCallFlushIds = new Set<string>();
 
   // ---------------------------------------------------------------------------
   // Streaming runtime state (private — accessed via semantic methods below)
@@ -52,16 +91,13 @@ export class StreamingUIController {
 
   private _currentTurnId: string | undefined = undefined;
   private _currentStep = 0;
+  private _accumulator: MessageAccumulator | undefined = undefined;
   private _assistantDraft = '';
   private _thinkingDraft = '';
   private _streamingBlock: { component: AssistantMessageComponent; entry: TranscriptEntry } | null = null;
   private _activeThinkingComponent: ThinkingComponent | undefined = undefined;
   private _activeCompactionBlock: CompactionComponent | undefined = undefined;
   private _activeToolCalls = new Map<string, ToolCallBlockData>();
-  private _streamingToolCallArguments = new Map<
-    string,
-    { name?: string; argumentsText: string; startedAtMs: number }
-  >();
   private _pendingToolComponents = new Map<string, ToolCallComponent>();
   private _pendingAgentGroup: {
     readonly turnId: string | undefined;
@@ -99,6 +135,114 @@ export class StreamingUIController {
   }
 
   // ---------------------------------------------------------------------------
+  // v3 event ingestion
+  // ---------------------------------------------------------------------------
+
+  onTurnStarted(turnId: number): void {
+    this._currentTurnId = String(turnId);
+    this._currentStep = 0;
+    this._accumulator = undefined;
+    this.resetToolUi();
+    this.resetLiveText();
+  }
+
+  onStepStarted(step: number): void {
+    this.flushNow();
+    this._currentStep = step;
+    this._accumulator = undefined;
+    this.resetToolUi();
+    this.finalizeLiveTextBuffers('waiting');
+  }
+
+  onStreamPart(part: StreamedMessagePart): void {
+    if (part.type === 'text') {
+      this.accumulator().push(part);
+      if (this.hasThinkingDraft()) {
+        this.flushThinkingToTranscript('idle');
+      }
+      this.appendAssistantDelta(part.text);
+      this.host.patchLivePane({ mode: 'idle', pendingApproval: null, pendingQuestion: null });
+      if (this.host.state.appState.streamingPhase !== 'composing') {
+        this.host.setAppState({ streamingPhase: 'composing', streamingStartTime: Date.now() });
+      }
+      this.scheduleFlush();
+      return;
+    }
+    if (part.type === 'think') {
+      this.accumulator().push(part);
+      if (part.think.trim().length === 0 && !this.hasThinkingDraft()) return;
+      this.appendThinkingDelta(part.think);
+      this.host.patchLivePane({ mode: 'idle' });
+      if (this.host.state.appState.streamingPhase !== 'thinking') {
+        this.host.setAppState({ streamingPhase: 'thinking', streamingStartTime: Date.now() });
+      }
+      this.scheduleFlush();
+      return;
+    }
+    // Tool call deltas are ignored: `turn.spawn_tools` carries the complete
+    // calls, so partial-JSON previews are unnecessary.
+  }
+
+  onLlmDone(entry: AssistantEntry): void {
+    this.flushNow();
+    if (this.hasThinkingDraft()) {
+      this.flushThinkingToTranscript('idle');
+    }
+    const text = extractText(entry.message);
+    if (this._streamingBlock !== null) {
+      if (text.length > 0) {
+        this._streamingBlock.entry.content = text;
+      }
+      this.onStreamingTextEnd();
+    }
+    this._assistantDraft = '';
+    this._accumulator = undefined;
+    this.host.updateActivityPane();
+    this.host.state.ui.requestRender();
+  }
+
+  onSpawnTools(toolCalls: readonly ToolCall[]): void {
+    this.flushNow();
+    const { turnId, step } = this.getTurnContext();
+    for (const call of toolCalls) {
+      const toolCall: ToolCallBlockData = {
+        id: call.id,
+        name: call.name,
+        args: parseToolCallArgs(call),
+        step,
+        turnId,
+      };
+      this.registerToolCall(toolCall);
+    }
+    this.host.patchLivePane({ mode: 'tool', pendingApproval: null, pendingQuestion: null });
+  }
+
+  onToolUpdate(toolCallId: string, update: ToolUpdate): void {
+    if (update.key === SUBAGENT_UPDATE_KEY) return;
+    if (update.text.length === 0) return;
+    const tc = this.getToolComponent(toolCallId);
+    if (tc === undefined) return;
+    tc.appendProgress(update.text, { replace: false });
+  }
+
+  onToolDone(toolCallId: string, outcome: ToolOutput): ToolCallBlockData | undefined {
+    this.flushNow();
+    const result = toolOutcomeToResult(toolCallId, outcome);
+    return this.completeToolResult(toolCallId, result);
+  }
+
+  onToolDetached(toolCallId: string, text: string): void {
+    this.flushNow();
+    // A detached (backgrounded) call completes its card with the detach ack;
+    // the eventual `tool.done` then finds nothing tracked and is skipped.
+    this.completeToolResult(toolCallId, {
+      tool_call_id: toolCallId,
+      output: text,
+      synthetic: true,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Text streaming — semantic write accessors
   // ---------------------------------------------------------------------------
 
@@ -131,10 +275,6 @@ export class StreamingUIController {
     return this._streamingBlock?.component;
   }
 
-  clearAssistantDraft(): void {
-    this._assistantDraft = '';
-  }
-
   // ---------------------------------------------------------------------------
   // Tool call state — semantic accessors
   // ---------------------------------------------------------------------------
@@ -143,174 +283,16 @@ export class StreamingUIController {
     return this._activeToolCalls.get(id);
   }
 
-  hasActiveToolCall(id: string): boolean {
-    return this._activeToolCalls.has(id);
-  }
-
-  setActiveToolCall(id: string, toolCall: ToolCallBlockData): void {
-    this._activeToolCalls.set(id, toolCall);
-  }
-
-  removeActiveToolCall(id: string): void {
-    this._activeToolCalls.delete(id);
-  }
-
   getToolComponent(id: string): ToolCallComponent | undefined {
     return this._pendingToolComponents.get(id);
   }
 
-  removeToolComponent(id: string): void {
-    this._pendingToolComponents.delete(id);
-  }
-
-  hasPendingAgentGroup(): boolean {
-    return this._pendingAgentGroup !== null;
-  }
-
-  hasPendingReadGroup(): boolean {
-    return this._pendingReadGroup !== null;
-  }
-
-  removeToolComponentIfInactive(toolCallId: string): void {
-    if (!this._activeToolCalls.has(toolCallId)) {
-      this._pendingToolComponents.delete(toolCallId);
-    }
-  }
-
-  /**
-   * Push the actual terminal status of a background agent task into the
-   * matching `Agent` tool call component so its snapshot phase no longer
-   * trusts the spawn-success ToolResult (which would otherwise label every
-   * terminated bg agent — including `lost` ones — as `✓ Completed`).
-   *
-   * Resolution policy: an `args.agentId` is treated as authoritative — we
-   * either find a card whose `getSubagentAgentId()` returns the same id
-   * (in-memory metadata for live foreground, parsed from the spawn-success
-   * `agent_id: ...` line for live backgrounded and replayed cards) or we
-   * skip. We deliberately do NOT fall back to description match when
-   * `agentId` is provided, because:
-   *   - On resume, `applyTerminalBackgroundAgentStatuses` iterates every
-   *     persisted terminal task, including ones whose tool calls fell
-   *     outside the `REPLAY_TURN_LIMIT` window. A description fallback
-   *     would let an old `lost` task stamp its status onto an unrelated
-   *     recent Agent card that happens to share `args.description`.
-   *   - During a live spawn / terminate race, the same card can briefly
-   *     appear in both `_pendingToolComponents` and `transcriptContainer`,
-   *     so a description match could double-visit the same component and
-   *     mark itself ambiguous. agentId match short-circuits on the first
-   *     hit and is immune.
-   *
-   * Description fallback is kept as a best-effort path only when
-   * `agentId` is unknown — that is, on resume of pre-PR sessions whose
-   * disk records pre-date `agent_id` persistence.
-   *
-   * Search scope includes both in-flight components and already-mounted
-   * cards (some live in `transcriptContainer` standalone, others are
-   * borrowed by an `AgentGroupComponent` and reachable only via
-   * `getToolComponents()`).
-   *
-   * Returns true iff a component was found and updated.
-   */
-  applyBackgroundTaskTerminalStatus(args: {
-    agentId?: string | undefined;
-    description: string;
-    status: 'completed' | 'failed' | 'timed_out' | 'killed' | 'lost';
-    /**
-     * Real failure message to surface on the card. Pass the `subagent.failed`
-     * event's `error` for live crashes — it is far more useful than the
-     * friendly generic the card falls back to. Omit on the resume / terminate
-     * path where no real error is available.
-     */
-    errorText?: string | undefined;
-  }): boolean {
-    const useAgentIdOnly = args.agentId !== undefined;
-    let agentIdMatch: ToolCallComponent | undefined;
-    let descMatch: ToolCallComponent | undefined;
-    let descAmbiguous = false;
-    const visit = (tc: ToolCallComponent): void => {
-      if (agentIdMatch !== undefined) return;
-      if (useAgentIdOnly) {
-        if (tc.getSubagentAgentId() === args.agentId) agentIdMatch = tc;
-        return;
-      }
-      if (tc.getAgentToolDescription() !== args.description) return;
-      if (descMatch !== undefined) {
-        descAmbiguous = true;
-        return;
-      }
-      descMatch = tc;
-    };
-
-    for (const tc of this._pendingToolComponents.values()) {
-      visit(tc);
-      if (agentIdMatch !== undefined) break;
-    }
-    if (agentIdMatch === undefined) {
-      for (const child of this.host.state.transcriptContainer.children) {
-        if (child instanceof ToolCallComponent) {
-          visit(child);
-        } else if (child instanceof AgentGroupComponent) {
-          for (const tc of child.getToolComponents()) {
-            visit(tc);
-            if (agentIdMatch !== undefined) break;
-          }
-        }
-        if (agentIdMatch !== undefined) break;
-      }
-    }
-    const target = useAgentIdOnly
-      ? agentIdMatch
-      : descAmbiguous
-        ? undefined
-        : descMatch;
-    if (target === undefined) return false;
-    target.setBackgroundTaskTerminalStatus(args.status, { errorText: args.errorText });
-    return true;
-  }
-
-  /**
-   * Mark a foreground subagent card as detached-to-background (`◐ backgrounded`).
-   * Routed from a `background.task.started` event whose `info.kind === 'agent'`,
-   * keyed by `agentId`. Returns true iff a matching component was found.
-   *
-   * Gated to cards that are currently foreground-running: `background.task.started`
-   * also fires for `Agent(run_in_background=true)` launches and for background
-   * resumes, and those must not mutate older completed rows that happen to share
-   * the same `agentId` (a resume's new card has no parsed `agent_id` yet, so the
-   * search can otherwise hit the previous completed card).
-   */
-  markSubagentBackgrounded(agentId: string | undefined): boolean {
-    if (agentId === undefined) return false;
-    const visit = (tc: ToolCallComponent): boolean => {
-      if (tc.getSubagentAgentId() !== agentId) return false;
-      const phase = tc.getSubagentSnapshot().phase;
-      if (phase !== 'running' && phase !== 'queued' && phase !== 'spawning') return false;
-      tc.markBackgrounded();
-      return true;
-    };
-    for (const tc of this._pendingToolComponents.values()) {
-      if (visit(tc)) return true;
-    }
-    for (const child of this.host.state.transcriptContainer.children) {
-      if (child instanceof ToolCallComponent) {
-        if (visit(child)) return true;
-      } else if (child instanceof AgentGroupComponent) {
-        for (const tc of child.getToolComponents()) {
-          if (visit(tc)) return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  /** Registers a tool call that arrived via tool.call.started.
-   *  Clears any pending streaming state for this id, updates or creates the
-   *  component, and returns whether the call was new (no previous entry). */
+  /** Registers a tool call that arrived via `turn.spawn_tools` (complete
+   *  arguments). Updates or creates the component; returns whether the call
+   *  was new (no previous entry). */
   registerToolCall(toolCall: ToolCallBlockData): boolean {
     const existing = this._activeToolCalls.get(toolCall.id);
     this._activeToolCalls.set(toolCall.id, toolCall);
-    this.pendingToolCallFlushIds.delete(toolCall.id);
-    this._streamingToolCallArguments.delete(toolCall.id);
     const existingComponent = this._pendingToolComponents.get(toolCall.id);
     if (existingComponent !== undefined) {
       existingComponent.updateToolCall(toolCall);
@@ -323,33 +305,6 @@ export class StreamingUIController {
     return existing === undefined;
   }
 
-  /** Accumulates a streaming tool-call argument delta. */
-  accumulateToolCallDelta(
-    id: string,
-    eventName: string | undefined,
-    argumentsPart: string | null | undefined,
-  ): void {
-    const existing = this._streamingToolCallArguments.get(id);
-    const argumentsText = appendStreamingArgsPreview(existing?.argumentsText, argumentsPart);
-    const name = eventName ?? existing?.name ?? this._activeToolCalls.get(id)?.name ?? 'Tool';
-    const startedAtMs = existing?.startedAtMs ?? Date.now();
-    this._streamingToolCallArguments.set(id, { name, argumentsText, startedAtMs });
-    this.pendingToolCallFlushIds.add(id);
-  }
-
-  getStreamingToolCallPreview(
-    id: string,
-  ): { name: string; args: Record<string, unknown>; argumentsText: string; startedAtMs: number } | undefined {
-    const streaming = this._streamingToolCallArguments.get(id);
-    if (streaming === undefined) return undefined;
-    return {
-      name: streaming.name ?? this._activeToolCalls.get(id)?.name ?? 'Tool',
-      args: parseStreamingArgs(streaming.argumentsText),
-      argumentsText: streaming.argumentsText,
-      startedAtMs: streaming.startedAtMs,
-    };
-  }
-
   /** Completes a tool call: delivers the result and removes tracking state.
    *  Returns the matched ToolCallBlockData, or undefined if no call was tracked. */
   completeToolResult(toolCallId: string, result: ToolResultBlockData): ToolCallBlockData | undefined {
@@ -358,43 +313,7 @@ export class StreamingUIController {
       this.onToolCallEnd(toolCallId, result);
     }
     this._activeToolCalls.delete(toolCallId);
-    this._streamingToolCallArguments.delete(toolCallId);
     return matchedCall;
-  }
-
-  /** Marks in-flight tool calls as truncated when a step hits max_tokens.
-   *  Returns the count of tool calls that were truncated. */
-  markStepTruncated(turnId: string, step: number): number {
-    let count = 0;
-    for (const toolCall of this._activeToolCalls.values()) {
-      if (toolCall.result !== undefined) continue;
-      if (toolCall.streamingArguments === undefined) continue;
-      if (toolCall.turnId !== turnId) continue;
-      if (toolCall.step !== step) continue;
-      toolCall.truncated = true;
-      const component = this._pendingToolComponents.get(toolCall.id);
-      if (component !== undefined) {
-        component.updateToolCall(toolCall);
-      }
-      count += 1;
-    }
-    this._streamingToolCallArguments.clear();
-    return count;
-  }
-
-  /** Tears down replay-specific state after session history has been rendered. */
-  cleanupAfterReplay(completedToolCallIds: Set<string>): void {
-    this._activeToolCalls.clear();
-    for (const toolCallId of completedToolCallIds) {
-      this._pendingToolComponents.delete(toolCallId);
-    }
-    this._pendingAgentGroup = null;
-    this._pendingReadGroup = null;
-    this._currentTurnId = undefined;
-    this._currentStep = 0;
-    this._streamingToolCallArguments.clear();
-    this.pendingToolCallFlushIds.clear();
-    this.host.state.ui.requestRender();
   }
 
   // ---------------------------------------------------------------------------
@@ -427,11 +346,7 @@ export class StreamingUIController {
   // ---------------------------------------------------------------------------
 
   hasPending(): boolean {
-    return (
-      this.pendingAssistantFlush ||
-      this.pendingThinkingFlush ||
-      this.pendingToolCallFlushIds.size > 0
-    );
+    return this.pendingAssistantFlush || this.pendingThinkingFlush;
   }
 
   clearFlushTimer(): void {
@@ -449,7 +364,6 @@ export class StreamingUIController {
     this.clearFlushTimer();
     this.pendingAssistantFlush = false;
     this.pendingThinkingFlush = false;
-    this.pendingToolCallFlushIds.clear();
   }
 
   scheduleFlush(): void {
@@ -475,19 +389,14 @@ export class StreamingUIController {
     this.lastFlushAt = Date.now();
     const shouldFlushThinking = this.pendingThinkingFlush;
     const shouldFlushAssistant = this.pendingAssistantFlush;
-    const toolCallIds = [...this.pendingToolCallFlushIds];
     this.pendingThinkingFlush = false;
     this.pendingAssistantFlush = false;
-    this.pendingToolCallFlushIds.clear();
 
     if (shouldFlushThinking && this._thinkingDraft.length > 0) {
       this.onThinkingUpdate(this._thinkingDraft);
     }
     if (shouldFlushAssistant) {
       this.onStreamingTextUpdate(this._assistantDraft);
-    }
-    for (const id of toolCallIds) {
-      this.flushToolCallPreview(id);
     }
   }
 
@@ -531,9 +440,6 @@ export class StreamingUIController {
   }
 
   resetToolUi(): void {
-    this.pendingToolCallFlushIds.clear();
-    this.clearFlushTimerIfIdle();
-    this._streamingToolCallArguments.clear();
     this.disposeAndClearPendingToolComponents();
     this._pendingAgentGroup = null;
     this._pendingReadGroup = null;
@@ -549,10 +455,9 @@ export class StreamingUIController {
     this.finalizeAssistantStream();
   }
 
-  finalizeTurn(sendQueued: (item: QueuedMessage) => void): void {
+  finalizeTurn(): void {
     const { state } = this.host;
     if (state.appState.streamingPhase === 'idle') return;
-    this.host.deferUserMessages = false;
     const completedTurnKey =
       this._currentTurnId ?? `local:${String(state.appState.streamingStartTime)}`;
     this.finalizeLiveTextBuffers('idle');
@@ -561,22 +466,6 @@ export class StreamingUIController {
     this.host.mergeCompletedTurnAssistants();
     this.resetToolCallState();
     this._currentTurnId = undefined;
-
-    const next = this.host.shiftQueuedMessage();
-    if (next !== undefined) {
-      // The message is out of the queue but not yet sent. Mark the dispatch
-      // pending *before* setAppState — that call synchronously retries
-      // queued-goal promotion, which would otherwise see an empty queue and an
-      // idle phase and start a goal ahead of this message.
-      state.queuedMessageDispatchPending = true;
-      this.host.setAppState({ streamingPhase: 'idle' });
-      this.host.resetLivePane();
-      setTimeout(() => {
-        state.queuedMessageDispatchPending = false;
-        sendQueued(next);
-      }, 0);
-      return;
-    }
 
     this.host.setAppState({ streamingPhase: 'idle' });
     this.host.resetLivePane();
@@ -629,8 +518,7 @@ export class StreamingUIController {
   onThinkingUpdate(fullText: string): void {
     // Skip thinking that carries nothing visible — empty (e.g. encrypted
     // reasoning) or whitespace-only (a model occasionally streams a single
-    // space as thinking). Session replay funnels through here as well, so a
-    // stored whitespace-only think part never becomes a bare bullet line.
+    // space as thinking).
     if (fullText.trim().length === 0 && this._activeThinkingComponent === undefined) return;
     const { state } = this.host;
     if (this._activeThinkingComponent === undefined) {
@@ -680,18 +568,6 @@ export class StreamingUIController {
       state.transcriptContainer.addChild(tc);
       state.ui.requestRender();
     }
-
-    if (toolCall.name === 'ExitPlanMode' && typeof toolCall.args['plan'] !== 'string') {
-      const session = this.host.requireSession();
-      void (async () => {
-        try {
-          const plan = await session.getPlan();
-          tc.setPlanInfo(plan === null ? {} : { plan: plan.content, path: plan.path });
-        } catch {
-          tc.setPlanInfo({});
-        }
-      })();
-    }
   }
 
   onToolCallEnd(toolCallId: string, result: ToolResultBlockData): void {
@@ -706,7 +582,7 @@ export class StreamingUIController {
       return;
     }
 
-    if (matchedCall?.name === 'AskUserQuestion') {
+    if (matchedCall !== undefined && matchedCall.name === 'AskUserQuestion') {
       const completed = new ToolCallComponent(
         matchedCall,
         result,
@@ -716,6 +592,16 @@ export class StreamingUIController {
       if (state.toolOutputExpanded) completed.setExpanded(true);
       state.transcriptContainer.addChild(completed);
       state.ui.requestRender();
+    } else if (matchedCall !== undefined) {
+      // A call whose card never mounted (an Agent call that finished without a
+      // subagent update) still gets its completed card at result time.
+      this.onToolCallStart(matchedCall);
+      const mounted = this._pendingToolComponents.get(toolCallId);
+      if (mounted !== undefined) {
+        mounted.setResult(result);
+        this._pendingToolComponents.delete(toolCallId);
+        state.ui.requestRender();
+      }
     }
     this.host.mergeCurrentTurnSteps();
   }
@@ -765,30 +651,9 @@ export class StreamingUIController {
   // Tool call grouping
   // ---------------------------------------------------------------------------
 
-  private flushToolCallPreview(id: string): void {
-    const streaming = this._streamingToolCallArguments.get(id);
-    if (streaming === undefined) return;
-    const toolCall: ToolCallBlockData = {
-      id,
-      name: streaming.name ?? this._activeToolCalls.get(id)?.name ?? 'Tool',
-      args: parseStreamingArgs(streaming.argumentsText),
-      streamingArguments: streaming.argumentsText,
-      streamingStartedAtMs: streaming.startedAtMs,
-      step: this._currentStep,
-      turnId: this._currentTurnId,
-    };
-    this._activeToolCalls.set(id, toolCall);
-
-    if (this._thinkingDraft.length > 0 || this._streamingBlock !== null) {
-      this.finalizeLiveTextBuffers('tool');
-    }
-
-    const existingComponent = this._pendingToolComponents.get(id);
-    if (existingComponent !== undefined) {
-      existingComponent.updateToolCall(toolCall);
-    } else if (toolCall.name !== 'Agent' && toolCall.name !== 'AgentSwarm') {
-      this.onToolCallStart(toolCall);
-    }
+  private accumulator(): MessageAccumulator {
+    this._accumulator ??= createMessageAccumulator();
+    return this._accumulator;
   }
 
   private tryAttachAgentToolCall(toolCall: ToolCallBlockData, tc: ToolCallComponent): boolean {

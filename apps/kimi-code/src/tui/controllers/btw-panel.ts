@@ -1,25 +1,17 @@
 import { Spacer } from '@moonshot-ai/pi-tui';
-import type {
-  Event,
-  KimiHarness,
-  Session,
-  TurnEndedEvent,
-} from '@moonshot-ai/kimi-code-sdk';
+import { createUserMessage, type AgentHandle, type TurnOutcome } from '@moonshot-ai/agent-core';
+import type { KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
 import { NO_ACTIVE_SESSION_MESSAGE } from '../constant/kimi-tui';
 import { BtwPanelComponent } from '../components/panes/btw-panel';
-import { formatErrorMessage } from '../utils/event-payload';
-import { formatHookResultPlain } from '../utils/hook-result-format';
 import { createMarkdownTheme } from '../theme/pi-tui-theme';
-import type { InlineSkillActivation } from '../types';
 import type { TUIState } from '../tui-state';
 
 const BTW_BUSY_NOTICE = 'Wait for /btw to finish before sending another question.';
 
 export interface BtwPanelHost {
   state: TUIState;
-  session: Session | undefined;
-  readonly harness: KimiHarness;
+  session: KimiSession | undefined;
 
   showError(msg: string): void;
 }
@@ -32,27 +24,24 @@ export class BtwPanelController {
       }
     | undefined;
   private readonly panelsByAgentId = new Map<string, BtwPanelComponent>();
+  private readonly subscriptionsByAgentId = new Map<string, () => void>();
 
   constructor(private readonly host: BtwPanelHost) {}
 
-  open(
-    agentId: string,
-    initialPrompt: string,
-    inlineSkillActivations?: readonly InlineSkillActivation[],
-  ): void {
-    let panel: BtwPanelComponent;
-    panel = new BtwPanelComponent({
+  open(agentId: string, initialPrompt: string): void {
+    const panel = new BtwPanelComponent({
       markdownTheme: createMarkdownTheme(),
       canUseScrollKeys: () => this.host.state.editor.getText().length === 0,
       terminalRows: () => this.host.state.terminal.rows,
-      onPrompt: (prompt, inlineSkillActivations) => {
-        this.promptAgent(agentId, prompt, panel, inlineSkillActivations);
+      onPrompt: (prompt) => {
+        this.promptAgent(agentId, prompt, panel);
       },
     });
     this.active = { agentId, panel };
     this.panelsByAgentId.set(agentId, panel);
+    this.subscribeAgent(agentId);
     this.mount(panel);
-    panel.submit(initialPrompt, inlineSkillActivations);
+    panel.submit(initialPrompt);
   }
 
   isActive(): boolean {
@@ -66,6 +55,8 @@ export class BtwPanelController {
     }
     this.active = undefined;
     this.panelsByAgentId.clear();
+    for (const unsubscribe of this.subscriptionsByAgentId.values()) unsubscribe();
+    this.subscriptionsByAgentId.clear();
     this.host.state.btwPanelContainer.clear();
     this.host.state.editor.connectedAbove = false;
   }
@@ -88,14 +79,16 @@ export class BtwPanelController {
     return true;
   }
 
-  sendUserInput(text: string, inlineSkillActivations?: readonly InlineSkillActivation[]): boolean {
+  sendUserInput(text: string): boolean {
     const active = this.active;
     if (active === undefined) return false;
     if (active.panel.isRunning()) {
-      this.showBusyNotice(active, text);
+      this.host.state.editor.setText(text);
+      active.panel.addTransientNotice(BTW_BUSY_NOTICE);
+      this.host.state.ui.requestRender();
       return true;
     }
-    active.panel.submit(text, inlineSkillActivations);
+    active.panel.submit(text);
     this.host.state.ui.setFocus(this.host.state.editor);
     this.host.state.ui.requestRender();
     return true;
@@ -108,34 +101,38 @@ export class BtwPanelController {
     return true;
   }
 
-  routeEvent(event: Event): boolean {
-    const panel = this.panelsByAgentId.get(event.agentId);
-    if (panel === undefined) return false;
-
-    switch (event.type) {
-      case 'assistant.delta':
-        panel.appendAnswer(event.delta);
+  private subscribeAgent(agentId: string): void {
+    if (this.subscriptionsByAgentId.has(agentId)) return;
+    const target = this.host.session?.handle.get(agentId);
+    if (target === undefined) return;
+    const off: Array<() => void> = [];
+    const use = (subscription: { unsubscribe(): void }): void => {
+      off.push(() => subscription.unsubscribe());
+    };
+    use(
+      target.on('llm.streaming.part', (event) => {
+        const panel = this.panelsByAgentId.get(agentId);
+        if (panel === undefined) return;
+        if (event.part.type === 'text') panel.appendAnswer(event.part.text);
+        else if (event.part.type === 'think') panel.appendThinking(event.part.think);
         this.host.state.ui.requestRender();
-        return true;
-      case 'thinking.delta':
-        panel.appendThinking(event.delta);
-        this.host.state.ui.requestRender();
-        return true;
-      case 'hook.result':
-        panel.appendAnswer(formatHookResultPlain(event));
-        this.host.state.ui.requestRender();
-        return true;
-      case 'turn.ended':
-        if (event.reason === 'completed') {
+      }),
+    );
+    use(
+      target.on('turn.done', (event) => {
+        const panel = this.panelsByAgentId.get(agentId);
+        if (panel === undefined) return;
+        if (event.outcome.type === 'done') {
           panel.markDone();
         } else {
-          panel.markFailed(formatBtwTurnEnd(event));
+          panel.markFailed(formatBtwTurnFailure(event.outcome));
         }
         this.host.state.ui.requestRender();
-        return true;
-      default:
-        return true;
-    }
+      }),
+    );
+    this.subscriptionsByAgentId.set(agentId, () => {
+      for (const unsubscribe of off) unsubscribe();
+    });
   }
 
   private mount(panel: BtwPanelComponent): void {
@@ -160,78 +157,49 @@ export class BtwPanelController {
     for (const [agentId, candidate] of this.panelsByAgentId) {
       if (candidate === panel) {
         this.panelsByAgentId.delete(agentId);
+        this.subscriptionsByAgentId.get(agentId)?.();
+        this.subscriptionsByAgentId.delete(agentId);
       }
     }
     if (this.active?.panel === panel) this.active = undefined;
   }
 
-  private showBusyNotice(
-    active: { readonly panel: BtwPanelComponent },
-    input: string,
-  ): void {
-    this.host.state.editor.setText(input);
-    active.panel.addTransientNotice(BTW_BUSY_NOTICE);
-    this.host.state.ui.requestRender();
-  }
-
-  private promptAgent(
-    agentId: string,
-    prompt: string,
-    panel: BtwPanelComponent,
-    inlineSkillActivations?: readonly InlineSkillActivation[],
-  ): void {
-    const session = this.host.session;
-    if (session === undefined) {
+  private promptAgent(agentId: string, prompt: string, panel: BtwPanelComponent): void {
+    const target: AgentHandle | undefined = this.host.session?.handle.get(agentId);
+    if (target === undefined) {
       panel.markFailed(NO_ACTIVE_SESSION_MESSAGE);
       this.host.state.ui.requestRender();
       return;
     }
-    const send =
-      inlineSkillActivations !== undefined && inlineSkillActivations.length > 0
-        ? () =>
-            session.promptWithSkills(
-              prompt,
-              inlineSkillActivations.map((activation) => ({
-                name: activation.skillName,
-                args: activation.args,
-              })),
-            )
-        : () => session.prompt(prompt);
-    void this.withInteractiveAgent(agentId, send).catch((error: unknown) => {
-      panel.markFailed(`Failed to send /btw prompt: ${formatErrorMessage(error)}`);
-      this.host.state.ui.requestRender();
+    const ack = target.submit(createUserMessage(prompt), {
+      origin: { kind: 'user' },
+      tracked: true,
     });
+    if (ack === undefined) {
+      panel.markFailed('Failed to send /btw prompt: the agent is not running.');
+      this.host.state.ui.requestRender();
+    }
   }
 
   private async cancelAgent(agentId: string): Promise<void> {
-    const session = this.host.session;
-    if (session === undefined) return;
-    await this.withInteractiveAgent(agentId, () => session.cancel()).catch((error: unknown) => {
-      this.host.showError(`Failed to cancel /btw: ${formatErrorMessage(error)}`);
-    });
+    const target = this.host.session?.handle.get(agentId);
+    if (target === undefined) return;
+    target.abort();
   }
 
   private shouldCancelOnUnmount(panel: BtwPanelComponent): boolean {
     return panel.isRunning() || panel.isEmpty();
   }
-
-  private withInteractiveAgent<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
-    return this.host.harness.withInteractiveAgent(agentId, fn);
-  }
 }
 
-function formatBtwTurnEnd(event: TurnEndedEvent): string {
-  if (event.reason === 'cancelled') {
+function formatBtwTurnFailure(outcome: Extract<TurnOutcome, { type: 'failed' | 'aborted' }>): string {
+  if (outcome.type === 'aborted') {
     return 'Interrupted by user';
   }
-  if (event.error?.code === 'provider.filtered') {
-    return 'Provider safety policy blocked the response.';
+  const failure = outcome.failure;
+  if (failure.reason === 'max_steps') {
+    return `reached per-turn step limit (max_steps): ${failure.message}`;
   }
-  if (event.error !== undefined) {
-    return `[${event.error.code}] ${event.error.message}`;
-  }
-  if (event.reason === 'blocked') {
-    return 'Prompt hook blocked the request.';
-  }
-  return `BTW turn ended with reason: ${event.reason}`;
+  const error = failure.error;
+  return error instanceof Error ? error.message : String(error);
 }

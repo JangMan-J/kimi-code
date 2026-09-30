@@ -81,12 +81,15 @@ importers:
         specifier: ^8.18.0
         version: 8.20.0
     devDependencies:
-      '@moonshot-ai/acp-server':
+      '@moonshot-ai/agent-core':
         specifier: workspace:^
-        version: link:../../packages/acp-server
+        version: link:../../packages/agent-core
       '@moonshot-ai/agent-core-v2':
         specifier: workspace:^
         version: link:../../packages/agent-core-v2
+      '@moonshot-ai/harness-core':
+        specifier: workspace:^
+        version: link:../../packages/harness-core
       '@moonshot-ai/kap-server':
         specifier: workspace:^
         version: link:../../packages/kap-server
@@ -304,6 +307,12 @@ importers:
       '@fontsource-variable/inter':
         specifier: 5.2.8
         version: 5.2.8
+      '@moonshot-ai/agent-core':
+        specifier: workspace:^
+        version: link:../../packages/agent-core
+      '@moonshot-ai/harness-core':
+        specifier: workspace:^
+        version: link:../../packages/harness-core
       '@moonshot-ai/kimi-code-oauth':
         specifier: workspace:^
         version: link:../../packages/oauth
@@ -498,9 +507,18 @@ importers:
       '@google/genai':
         specifier: ^1.49.0
         version: 1.49.0(@modelcontextprotocol/sdk@1.29.0(zod@4.3.6))
+      '@jsquash/webp':
+        specifier: ^1.5.0
+        version: 1.5.0
+      '@noble/hashes':
+        specifier: ^2.4.0
+        version: 2.4.0
       '@vue/reactivity':
         specifier: ^3.5.35
         version: 3.5.35
+      jimp:
+        specifier: ^1.6.1
+        version: 1.6.1
       openai:
         specifier: ^6.34.0
         version: 6.34.0(ws@8.20.0)(zod@4.3.6)
@@ -510,6 +528,9 @@ importers:
       smol-toml:
         specifier: ^1.6.1
         version: 1.6.1
+      undici:
+        specifier: ^7.30.0
+        version: 7.30.0
       xstate:
         specifier: ^5.32.5
         version: 5.32.5
@@ -842,32 +863,16 @@ importers:
 
   packages/node-sdk:
     dependencies:
-      '@antfu/utils':
-        specifier: ^9.3.0
-        version: 9.3.0
-      smol-toml:
-        specifier: ^1.6.1
-        version: 1.6.1
-      yazl:
-        specifier: ^3.3.1
-        version: 3.3.1
-      zod:
-        specifier: ^4.3.6
-        version: 4.3.6
-    devDependencies:
-      '@moonshot-ai/agent-core-v2':
+      '@moonshot-ai/agent-core':
         specifier: workspace:^
-        version: link:../agent-core-v2
+        version: link:../agent-core
+      '@moonshot-ai/harness-core':
+        specifier: workspace:^
+        version: link:../harness-core
       '@moonshot-ai/kimi-code-oauth':
         specifier: workspace:^
         version: link:../oauth
-      '@moonshot-ai/klient':
-        specifier: workspace:^
-        version: link:../klient
-      '@types/yazl':
-        specifier: ^2.4.6
-        version: 2.4.6
-      jimp:
+      smol-toml:
         specifier: ^1.6.1
         version: 1.6.1
 
@@ -8862,6 +8867,10 @@ packages:
     resolution: {integrity: sha512-UDdpiex+mzigiyrXrGbiUaF4HzTNhKbh2vRNFaTMzcqmLIPrZxaCtwo/1TMSuWoM1Xz3WiTo9KdgI3kRqYzJGg==}
     engines: {node: '>=20.18.1'}
 
+  undici@7.30.0:
+    resolution: {integrity: sha512-dkrQXeHSaoamnItlYbmzG0wFYrM0ZwDxCIg0A7aKjTyyhh9svRzCNFEzV+Vm05/yehjCzjDZ31KXfGEjYSztDQ==}
+    engines: {node: '>=20.18.1'}
+
   undici@8.10.1:
     resolution: {integrity: sha512-YQ3WlbqjYMmNpdvDH64jAgLjxuAR9+649calDWhbshYaeQGO2bR4nI94ORJmwI3J9YhoKQnpyGOK+0zlWS5N5Q==}
     engines: {node: '>=22.19.0'}
@@ -10287,7 +10296,7 @@ snapshots:
       open: 8.4.2
       picomatch: 4.0.4
       systeminformation: 5.31.17
-      undici: 7.27.1
+      undici: 7.30.0
       which: 4.0.0
       yocto-spinner: 1.2.1
 
@@ -13752,7 +13761,7 @@ snapshots:
       parse5: 7.3.0
       parse5-htmlparser2-tree-adapter: 7.1.0
       parse5-parser-stream: 7.1.2
-      undici: 7.27.1
+      undici: 7.30.0
       whatwg-mimetype: 4.0.0
 
   chokidar@3.6.0:
@@ -18100,6 +18109,8 @@ snapshots:
   undici-types@6.21.0: {}
 
   undici@7.27.1: {}
+
+  undici@7.30.0: {}
 
   undici@8.10.1: {}
 

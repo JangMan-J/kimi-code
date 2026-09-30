@@ -1,1301 +1,528 @@
-import type { Component, Focusable } from '@moonshot-ai/pi-tui';
-import type {
-  AgentStatusUpdatedEvent,
-  AssistantDeltaEvent,
-  BackgroundTaskInfo,
-  BackgroundTaskStartedEvent,
-  BackgroundTaskTerminatedEvent,
-  CompactionCancelledEvent,
-  CompactionCompletedEvent,
-  CompactionStartedEvent,
-  CronFiredEvent,
-  ErrorEvent,
-  Event,
-  GoalChange,
-  GoalUpdatedEvent,
-  HookResultEvent,
-  Session,
-  SessionMetaUpdatedEvent,
-  SkillActivatedEvent,
-  PluginCommandActivatedEvent,
-  ThinkingDeltaEvent,
-  ToolCallDeltaEvent,
-  ToolCallStartedEvent,
-  ToolProgressEvent,
-  ToolResultEvent,
-  TurnEndedEvent,
-  TurnStartedEvent,
-  TurnStepCompletedEvent,
-  TurnStepInterruptedEvent,
-  TurnStepRetryingEvent,
-  TurnStepStartedEvent,
-  TokenUsage,
-  WarningEvent,
-} from '@moonshot-ai/kimi-code-sdk';
+import {
+  AgentModelRef,
+  MAIN_AGENT_ID,
+  type AgentEmitted,
+  type AgentHandle,
+  type LlmRetrying,
+  type SessionRecord,
+  type TurnOutcome,
+} from '@moonshot-ai/agent-core';
+import { watch } from '@moonshot-ai/agent-core/kernel/index';
+import {
+  GoalRef,
+  PermissionRef,
+  PlanRef,
+  TaskRef,
+  TodoRef,
+  TokenCountingRef,
+  UsageRef,
+  type GoalChange,
+  type GoalSnapshot,
+} from '@moonshot-ai/harness-core';
+import type { KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
-import { MoonLoader } from '../components/chrome/moon-loader';
-import { buildGoalMarker } from '../components/messages/goal-markers';
-import { StatusMessageComponent } from '../components/messages/status-message';
+import { GoalMarkerComponent, buildGoalMarker } from '../components/messages/goal-markers';
 import {
-  SwarmModeMarkerComponent,
-  type SwarmModeMarkerState,
-} from '../components/messages/swarm-markers';
+  GoalCompletionMessageComponent,
+  GoalSetMessageComponent,
+} from '../components/messages/goal-panel';
 import {
-  OAUTH_LOGIN_REQUIRED_CODE,
   OAUTH_LOGIN_REQUIRED_STARTUP_NOTICE,
 } from '../constant/kimi-tui';
-import { buildGoalCompletionMessage } from '../utils/goal-completion';
-import {
-  argsRecord,
-  formatErrorPayload,
-  formatErrorMessage,
-  isTodoItemShape,
-  serializeToolResultOutput,
-  stringValue,
-} from '../utils/event-payload';
-import {
-  readGoalQueue,
-  removeGoalQueueItem,
-  restoreGoalQueueItem,
-  type UpcomingGoal,
-} from '../goal-queue-store';
-import { formatBackgroundTaskTranscript } from '../utils/background-task-status';
-import { formatHookResultMarkdown } from '../utils/hook-result-format';
-import { McpOAuthAuthorizationUrlOpener } from '../utils/mcp-oauth';
-import {
-  formatMcpStartupStatusSummary,
-  mcpServerStatusKey,
-  type McpServerStatusSnapshot,
-  selectMcpStartupStatusRows,
-} from '../utils/mcp-server-status';
-import { openUrl } from '#/utils/open-url';
-import { currentTheme } from '#/tui/theme';
-import type { ColorToken } from '#/tui/theme';
-import { errorReportHintLine } from '../constant/feedback';
-import { formatStepDebugTiming } from '#/utils/usage/debug-timing';
-import { nextTranscriptId } from '../utils/transcript-id';
-import type { BtwPanelController } from './btw-panel';
-import { isPluginMcpToolName, PluginUpdateNotifier } from './plugin-update-notifier';
-import type { StreamingUIController } from './streaming-ui';
-import type { SurveyController } from './survey-controller';
-import type { TasksBrowserController } from './tasks-browser';
-import { SubAgentEventHandler } from './subagent-event-handler';
-import { NotifyController } from './notify';
-import {
-  sumTokenUsage,
-  type AppState,
-  type LivePaneState,
-  type QueuedMessage,
-  type ToolCallBlockData,
-  type ToolResultBlockData,
-  type TranscriptEntry,
-} from '../types';
+import { sumTokenUsage, type AppState, type LivePaneState, type TranscriptEntry } from '../types';
 import type { TUIState } from '../tui-state';
-import { createGoal as startGoalCommand } from '../commands/goal';
+import { buildGoalCompletionMessage } from '../utils/goal-completion';
+import { nextTranscriptId } from '../utils/transcript-id';
+import type { ColorToken } from '../theme';
+import type { InteractionController } from '../reverse-rpc/interaction-controller';
+import type { StreamingUIController } from './streaming-ui';
+import { SubagentEventHandler } from './subagent-event-handler';
+import type { SurveyController } from './survey-controller';
 
 export interface SessionEventHost {
   state: TUIState;
-  session: Session | undefined;
+  session: KimiSession | undefined;
   aborted: boolean;
   sessionEventUnsubscribe: (() => void) | undefined;
   readonly streamingUI: StreamingUIController;
+  readonly surveyController: SurveyController;
+  readonly interactionController: InteractionController;
 
-  requireSession(): Session;
+  requireSession(): KimiSession;
+  /** The live main agent handle (rebound on undo / compaction remount). */
+  mainAgent(): AgentHandle | undefined;
+  /** The main agent was remounted by the engine — rebind subscriptions. */
+  onMainAgentRemounted(): void;
+  /** Compaction swapped the agent's branch — remount the main agent. */
+  remountMainAgent(): Promise<void>;
   setAppState(patch: Partial<AppState>): void;
   patchLivePane(patch: Partial<LivePaneState>): void;
-  resetLivePane(): void;
   showError(msg: string): void;
   showStatus(msg: string, color?: ColorToken): void;
-  showNotice(title: string, detail?: string): void;
-  updateActivityPane(): void;
-  track(event: string, props?: Record<string, unknown>): void;
-  recordSessionActivity(): void;
-  noteStepUsage(usage: TokenUsage | undefined): void;
-  noteCompactionFinished(): void;
-  mountEditorReplacement(panel: Component & Focusable): void;
-  restoreEditor(): void;
-  restoreInputText(text: string): void;
-  appendTranscriptEntry(entry: TranscriptEntry): void;
-  handleShellOutput(event: { commandId: string; update: { kind: string; text?: string } }): void;
-  handleShellStarted(event: { commandId: string; taskId: string }): void;
-  sendNormalUserInput(text: string): void;
+  updateQueueDisplay(): void;
   updateTerminalTitle(): void;
-  sendQueuedMessage(session: Session, item: QueuedMessage): void;
-  shiftQueuedMessage(): QueuedMessage | undefined;
-  handleTurnStarted?(event: TurnStartedEvent): void;
-  handleTurnEnded?(event: TurnEndedEvent): void;
-  readonly btwPanelController: BtwPanelController;
-  readonly tasksBrowserController: TasksBrowserController;
-  readonly surveyController: SurveyController;
+  /** Turn boundary reached — release the next queued `!` command, if any. */
+  drainBashQueue(): void;
+  appendTranscriptEntry(entry: TranscriptEntry): void;
+  handleShellOutput(commandId: string, text: string): void;
+  mergeCurrentTurnSteps(): void;
+  configDefaultModel(): string | undefined;
 }
 
 export class SessionEventHandler {
-  readonly notifications: NotifyController;
-  readonly subAgentEventHandler: SubAgentEventHandler;
-  private readonly pluginUpdateNotifier: PluginUpdateNotifier;
+  readonly subagentEventHandler: SubagentEventHandler;
+  private lastGoalId: string | null = null;
+  private readonly renderedSkillActivationIds = new Set<string>();
 
-  constructor(
-    private readonly host: SessionEventHost,
-    pluginUpdateNotifier?: PluginUpdateNotifier,
-  ) {
-    this.notifications = new NotifyController(host.state);
-    this.subAgentEventHandler = new SubAgentEventHandler(host, {
-      backgroundTasks: this.backgroundTasks,
-      backgroundTaskTranscriptedTerminal: this.backgroundTaskTranscriptedTerminal,
-      syncBackgroundAgentBadge: () => {
-        this.syncBackgroundTaskBadge();
-      },
-    });
-    this.pluginUpdateNotifier =
-      pluginUpdateNotifier ??
-      new PluginUpdateNotifier({
-        getSession: () => this.host.session,
-        workDir: host.state.appState.workDir,
-        notify: (message) => {
-          this.host.showStatus(message, 'warning');
-        },
-      });
-  }
-
-  // Runtime state – owned by this handler, reset between sessions.
-  backgroundTasks: Map<string, BackgroundTaskInfo> = new Map();
-  backgroundTaskTranscriptedTerminal: Set<string> = new Set();
-
-  renderedSkillActivationIds: Set<string> = new Set();
-  renderedPluginCommandActivationIds: Set<string> = new Set();
-  renderedMcpServerStatusKeys: Map<string, string> = new Map();
-  mcpServerStatusSpinners: Map<string, MoonLoader> = new Map();
-  mcpServers: Map<string, McpServerStatusSnapshot> = new Map();
-  private goalCompletionAwaitingClear = false;
-  private goalCompletionTurnEnded = false;
-  private currentTurnHasAssistantText = false;
-  private pluginCommandTurns: Map<string, string> = new Map();
-  private pluginMcpToolsUsedInTurn: Set<string> = new Set();
-  private pendingModelBlockedFallback: GoalChange | undefined;
-  private queuedGoalPromotionPending = false;
-  private queuedGoalPromotionInFlight = false;
-  private queuedGoalPromotionTimer: ReturnType<typeof setTimeout> | undefined;
-  private stepRetryAttemptTimer: ReturnType<typeof setTimeout> | undefined;
-
-  resetRuntimeState(): void {
-    this.backgroundTasks.clear();
-    this.backgroundTaskTranscriptedTerminal.clear();
-    this.subAgentEventHandler.resetRuntimeState();
-    this.notifications.reset();
-    this.renderedSkillActivationIds.clear();
-    this.renderedPluginCommandActivationIds.clear();
-    this.renderedMcpServerStatusKeys.clear();
-    this.mcpServers.clear();
-    this.goalCompletionAwaitingClear = false;
-    this.goalCompletionTurnEnded = false;
-    this.currentTurnHasAssistantText = false;
-    this.pluginCommandTurns.clear();
-    this.pluginMcpToolsUsedInTurn.clear();
-    this.pendingModelBlockedFallback = undefined;
-    this.queuedGoalPromotionPending = false;
-    this.queuedGoalPromotionInFlight = false;
-    this.clearQueuedGoalPromotionTimer();
-    this.clearStepRetryAttemptTimer();
-    this.stopAllMcpServerStatusSpinners();
-  }
-
-  clearAgentSwarmProgress(): void {
-    this.subAgentEventHandler.clearAgentSwarmProgress();
-  }
-
-  hasActiveAgentSwarmToolCall(): boolean {
-    return this.subAgentEventHandler.hasActiveAgentSwarmToolCall();
-  }
-
-  syncAgentSwarmActivitySpinner(spinner: MoonLoader | undefined): void {
-    this.subAgentEventHandler.syncAgentSwarmActivitySpinner(spinner);
+  constructor(private readonly host: SessionEventHost) {
+    this.subagentEventHandler = new SubagentEventHandler(host);
   }
 
   startSubscription(): void {
     const { host } = this;
     const session = host.requireSession();
-    const sendQueued = (item: QueuedMessage): void => {
-      host.sendQueuedMessage(session, item);
+    this.stopSubscription();
+    this.renderedSkillActivationIds.clear();
+    const agent = host.mainAgent();
+    if (agent === undefined) return;
+
+    const off: Array<() => void> = [];
+    const use = (subscription: { unsubscribe(): void } | (() => void)): void => {
+      if (typeof subscription === 'function') off.push(subscription);
+      else off.push(() => subscription.unsubscribe());
     };
-    host.sessionEventUnsubscribe?.();
-    const mcpOAuthOpener = new McpOAuthAuthorizationUrlOpener(openUrl);
-    const { sessionId } = host.state.appState;
-    host.sessionEventUnsubscribe = session.onEvent((event) => {
+    use(agent.on('turn.started', (event) => this.handleTurnStarted(event)));
+    use(agent.on('step.started', (event) => this.handleStepStarted(event)));
+    use(agent.on('llm.streaming.part', (event) => {
+      this.clearStepRetry();
+      host.streamingUI.onStreamPart(event.part);
+    }));
+    use(agent.on('llm.started', () => this.markRetryAttemptSent()));
+    use(agent.on('llm.retrying', (event) => this.handleRetrying(event)));
+    use(agent.on('llm.done', (event) => {
+      this.clearStepRetry();
+      host.streamingUI.onLlmDone(event.entry);
+    }));
+    use(agent.on('turn.spawn_tools', (event) => {
+      this.clearStepRetry();
+      host.surveyController.notifyToolCallStarted();
+      host.streamingUI.onSpawnTools(event.toolCalls);
+    }));
+    use(agent.on('tool.update', (event) => {
+      this.subagentEventHandler.onToolUpdate(event.toolCallId, event.update);
+      host.streamingUI.onToolUpdate(event.toolCallId, event.update);
+    }));
+    use(agent.on('tool.detached', (event) => {
+      this.subagentEventHandler.onToolDetached(event.toolCallId);
+      host.streamingUI.onToolDetached(event.toolCallId, event.text);
+    }));
+    use(agent.on('tool.done', (event) => {
+      this.subagentEventHandler.onToolDone(event.toolCallId, event.outcome);
+      host.streamingUI.onToolDone(event.toolCallId, event.outcome);
+    }));
+    use(agent.on('turn.done', (event) => this.handleTurnDone(event)));
+    use(agent.on('prompt.blocked', (event) => this.handlePromptBlocked(event)));
+
+    const handle = session.handle;
+    use(handle.on('session.meta_updated', (event) => {
       if (host.aborted) return;
-      if (event.sessionId !== sessionId) return;
-      if (event.type === 'tool.progress') {
-        mcpOAuthOpener.handleToolProgress(event);
+      const meta = event['meta'] as SessionRecord | undefined;
+      if (meta?.title !== undefined) {
+        host.setAppState({ sessionTitle: meta.title });
+        host.updateTerminalTitle();
       }
-      this.handleEvent(event, sendQueued);
-    });
-    void this.syncMcpServerStatusSnapshot(session);
+    }));
+    use(handle.on('compaction.started', (event) => {
+      if (host.aborted) return;
+      host.streamingUI.finalizeLiveTextBuffers('waiting');
+      host.setAppState({
+        isCompacting: true,
+        streamingPhase: 'waiting',
+        streamingStartTime: Date.now(),
+      });
+      const instruction = event['instruction'];
+      host.streamingUI.beginCompaction(typeof instruction === 'string' ? instruction : undefined);
+    }));
+    use(handle.on('compaction.completed', () => {
+      if (host.aborted) return;
+      // The compaction swapped the agent's branch and left it paused; the
+      // host remounts it (the resulting `agent.opened` re-subscribes). The
+      // summary card completes once the new branch is live, reading the
+      // seeded summary entry back from the swapped-in history.
+      void host.remountMainAgent().then(() => {
+        if (host.aborted) return;
+        host.streamingUI.endCompaction(undefined, undefined, this.readCompactionSummary());
+        this.finishCompaction();
+        host.surveyController.notifyCompactionFinished();
+      });
+    }));
+    use(handle.on('compaction.cancelled', () => {
+      if (host.aborted) return;
+      host.streamingUI.cancelCompaction();
+      this.finishCompaction();
+    }));
+    use(handle.on('agent.opened', (event) => {
+      if (event['agentId'] !== MAIN_AGENT_ID) return;
+      if (event['reopened'] !== true) return;
+      host.onMainAgentRemounted();
+    }));
+    use(handle.on('agent.closed', (event) => {
+      const agentId = event['agentId'];
+      if (typeof agentId === 'string') this.subagentEventHandler.onAgentClosed(agentId);
+    }));
+    use(handle.on('goal.updated', (event) => {
+      this.handleGoalUpdated(event);
+    }));
+    use(handle.on('skill.activated', (event) => {
+      this.handleSkillActivated(event);
+    }));
+    use(handle.on('cron.fired', (event) => {
+      const origin = event['origin'] as
+        | { jobId?: string; cron?: string; recurring?: boolean; coalescedCount?: number; stale?: boolean }
+        | undefined;
+      const prompt = event['prompt'];
+      host.streamingUI.flushNow();
+      host.appendTranscriptEntry({
+        id: nextTranscriptId(),
+        kind: 'cron',
+        turnId: host.streamingUI.getTurnContext().turnId,
+        renderMode: 'plain',
+        content: typeof prompt === 'string' ? prompt : '',
+        cronData: {
+          jobId: origin?.jobId,
+          cron: origin?.cron,
+          recurring: origin?.recurring,
+          coalescedCount: origin?.coalescedCount,
+          stale: origin?.stale,
+        },
+      });
+    }));
+    use(handle.on('shell.output', (event) => {
+      const commandId = event['commandId'];
+      const text = event['text'];
+      if (typeof commandId === 'string' && typeof text === 'string') {
+        host.handleShellOutput(commandId, text);
+      }
+    }));
+
+    off.push(this.watchFacades(agent));
+    use(watch(agent.snapshot, () => host.updateQueueDisplay()));
+    host.interactionController.mountSession(session);
+
+    this.off = off;
+    host.sessionEventUnsubscribe = () => {
+      this.stopSubscription();
+    };
   }
 
-  async syncMcpServerStatusSnapshot(session: Session): Promise<void> {
+  stopSubscription(): void {
     const { host } = this;
-    let servers: readonly McpServerStatusSnapshot[];
-    try {
-      servers = await session.listMcpServers();
-    } catch (error) {
-      if (host.session !== session || host.aborted) return;
-      const message = error instanceof Error ? error.message : String(error);
-      host.showError(`Failed to sync MCP server status: ${message}`);
-      return;
-    }
-    if (host.session !== session || host.state.appState.sessionId !== session.id) return;
-
-    const visible = selectMcpStartupStatusRows(servers);
-    const visibleNames = new Set(visible.map((server) => server.name));
-    for (const server of visible) {
-      if (this.renderedMcpServerStatusKeys.has(server.name)) continue;
-      this.renderMcpServerStatus(server);
-    }
-
-    this.mcpServers.clear();
-    for (const server of servers) {
-      this.mcpServers.set(server.name, server);
-    }
-    const hidden: McpServerStatusSnapshot[] = [];
-    for (const server of servers) {
-      if (visibleNames.has(server.name)) continue;
-      if (this.renderedMcpServerStatusKeys.has(server.name)) continue;
-      this.renderedMcpServerStatusKeys.set(server.name, mcpServerStatusKey(server));
-      hidden.push(server);
-    }
-    const summary = formatMcpStartupStatusSummary(servers);
-    host.setAppState({ mcpServersSummary: summary || null });
+    for (const off of this.off ?? []) off();
+    this.off = undefined;
+    host.sessionEventUnsubscribe = undefined;
+    this.subagentEventHandler.reset();
+    host.interactionController.unmountSession();
   }
 
-  handleEvent(event: Event, sendQueued: (item: QueuedMessage) => void): void {
-    this.notifications.handleEvent(event);
-    if (this.subAgentEventHandler.routeChildAgentEvent(event)) return;
-
-    if ('turnId' in event && event.turnId !== undefined) {
-      this.host.streamingUI.setTurnId(String(event.turnId));
-    }
-
-    switch (event.type) {
-      case 'turn.started': this.handleTurnBegin(event); break;
-      case 'turn.ended': this.handleTurnEnd(event, sendQueued); break;
-      case 'turn.step.started': this.handleStepBegin(event); break;
-      case 'turn.step.interrupted': this.handleStepInterrupted(event); break;
-      case 'turn.step.completed': this.handleStepCompleted(event); break;
-      case 'turn.step.retrying': this.handleStepRetrying(event); break;
-      case 'tool.progress': this.handleToolProgress(event); break;
-      case 'shell.output': this.host.handleShellOutput(event); break;
-      case 'shell.started': this.host.handleShellStarted(event); break;
-      case 'assistant.delta': this.handleAssistantDelta(event); break;
-      case 'hook.result': this.handleHookResult(event); break;
-      case 'thinking.delta': this.handleThinkingDelta(event); break;
-      case 'tool.call.started': this.handleToolCall(event); break;
-      case 'tool.call.delta': this.handleToolCallDelta(event); break;
-      case 'tool.result': this.handleToolResult(event); break;
-      case 'agent.status.updated': this.handleStatusUpdate(event); break;
-      case 'session.meta.updated': this.handleSessionMetaChanged(event); break;
-      case 'goal.updated': this.handleGoalUpdated(event); break;
-      case 'skill.activated': this.handleSkillActivated(event); break;
-      case 'plugin_command.activated': this.handlePluginCommandActivated(event); break;
-      case 'error': this.handleSessionError(event); break;
-      case 'warning': this.handleSessionWarning(event); break;
-      case 'compaction.started': this.handleCompactionBegin(event); break;
-      case 'compaction.completed': this.handleCompactionEnd(event, sendQueued); break;
-      case 'compaction.blocked': break;
-      case 'compaction.cancelled': this.handleCompactionCancel(event, sendQueued); break;
-      case 'subagent.spawned':
-      case 'subagent.started':
-      case 'subagent.suspended':
-      case 'subagent.completed':
-      case 'subagent.failed':
-      case 'subagent.cancelled':
-        this.subAgentEventHandler.handleLifecycleEvent(event); break;
-      case 'background.task.started':
-      case 'background.task.terminated':
-        this.handleBackgroundTaskEvent(event); break;
-      case 'cron.fired': this.handleCronFired(event); break;
-      case 'mcp.server.status': this.renderMcpServerStatus(event.server); break;
-      case 'tool.list.updated': break;
-      default: break;
-    }
-  }
-
-  stopAllMcpServerStatusSpinners(): void {
-    for (const spinner of this.mcpServerStatusSpinners.values()) {
-      spinner.stop();
-    }
-    this.mcpServerStatusSpinners.clear();
-  }
+  private off: Array<() => void> | undefined;
 
   // ---------------------------------------------------------------------------
-  // Private handlers
+  // Machine events
   // ---------------------------------------------------------------------------
 
-  private handleTurnBegin(event: TurnStartedEvent): void {
-    this.host.handleTurnStarted?.(event);
-    this.currentTurnHasAssistantText = false;
-    if (event.origin?.kind === 'plugin_command') {
-      this.pluginCommandTurns.set(String(event.turnId), event.origin.pluginId);
-    }
-    this.clearAgentSwarmProgress();
-    this.host.streamingUI.resetToolUi();
-    this.host.streamingUI.setStep(0);
-    this.host.patchLivePane({
-      mode: 'waiting',
-      pendingApproval: null,
-      pendingQuestion: null,
-    });
-    this.host.setAppState({
-      streamingPhase: 'waiting',
-      streamingStartTime: Date.now(),
-    });
-  }
-
-  private handleCronFired(event: CronFiredEvent): void {
-    this.host.streamingUI.flushNow();
-    this.host.appendTranscriptEntry({
-      id: nextTranscriptId(),
-      kind: 'cron',
-      turnId: this.host.streamingUI.getTurnContext().turnId,
-      renderMode: 'plain',
-      content: event.prompt,
-      cronData: {
-        jobId: event.origin.jobId,
-        cron: event.origin.cron,
-        recurring: event.origin.recurring,
-        coalescedCount: event.origin.coalescedCount,
-        stale: event.origin.stale,
-      },
-    });
-  }
-
-  private handleTurnEnd(event: TurnEndedEvent, sendQueued: (item: QueuedMessage) => void): void {
-    this.host.handleTurnEnded?.(event);
-    this.host.streamingUI.flushNow();
+  private handleTurnStarted(event: Extract<AgentEmitted, { type: 'turn.started' }>): void {
+    const { host } = this;
+    host.streamingUI.onTurnStarted(event.turnId);
     this.clearStepRetry();
-    if (event.reason === 'cancelled') {
-      this.markActiveAgentSwarmsCancelled();
-    }
-    // Aborted foreground subagents emit no completed/failed lifecycle event
-    // (v2 suppresses it for aborts), so their activity records would linger
-    // until the session reset — prune them when the owning turn ends.
-    this.subAgentEventHandler.dropForegroundOnlyActivityRecords();
-    if (event.reason === 'failed' && event.error?.code === 'provider.filtered') {
-      this.host.showStatus('Turn stopped: provider safety policy blocked the response.', 'error');
-    }
-    if (event.reason === 'blocked') {
-      this.host.showStatus('Turn stopped: prompt hook blocked the request.', 'error');
-    }
-    const todos = this.host.state.todoPanel.getTodos();
-    if (todos.length > 0 && todos.every((t) => t.status === 'done')) {
-      this.host.streamingUI.setTodoList([]);
-    }
-    this.host.streamingUI.resetToolUi();
-    this.host.streamingUI.finalizeTurn(sendQueued);
-    this.host.recordSessionActivity();
-    this.renderPendingModelBlockedFallback();
-    this.currentTurnHasAssistantText = false;
-    this.goalCompletionTurnEnded = true;
-    // Plugin usage is reported once the whole turn's output has ended — but a
-    // cancelled turn cut the output short, so skip the notice there.
-    const reportPluginUsage = event.reason !== 'cancelled';
-    const pluginCommandPluginId = this.pluginCommandTurns.get(String(event.turnId));
-    if (pluginCommandPluginId !== undefined) {
-      this.pluginCommandTurns.delete(String(event.turnId));
-      if (reportPluginUsage) {
-        void this.pluginUpdateNotifier.handlePluginCommandCompleted(pluginCommandPluginId);
-      }
-    }
-    if (reportPluginUsage) {
-      for (const toolName of this.pluginMcpToolsUsedInTurn) {
-        void this.pluginUpdateNotifier.handleMcpToolCompleted(toolName);
-      }
-    }
-    this.pluginMcpToolsUsedInTurn.clear();
-    this.scheduleQueuedGoalPromotion();
-  }
-
-  private handleStepBegin(event: TurnStepStartedEvent): void {
-    this.host.streamingUI.flushNow();
-    this.host.streamingUI.setStep(event.step);
-    this.host.streamingUI.resetToolUi();
-    this.host.streamingUI.finalizeLiveTextBuffers('waiting');
-    this.host.patchLivePane({
-      mode: 'waiting',
-      pendingApproval: null,
-      pendingQuestion: null,
-    });
-    this.host.setAppState({
-      streamingPhase: 'waiting',
-      streamingStartTime: Date.now(),
-    });
-  }
-
-  private handleStepCompleted(event: TurnStepCompletedEvent): void {
-    this.host.streamingUI.flushNow();
-    this.clearStepRetry();
-    this.host.noteStepUsage(event.usage);
-    this.maybeShowDebugTiming(event);
-
-    if (event.providerFinishReason === 'filtered') {
-      this.host.showNotice(
-        'Provider safety policy blocked the response.',
-        `The model output was filtered (${event.rawFinishReason ?? 'content_filter'}).`,
-      );
-      return;
-    }
-
-    if (event.finishReason !== 'max_tokens') return;
-
-    const truncatedCount = this.host.streamingUI.markStepTruncated(
-      String(event.turnId),
-      event.step,
+    host.surveyController.notifyTurnStarted(
+      event.entry?.meta?.origin === undefined || event.entry.meta.origin.kind === 'user',
     );
-
-    const title =
-      truncatedCount > 0
-        ? 'Model hit max_tokens — tool call was truncated before it could run.'
-        : 'Model hit max_tokens — no tool call was emitted.';
-    const detail = this.isAnthropicSessionActive()
-      ? 'If this limit is wrong for your model, set `max_output_size` on the model alias in your kimi-code config.'
-      : undefined;
-    this.host.showNotice(title, detail);
+    host.patchLivePane({ mode: 'waiting', pendingApproval: null, pendingQuestion: null });
+    host.setAppState({ streamingPhase: 'waiting', streamingStartTime: Date.now() });
   }
 
-  private handleStepRetrying(event: TurnStepRetryingEvent): void {
+  private handleStepStarted(event: Extract<AgentEmitted, { type: 'step.started' }>): void {
+    const { host } = this;
+    host.streamingUI.onStepStarted(event.step);
+    host.patchLivePane({ mode: 'waiting', pendingApproval: null, pendingQuestion: null });
+    host.setAppState({ streamingPhase: 'waiting', streamingStartTime: Date.now() });
+  }
+
+  private handleRetrying(event: LlmRetrying): void {
+    if (event.reason !== 'backoff') return;
+    const { host } = this;
     // The failure may arrive mid-stream, after thinking/assistant deltas have
     // parked the pane in `thinking`/`composing` — drive it back to waiting so
     // the retry label and detail actually render during the backoff.
-    this.host.patchLivePane({ mode: 'waiting' });
-    this.host.setAppState({
+    host.streamingUI.flushNow();
+    host.patchLivePane({ mode: 'waiting' });
+    const error = event.error;
+    host.setAppState({
       streamingPhase: 'waiting',
       stepRetry: {
         nextAttempt: event.nextAttempt,
         maxAttempts: event.maxAttempts,
         delayMs: event.delayMs,
-        errorName: event.errorName,
-        errorMessage: event.errorMessage,
-        statusCode: event.statusCode,
+        errorName: error.kind,
+        errorMessage: error.message,
         phase: 'backoff',
       },
     });
-    // Both engines sleep for `delayMs` before the next attempt runs, but only
-    // v2 re-emits `turn.step.started` for it — flip the phase on a timer so the
-    // stale countdown drops on the legacy engine too.
-    this.clearStepRetryAttemptTimer();
-    this.stepRetryAttemptTimer = setTimeout(() => {
-      this.stepRetryAttemptTimer = undefined;
-      const retry = this.host.state.appState.stepRetry;
-      if (retry === null) return;
-      this.host.setAppState({ stepRetry: { ...retry, phase: 'attempt' } });
-    }, event.delayMs);
+  }
+
+  private markRetryAttemptSent(): void {
+    const retry = this.host.state.appState.stepRetry;
+    if (retry === null || retry.phase === 'attempt') return;
+    this.host.setAppState({ stepRetry: { ...retry, phase: 'attempt' } });
   }
 
   private clearStepRetry(): void {
-    this.clearStepRetryAttemptTimer();
     if (this.host.state.appState.stepRetry === null) return;
     this.host.setAppState({ stepRetry: null });
   }
 
-  clearStepRetryAttemptTimer(): void {
-    if (this.stepRetryAttemptTimer !== undefined) {
-      clearTimeout(this.stepRetryAttemptTimer);
-      this.stepRetryAttemptTimer = undefined;
-    }
-  }
-
-  private maybeShowDebugTiming(event: TurnStepCompletedEvent): void {
-    if (process.env['KIMI_CODE_DEBUG'] !== '1') return;
-    const text = formatStepDebugTiming(event);
-    if (text === undefined) return;
-    this.host.appendTranscriptEntry({
-      id: nextTranscriptId(),
-      kind: 'status',
-      turnId: String(event.turnId),
-      renderMode: 'plain',
-      content: text,
-    });
-  }
-
-  private markActiveAgentSwarmsCancelled(): void {
-    this.subAgentEventHandler.markActiveAgentSwarmsCancelled();
-  }
-
-  private isAnthropicSessionActive(): boolean {
-    const { state } = this.host;
-    const model = state.appState.availableModels[state.appState.model];
-    if (model === undefined) return false;
-    if (model.protocol === 'anthropic') return true;
-    return state.appState.availableProviders[model.provider]?.type === 'anthropic';
-  }
-
-  private handleStepInterrupted(event: TurnStepInterruptedEvent): void {
-    this.host.streamingUI.flushNow();
-    this.clearStepRetry();
-    this.host.streamingUI.resetToolUi();
-    this.host.streamingUI.finalizeLiveTextBuffers('idle');
-    const reason = event.reason;
-    if (reason === 'error') return;
-    if (reason === 'aborted' || reason === undefined || reason === '') {
-      this.markActiveAgentSwarmsCancelled();
-      if (event.message === undefined || event.message === '') {
-        this.host.showStatus('Interrupted by user', 'error');
-      } else {
-        this.host.showError(event.message);
-      }
-      return;
-    }
-    this.host.showError(
-      reason === 'max_steps'
-        ? 'reached per-turn step limit (max_steps)'
-        : `step interrupted (${reason})`,
-    );
-  }
-
-  private handleThinkingDelta(event: ThinkingDeltaEvent): void {
-    const { state, streamingUI } = this.host;
-    // Encrypted / redacted reasoning (e.g. Kimi over the Anthropic-compatible
-    // protocol) streams thinking deltas whose visible text is empty — only an
-    // opaque signature rides along. Models also occasionally stream whitespace-
-    // only thinking (e.g. a single space). Such deltas carry nothing to render,
-    // so switching into the `thinking` pane mode here would stop the "waiting"
-    // moon spinner while no ThinkingComponent is ever created (it needs visible
-    // text), leaving a blank, spinner-less gap until the first real text/tool
-    // token arrives. Keep the moon up until actual thinking text shows up.
-    if (event.delta.trim().length === 0 && !streamingUI.hasThinkingDraft()) return;
-    streamingUI.appendThinkingDelta(event.delta);
-    this.host.patchLivePane({ mode: 'idle' });
-    if (state.appState.streamingPhase !== 'thinking') {
-      this.host.setAppState({ streamingPhase: 'thinking', streamingStartTime: Date.now() });
-    }
-    streamingUI.scheduleFlush();
-  }
-
-  private handleAssistantDelta(event: AssistantDeltaEvent): void {
-    const { state, streamingUI } = this.host;
-    if (streamingUI.hasThinkingDraft()) {
-      streamingUI.flushThinkingToTranscript('idle');
-    }
-
-    if (event.delta.trim().length > 0) {
-      this.currentTurnHasAssistantText = true;
-      this.pendingModelBlockedFallback = undefined;
-    }
-    streamingUI.appendAssistantDelta(event.delta);
-
-    this.host.patchLivePane({
-      mode: 'idle',
-      pendingApproval: null,
-      pendingQuestion: null,
-    });
-    if (state.appState.streamingPhase !== 'composing') {
-      this.host.setAppState({ streamingPhase: 'composing', streamingStartTime: Date.now() });
-    }
-    streamingUI.scheduleFlush();
-  }
-
-  private handleHookResult(event: HookResultEvent): void {
-    this.host.streamingUI.flushNow();
-    if (this.host.streamingUI.hasThinkingDraft()) {
-      this.host.streamingUI.flushThinkingToTranscript('idle');
-    }
-    this.host.streamingUI.finalizeAssistantStream();
-    if (event.content.trim().length > 0) {
-      this.currentTurnHasAssistantText = true;
-      this.pendingModelBlockedFallback = undefined;
-    }
-    this.host.appendTranscriptEntry({
-      id: nextTranscriptId(),
-      kind: 'assistant',
-      turnId: String(event.turnId),
-      renderMode: 'markdown',
-      content: formatHookResultMarkdown(event),
-      hookResult: true,
-    });
-    this.host.patchLivePane({
-      mode: 'idle',
-      pendingApproval: null,
-      pendingQuestion: null,
-    });
-  }
-
-  private handleToolCall(event: ToolCallStartedEvent): void {
-    const { streamingUI } = this.host;
-    this.host.surveyController.notifyToolCallStarted();
-    streamingUI.flushNow();
-    const { turnId, step } = streamingUI.getTurnContext();
-    const toolCall: ToolCallBlockData = {
-      id: event.toolCallId,
-      name: event.name,
-      args: argsRecord(event.args),
-      description: event.description,
-      display: event.display,
-      step,
-      turnId,
-    };
-    streamingUI.registerToolCall(toolCall);
-    if (event.name === 'AgentSwarm') {
-      this.subAgentEventHandler.handleAgentSwarmToolCallStarted(event.toolCallId, toolCall.args);
-    }
-    this.host.patchLivePane({
-      mode: 'tool',
-      pendingApproval: null,
-      pendingQuestion: null,
-    });
-  }
-
-  private handleToolCallDelta(event: ToolCallDeltaEvent): void {
-    if (event.toolCallId.length === 0) return;
-    const { state, streamingUI } = this.host;
-    streamingUI.accumulateToolCallDelta(event.toolCallId, event.name, event.argumentsPart);
-    const preview = streamingUI.getStreamingToolCallPreview(event.toolCallId);
-    if (
-      preview !== undefined &&
-      (preview.name === 'AgentSwarm' || this.subAgentEventHandler.hasAgentSwarmProgress(event.toolCallId))
-    ) {
-      this.subAgentEventHandler.handleAgentSwarmToolCallDelta(event.toolCallId, preview.args, {
-        streamingArguments: preview.argumentsText,
-      });
-    }
-
-    this.host.patchLivePane({
-      mode: 'tool',
-      pendingApproval: null,
-      pendingQuestion: null,
-    });
-    if (state.appState.streamingPhase !== 'composing') {
-      this.host.setAppState({ streamingPhase: 'composing', streamingStartTime: Date.now() });
-    }
-    streamingUI.scheduleFlush();
-  }
-
-  private handleToolProgress(event: ToolProgressEvent): void {
-    const text = event.update.text;
-    if (text === undefined || text.length === 0) return;
-    const tc = this.host.streamingUI.getToolComponent(event.toolCallId);
-    if (tc === undefined) return;
-    if (event.update.kind === 'status') {
-      tc.appendProgress(text, { replace: event.update.replace === true });
-      return;
-    }
-    if (event.update.kind === 'stdout' || event.update.kind === 'stderr') {
-      tc.appendLiveOutput(text);
-    }
-  }
-
-  private handleToolResult(event: ToolResultEvent): void {
-    const { streamingUI } = this.host;
-    streamingUI.flushNow();
-    this.clearStepRetry();
-    const resultData: ToolResultBlockData = {
-      tool_call_id: event.toolCallId,
-      output: serializeToolResultOutput(event.output),
-      is_error: event.isError,
-      synthetic: event.synthetic,
-    };
-    const matchedCall = streamingUI.completeToolResult(event.toolCallId, resultData);
-    if (matchedCall !== undefined && isPluginMcpToolName(matchedCall.name)) {
-      // Buffer plugin MCP usage for the turn; the update notice fires once the
-      // whole turn's output has ended (see handleTurnEnd).
-      this.pluginMcpToolsUsedInTurn.add(matchedCall.name);
-    }
-    this.subAgentEventHandler.handleAgentSwarmToolResult(
-      event.toolCallId,
-      resultData,
-      event.isError === true,
-    );
-    if (matchedCall !== undefined && matchedCall.name === 'TodoList' && !event.isError) {
-      const rawTodos = (matchedCall.args as { todos?: unknown }).todos;
-      if (Array.isArray(rawTodos)) {
-        const sanitized = rawTodos
-          .filter((todo): todo is { title: string; status: 'pending' | 'in_progress' | 'done' } =>
-            isTodoItemShape(todo),
-          )
-          .map((t) => ({ title: t.title, status: t.status }));
-        streamingUI.setTodoList(sanitized);
-      }
-    }
-    this.host.patchLivePane({ mode: 'waiting' });
-  }
-
-  private handleStatusUpdate(event: AgentStatusUpdatedEvent): void {
-    const shouldRenderSwarmEnded =
-      event.swarmMode === false &&
-      this.host.state.appState.swarmMode &&
-      this.host.state.swarmModeEntry === 'task';
-    const patch: Partial<AppState> = {};
-    if (event.contextTokens !== undefined) patch.contextTokens = event.contextTokens;
-    if (event.maxContextTokens !== undefined) patch.maxContextTokens = event.maxContextTokens;
-    if (event.contextUsage !== undefined) {
-      patch.contextUsage = event.contextUsage;
-    } else if (event.contextTokens !== undefined || event.maxContextTokens !== undefined) {
-      // v2 status events carry contextTokens/maxContextTokens but never
-      // contextUsage. Recompute the ratio from the post-patch token counts so
-      // it cannot go stale and drift from them — the footer and the /usage
-      // panel bar render this ratio while their texts recompute from the
-      // counts, so a stale ratio shows as a bar/percentage mismatch.
-      const tokens = patch.contextTokens ?? this.host.state.appState.contextTokens;
-      const max = patch.maxContextTokens ?? this.host.state.appState.maxContextTokens;
-      patch.contextUsage = max > 0 ? tokens / max : 0;
-    }
-    if (event.planMode !== undefined) patch.planMode = event.planMode;
-    if (event.swarmMode !== undefined) patch.swarmMode = event.swarmMode;
-    if (event.towerMode !== undefined) patch.towerMode = event.towerMode;
-    if (event.permission !== undefined) {
-      patch.permissionMode = event.permission;
-    }
-    if (event.model !== undefined) patch.model = event.model;
-    if (event.thinkingEffort !== undefined) patch.thinkingEffort = event.thinkingEffort;
-    if (event.usage?.total !== undefined) {
-      patch.cumulativeTokens = sumTokenUsage(event.usage.total);
-    }
-    if (Object.keys(patch).length > 0) this.host.setAppState(patch);
-    if (event.swarmMode === false) {
-      this.host.state.swarmModeEntry = undefined;
-      if (shouldRenderSwarmEnded) {
-        this.renderSwarmModeMarker('ended');
-      }
-    }
-  }
-
-  private renderSwarmModeMarker(state: SwarmModeMarkerState): void {
-    this.host.state.transcriptContainer.addChild(
-      new SwarmModeMarkerComponent(state),
-    );
-    this.host.state.ui.requestRender();
-  }
-
-  private handleGoalUpdated(event: GoalUpdatedEvent): void {
-    this.host.setAppState({ goal: event.snapshot });
-    if (event.snapshot === null && this.goalCompletionAwaitingClear) {
-      this.goalCompletionAwaitingClear = false;
-      this.queuedGoalPromotionPending = true;
-      this.scheduleQueuedGoalPromotion();
-    }
-    if (event.snapshot === null) {
-      this.pendingModelBlockedFallback = undefined;
-    }
-    const change = event.change;
-    if (change === undefined) return;
-    const { state } = this.host;
-
-    // Completion -> the box disappears (snapshot cleared on the follow-up null
-    // update) and a deterministic completion message lands in the transcript.
-    // Resume renders the same text from the durable goal completion replay
-    // record, so live and replayed completion cards stay identical.
-    if (change.kind === 'completion' && event.snapshot !== null) {
-      this.pendingModelBlockedFallback = undefined;
-      this.goalCompletionAwaitingClear = true;
-      this.goalCompletionTurnEnded = false;
-      this.host.appendTranscriptEntry({
-        id: nextTranscriptId(),
-        kind: 'assistant',
-        renderMode: 'markdown',
-        content: buildGoalCompletionMessage(event.snapshot),
-      });
-      state.ui.requestRender();
-      return;
-    }
-
-    // Lifecycle change (pause / resume / blocked) -> a low-profile,
-    // ctrl+o-expandable marker.
-    if (change.kind === 'lifecycle' && change.status === 'blocked') {
-      void this.notifyQueuedGoalWaitingOnBlocked();
-      if (change.actor === 'model' || change.reason === undefined) {
-        this.pendingModelBlockedFallback = this.currentTurnHasAssistantText
-          ? undefined
-          : change;
-        return;
-      }
-      this.pendingModelBlockedFallback = undefined;
-    } else if (change.kind === 'lifecycle') {
-      this.pendingModelBlockedFallback = undefined;
-    }
-    const marker = buildGoalMarker(change, state.toolOutputExpanded, change.actor);
-    if (marker !== null) {
-      state.transcriptContainer.addChild(marker);
-      state.ui.requestRender();
-    }
-  }
-
-  private renderPendingModelBlockedFallback(): void {
-    const change = this.pendingModelBlockedFallback;
-    if (change === undefined) return;
-    this.pendingModelBlockedFallback = undefined;
-    const { state } = this.host;
-    const marker = buildGoalMarker(change, state.toolOutputExpanded, 'model');
-    if (marker !== null) {
-      state.transcriptContainer.addChild(marker);
-      state.ui.requestRender();
-    }
-  }
-
-  private scheduleQueuedGoalPromotion(): void {
-    if (!this.queuedGoalPromotionPending || !this.goalCompletionTurnEnded) return;
-    if (this.queuedGoalPromotionInFlight) return;
-    if (this.queuedGoalPromotionTimer !== undefined) return;
-    this.queuedGoalPromotionTimer = setTimeout(() => {
-      this.queuedGoalPromotionTimer = undefined;
-      if (!this.queuedGoalPromotionPending || !this.goalCompletionTurnEnded) return;
-      if (this.queuedGoalPromotionInFlight) return;
-      if (!this.isReadyForQueuedGoalPromotion()) {
-        return;
-      }
-      this.queuedGoalPromotionInFlight = true;
-      void this.promoteNextQueuedGoal()
-        .then((complete) => {
-          if (complete) {
-            this.queuedGoalPromotionPending = false;
-            this.goalCompletionTurnEnded = false;
-            return;
-          }
-          this.goalCompletionTurnEnded = false;
-        })
-        .finally(() => {
-          this.queuedGoalPromotionInFlight = false;
-          this.scheduleQueuedGoalPromotion();
-        });
-    }, 0);
-  }
-
-  private clearQueuedGoalPromotionTimer(): void {
-    if (this.queuedGoalPromotionTimer === undefined) return;
-    clearTimeout(this.queuedGoalPromotionTimer);
-    this.queuedGoalPromotionTimer = undefined;
-  }
-
-  requestQueuedGoalPromotion(): void {
-    this.queuedGoalPromotionPending = true;
-    this.goalCompletionTurnEnded = true;
-    this.scheduleQueuedGoalPromotion();
-  }
-
-  retryQueuedGoalPromotion(): void {
-    this.scheduleQueuedGoalPromotion();
-  }
-
-  private isReadyForQueuedGoalPromotion(session?: Session): boolean {
-    return (
-      (session === undefined || this.host.session === session) &&
-      !this.host.aborted &&
-      this.host.state.appState.streamingPhase === 'idle' &&
-      this.host.state.queuedMessages.length === 0 &&
-      !this.host.state.queuedMessageDispatchPending
-    );
-  }
-
-  private async promoteNextQueuedGoal(): Promise<boolean> {
+  private handleTurnDone(event: Extract<AgentEmitted, { type: 'turn.done' }>): void {
     const { host } = this;
-    const session = host.session;
-    if (session === undefined || host.aborted) return true;
-
-    let queue;
-    try {
-      queue = await readGoalQueue(session);
-    } catch (error) {
-      host.showError(`Failed to read upcoming goals: ${formatErrorMessage(error)}`);
-      return false;
+    host.streamingUI.flushNow();
+    this.clearStepRetry();
+    host.streamingUI.finalizeTurn();
+    host.surveyController.notifyTurnEnded();
+    if (event.outcome.type === 'failed') {
+      this.showTurnFailure(event.outcome);
+    } else if (event.outcome.type === 'aborted') {
+      host.showStatus('Interrupted by user', 'error');
     }
-    if (host.session !== session || host.aborted) return true;
-
-    const next = queue.goals[0];
-    if (next === undefined) return true;
-
-    if (!this.isReadyForQueuedGoalPromotion(session)) return false;
-
-    const started = await startGoalCommand(
-      host,
-      { kind: 'create', objective: next.objective, replace: false },
-      next.objective,
-      {
-        beforeSend: async () => {
-          if (!this.isReadyForQueuedGoalPromotion(session)) {
-            await this.cancelStartedQueuedGoal(session);
-            return false;
-          }
-          try {
-            await removeGoalQueueItem(session, { goalId: next.id });
-          } catch (error) {
-            host.showError(
-              `Queued goal started, but could not be removed from the queue: ${formatErrorMessage(error)}`,
-            );
-            await this.cancelStartedQueuedGoal(session);
-            return false;
-          }
-          if (this.isReadyForQueuedGoalPromotion(session)) {
-            return true;
-          }
-          await this.restoreAndCancelStartedQueuedGoal(session, next);
-          return false;
-        },
-        sendInput: (objective) => {
-          host.sendQueuedMessage(session, { text: objective });
-        },
-      },
-    );
-    return started || host.session !== session || host.aborted;
+    host.updateQueueDisplay();
+    host.drainBashQueue();
   }
 
-  private async restoreAndCancelStartedQueuedGoal(
-    session: Session,
-    goal: UpcomingGoal,
-  ): Promise<void> {
-    try {
-      await restoreGoalQueueItem(session, goal);
-    } catch (error) {
-      this.host.showError(`Queued goal could not be restored: ${formatErrorMessage(error)}`);
-    }
-    await this.cancelStartedQueuedGoal(session);
-  }
-
-  private async cancelStartedQueuedGoal(session: Session): Promise<void> {
-    try {
-      await session.cancelGoal();
-    } catch (error) {
-      this.host.showError(`Queued goal could not be cancelled: ${formatErrorMessage(error)}`);
-    }
-  }
-
-  private async notifyQueuedGoalWaitingOnBlocked(): Promise<void> {
+  private showTurnFailure(outcome: Extract<TurnOutcome, { type: 'failed' }>): void {
     const { host } = this;
-    const session = host.session;
-    if (session === undefined || host.aborted) return;
-
-    let hasQueuedGoal = false;
-    try {
-      const queue = await readGoalQueue(session);
-      hasQueuedGoal = queue.goals.length > 0;
-    } catch {
+    const failure = outcome.failure;
+    if (failure.reason === 'max_steps') {
+      host.showError(`reached per-turn step limit (max_steps): ${failure.message}`);
       return;
     }
-    if (!hasQueuedGoal || host.session !== session || host.aborted) return;
+    const error = failure.error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('login') || message.includes('oauth')) {
+      host.showError(OAUTH_LOGIN_REQUIRED_STARTUP_NOTICE);
+      return;
+    }
+    host.showError(message);
+  }
 
-    host.showNotice(
-      'Goal blocked.',
-      'The next queued goal will start only after this goal is complete.',
+  private handlePromptBlocked(event: Extract<AgentEmitted, { type: 'prompt.blocked' }>): void {
+    const { host } = this;
+    if (host.state.appState.streamingPhase === 'idle') return;
+    if (host.streamingUI.hasActiveTurn()) return;
+    host.setAppState({ streamingPhase: 'idle' });
+    host.showError(
+      event.reason === 'gate'
+        ? 'Turn stopped: prompt gate blocked the request.'
+        : `Turn failed before it started: ${event.error instanceof Error ? event.error.message : String(event.error ?? 'unknown error')}`,
     );
   }
 
-  private handleSessionMetaChanged(event: SessionMetaUpdatedEvent): void {
-    const title = event.title ?? stringValue(event.patch?.['title']);
-    if (title !== undefined) {
-      this.host.setAppState({ sessionTitle: title });
-      this.host.updateTerminalTitle();
-    }
-  }
-
-  private handleSessionError(event: ErrorEvent): void {
-    this.host.streamingUI.flushNow();
-    this.host.streamingUI.resetToolUi();
-    this.host.streamingUI.finalizeLiveTextBuffers('idle');
-    if (event.code === OAUTH_LOGIN_REQUIRED_CODE) {
-      this.host.showError(OAUTH_LOGIN_REQUIRED_STARTUP_NOTICE);
+  private finishCompaction(): void {
+    const { host } = this;
+    if (host.streamingUI.hasActiveTurn()) {
+      host.setAppState({ isCompacting: false });
       return;
     }
-    this.host.showError(formatErrorPayload(event));
-    const sessionId = this.host.state.appState.sessionId;
-    if (sessionId.length > 0) {
-      this.host.showStatus(errorReportHintLine());
-    }
+    host.setAppState({ isCompacting: false, streamingPhase: 'idle' });
   }
 
-  private handleSessionWarning(event: WarningEvent): void {
-    this.host.showStatus(`Warning: ${event.message}`, 'warning');
-  }
+  // ---------------------------------------------------------------------------
+  // Feature events (goal / skill)
+  // ---------------------------------------------------------------------------
 
-  private renderMcpServerStatus(server: McpServerStatusSnapshot): void {
-    const key = mcpServerStatusKey(server);
-    if (this.renderedMcpServerStatusKeys.get(server.name) === key) return;
-    this.renderedMcpServerStatusKeys.set(server.name, key);
-    this.mcpServers.set(server.name, server);
-    const summary = formatMcpStartupStatusSummary([...this.mcpServers.values()]);
-    this.host.setAppState({ mcpServersSummary: summary || null });
-
-    switch (server.status) {
-      case 'connected': {
-        const toolStr = `${server.toolCount} tool${server.toolCount === 1 ? '' : 's'}`;
-        const message = `MCP server "${server.name}" connected · ${toolStr} (${server.transport})`;
-        this.finalizeMcpServerStatusRow(server.name, message, 'success');
-        return;
-      }
-      case 'failed': {
-        const message = `MCP server "${server.name}" failed${server.error !== undefined ? `: ${server.error}` : ''}`;
-        this.finalizeMcpServerStatusRow(server.name, message, 'error');
-        return;
-      }
-      case 'needs-auth': {
-        const message = `MCP server "${server.name}" needs OAuth — run /mcp-config login ${server.name}`;
-        this.finalizeMcpServerStatusRow(server.name, message, 'warning');
-        return;
-      }
-      case 'disabled':
-        this.finalizeMcpServerStatusRow(
-          server.name,
-          `MCP server "${server.name}" disabled`,
-          'textMuted',
-        );
-        return;
-      case 'removed':
-        this.finalizeMcpServerStatusRow(
-          server.name,
-          `MCP server "${server.name}" removed`,
-          'textMuted',
-        );
-        return;
-      case 'pending':
-        this.showMcpServerStatusSpinner(server.name);
-        return;
-    }
-  }
-
-  private showMcpServerStatusSpinner(name: string): void {
-    const { state } = this.host;
-    const label = `MCP server "${name}" connecting…`;
-    const existing = this.mcpServerStatusSpinners.get(name);
-    if (existing !== undefined) {
-      existing.setLabel(label);
+  private handleGoalUpdated(event: Record<string, unknown>): void {
+    const { host } = this;
+    const snapshot = event['snapshot'] as GoalSnapshot | null | undefined;
+    const change = event['change'] as GoalChange | undefined;
+    if (change?.kind === 'completion' && snapshot !== null && snapshot !== undefined) {
+      this.mountGoalComponent(
+        new GoalCompletionMessageComponent(buildGoalCompletionMessage(snapshot)),
+      );
+      this.lastGoalId = null;
       return;
     }
-    const tint = (s: string): string => currentTheme.fg('textMuted', s);
-    const spinner = new MoonLoader(state.ui, 'braille', tint, label);
-    state.transcriptContainer.addChild(spinner);
-    this.mcpServerStatusSpinners.set(name, spinner);
-    state.ui.requestRender();
-  }
-
-  private finalizeMcpServerStatusRow(name: string, message: string, color: ColorToken): void {
-    const { state } = this.host;
-    const spinner = this.mcpServerStatusSpinners.get(name);
-    if (spinner === undefined) {
-      this.host.showStatus(message, color);
+    if (change?.kind === 'lifecycle') {
+      const marker = buildGoalMarker(change, host.state.toolOutputExpanded, change.actor);
+      if (marker !== null) this.mountGoalComponent(marker);
+      this.lastGoalId = snapshot?.goalId ?? null;
       return;
     }
-    spinner.stop();
-    const status = new StatusMessageComponent(message, color);
-    const children = state.transcriptContainer.children;
-    const idx = children.indexOf(spinner);
-    if (idx >= 0) {
-      // In-place replacement is picked up by the container's ref-checked
-      // render cache; a tree-wide invalidate is unnecessary (and costly).
-      children[idx] = status;
-    } else {
-      state.transcriptContainer.addChild(status);
+    if (snapshot !== null && snapshot !== undefined && snapshot.goalId !== this.lastGoalId) {
+      this.mountGoalComponent(new GoalSetMessageComponent());
     }
-    this.mcpServerStatusSpinners.delete(name);
-    state.ui.requestRender();
+    this.lastGoalId = snapshot?.goalId ?? null;
   }
 
-  private handleSkillActivated(event: SkillActivatedEvent): void {
-    if (this.renderedSkillActivationIds.has(event.activationId)) return;
-    this.renderedSkillActivationIds.add(event.activationId);
-    this.host.appendTranscriptEntry({
+  private mountGoalComponent(component: GoalMarkerComponent | GoalCompletionMessageComponent | GoalSetMessageComponent): void {
+    const { host } = this;
+    host.state.transcriptContainer.addChild(component);
+    host.mergeCurrentTurnSteps();
+    host.state.ui.requestRender();
+  }
+
+  private handleSkillActivated(event: Record<string, unknown>): void {
+    const { host } = this;
+    if (event['agentId'] !== MAIN_AGENT_ID) return;
+    const activationId = event['activationId'];
+    const skillName = event['skillName'];
+    if (typeof activationId !== 'string' || typeof skillName !== 'string') return;
+    if (this.renderedSkillActivationIds.has(activationId)) return;
+    this.renderedSkillActivationIds.add(activationId);
+    const trigger = event['trigger'];
+    const skillArgs = event['skillArgs'];
+    const isUserSlash = trigger === 'user-slash';
+    host.appendTranscriptEntry({
       id: nextTranscriptId(),
       kind: 'skill_activation',
-      turnId: undefined,
+      turnId: isUserSlash ? undefined : host.streamingUI.getTurnContext().turnId,
       renderMode: 'plain',
-      content: `Activated skill: ${event.skillName}`,
-      skillActivationId: event.activationId,
-      skillName: event.skillName,
-      skillArgs: event.skillArgs,
-      skillTrigger: event.trigger,
+      content: `Activated skill: ${skillName}`,
+      skillActivationId: activationId,
+      skillName,
+      skillArgs: typeof skillArgs === 'string' ? skillArgs : undefined,
+      skillTrigger:
+        trigger === 'user-slash' || trigger === 'model-tool' || trigger === 'nested-skill'
+          ? trigger
+          : undefined,
     });
   }
 
-  private handlePluginCommandActivated(event: PluginCommandActivatedEvent): void {
-    if (this.renderedPluginCommandActivationIds.has(event.activationId)) return;
-    this.renderedPluginCommandActivationIds.add(event.activationId);
-    this.host.appendTranscriptEntry({
-      id: nextTranscriptId(),
-      kind: 'plugin_command',
-      turnId: undefined,
-      renderMode: 'plain',
-      content: `/${event.pluginId}:${event.commandName}`,
-      pluginCommandData: {
-        activationId: event.activationId,
-        pluginId: event.pluginId,
-        commandName: event.commandName,
-        args: event.commandArgs,
-        trigger: event.trigger,
-      },
-    });
-  }
-
-  private handleCompactionBegin(event: CompactionStartedEvent): void {
-    this.host.streamingUI.finalizeLiveTextBuffers('waiting');
-    this.host.setAppState({
-      isCompacting: true,
-      streamingPhase: 'waiting',
-      streamingStartTime: Date.now(),
-    });
-    this.host.streamingUI.beginCompaction(event.instruction);
-  }
-
-  private handleCompactionEnd(
-    event: CompactionCompletedEvent,
-    sendQueued: (item: QueuedMessage) => void,
-  ): void {
-    this.host.streamingUI.endCompaction(
-      event.result.tokensBefore,
-      event.result.tokensAfter,
-      event.result.summary,
+  /**
+   * The completed compaction's summary is seeded into the swapped-in branch as
+   * a user entry flagged `source: 'compaction'`, `key: 'summary'`; its first
+   * line is the fixed model-facing prefix, the rest is the summary body.
+   */
+  private readCompactionSummary(): string | undefined {
+    const { host } = this;
+    const session = host.session;
+    if (session === undefined) return undefined;
+    const history = session.handle.stores.get(MAIN_AGENT_ID)?.getState().history;
+    if (history === undefined) return undefined;
+    const entry = history.findLast(
+      (item) => item.meta?.source === 'compaction' && item.meta?.key === 'summary',
     );
-    // A completed compaction just refreshed and shrank the cached context —
-    // count it as activity so the next submit isn't judged against the
-    // pre-compaction timestamp, and reset the cache-break baseline (the drop
-    // is expected). Cancellations do neither: the context was not cut.
-    this.host.recordSessionActivity();
-    this.host.noteCompactionFinished();
-    this.host.surveyController.notifyCompactionFinished();
-    this.finishCompaction(sendQueued);
+    if (entry === undefined || entry.message.role !== 'user') return undefined;
+    const text = entry.message.content
+      .flatMap((part) => (part.type === 'text' ? [part.text] : []))
+      .join('');
+    const newline = text.indexOf('\n');
+    const summary = newline < 0 ? '' : text.slice(newline + 1).trim();
+    return summary.length > 0 ? summary : undefined;
   }
 
-  private handleCompactionCancel(
-    _event: CompactionCancelledEvent,
-    sendQueued: (item: QueuedMessage) => void,
-  ): void {
-    this.host.streamingUI.cancelCompaction();
-    this.finishCompaction(sendQueued);
-  }
+  // ---------------------------------------------------------------------------
+  // Facade watchers (footer / status)
+  // ---------------------------------------------------------------------------
 
-  private finishCompaction(sendQueued: (item: QueuedMessage) => void): void {
-    const hasActiveTurn = this.host.streamingUI.hasActiveTurn();
-    if (!hasActiveTurn) {
-      const next = this.host.shiftQueuedMessage();
-      if (next !== undefined) {
-        this.host.state.queuedMessageDispatchPending = true;
-      }
-      this.host.setAppState({
-        isCompacting: false,
-        streamingPhase: 'idle',
-      });
-      this.host.resetLivePane();
-      if (next !== undefined) {
-        setTimeout(() => {
-          this.host.state.queuedMessageDispatchPending = false;
-          sendQueued(next);
-        }, 0);
+  private watchFacades(agent: AgentHandle): () => void {
+    const { host } = this;
+    const off: Array<() => void> = [];
+    const use = (subscription: { unsubscribe(): void } | (() => void)): void => {
+      if (typeof subscription === 'function') off.push(subscription);
+      else off.push(() => subscription.unsubscribe());
+    };
+
+    const model = agent.resolve(AgentModelRef);
+    if (model === undefined) {
+      const alias = host.configDefaultModel();
+      if (alias !== undefined) {
+        host.setAppState({
+          model: alias,
+          maxContextTokens:
+            host.state.appState.availableModels[alias]?.maxContextSize ??
+            host.state.appState.maxContextTokens,
+        });
       }
     } else {
-      this.host.setAppState({ isCompacting: false });
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // Background task lifecycle
-  // ---------------------------------------------------------------------------
-
-  private handleBackgroundTaskEvent(
-    event: BackgroundTaskStartedEvent | BackgroundTaskTerminatedEvent,
-  ): void {
-    const { state } = this.host;
-    const { info } = event;
-    const previous = this.backgroundTasks.get(info.taskId);
-    this.backgroundTasks.set(info.taskId, info);
-
-    const viewer = state.tasksBrowser?.viewer;
-    if (viewer !== undefined && viewer.taskId === info.taskId) {
-      void this.host.tasksBrowserController.refreshOutputViewer({ silent: true });
-    }
-
-    const isTerminal =
-      info.status === 'completed' ||
-      info.status === 'failed' ||
-      info.status === 'timed_out' ||
-      info.status === 'killed' ||
-      info.status === 'lost';
-
-    if (event.type === 'background.task.started') {
-      if (info.kind === 'agent') {
-        // A foreground subagent detached via Ctrl+B: flip its card to
-        // `◐ backgrounded` so it doesn't look like it completed.
-        this.host.streamingUI.markSubagentBackgrounded(info.agentId);
-        this.syncBackgroundTaskBadge();
-        this.host.tasksBrowserController.repaint();
-        return;
-      }
-      this.appendBackgroundTaskEntry(info);
-      this.syncBackgroundTaskBadge();
-      this.host.tasksBrowserController.repaint();
-      return;
-    }
-
-    if (event.type === 'background.task.terminated' && isTerminal) {
-      if (info.kind === 'agent') {
-        // The Agent tool's spawn-success ToolResult is not an error, so the
-        // parent toolCall card would otherwise render `✓ Completed` for any
-        // terminated bg agent — including `lost` / `failed` / `killed`.
-        // Push the actual terminal status so the card matches reality.
-        this.host.streamingUI.applyBackgroundTaskTerminalStatus({
-          agentId: info.agentId,
-          description: info.description,
-          status: info.status,
+      off.push(watch(model.current, (current) => {
+        const alias = current.alias ?? host.configDefaultModel() ?? '';
+        host.setAppState({
+          model: alias,
+          thinkingEffort: current.thinking ?? host.state.appState.thinkingEffort,
+          maxContextTokens:
+            host.state.appState.availableModels[alias]?.maxContextSize ??
+            agent.model?.spec.maxContextSize ??
+            host.state.appState.maxContextTokens,
         });
-        // Stopped / timed-out agents terminate without a `subagent.failed`
-        // event — mark the activity record here so the detail view does not
-        // stay "running" forever. `subagent.completed` carries the result
-        // summary and may land after this, so only fill still-running records.
-        const agentId = info.agentId;
-        if (agentId !== undefined) {
-          const record = this.subAgentEventHandler.activityStore.get(agentId);
-          if (record !== undefined && record.status === 'running') {
-            if (info.status === 'completed') {
-              this.subAgentEventHandler.activityStore.markCompleted(agentId);
-            } else {
-              this.subAgentEventHandler.activityStore.markFailed(agentId);
-            }
-          }
-        }
-      }
-      if (!this.backgroundTaskTranscriptedTerminal.has(info.taskId)) {
-        if (info.kind === 'process' || info.kind === 'question') {
-          this.appendBackgroundTaskEntry(info);
-        }
-        this.backgroundTaskTranscriptedTerminal.add(info.taskId);
-      }
-      this.syncBackgroundTaskBadge();
-      this.host.tasksBrowserController.repaint();
-      return;
+      }, { immediate: true }));
     }
 
-    if (previous?.status !== info.status) {
-      this.syncBackgroundTaskBadge();
+    const permission = agent.resolve(PermissionRef);
+    if (permission !== undefined) {
+      off.push(watch(permission.state, (state) => {
+        host.setAppState({ permissionMode: state.mode });
+      }, { immediate: true }));
     }
-    this.host.tasksBrowserController.repaint();
-  }
 
-  private appendBackgroundTaskEntry(info: BackgroundTaskInfo): void {
-    const status = formatBackgroundTaskTranscript(info);
-    const entry: TranscriptEntry = {
-      id: nextTranscriptId(),
-      kind: 'status',
-      turnId: this.host.streamingUI.getTurnContext().turnId,
-      renderMode: 'plain',
-      content: status.headline,
-      detail: status.detail,
-      backgroundAgentStatus: status,
+    const plan = agent.resolve(PlanRef);
+    if (plan !== undefined) {
+      off.push(watch(plan.state, (state) => {
+        host.setAppState({ planMode: state.active });
+      }, { immediate: true }));
+    }
+
+    const tokenCounting = agent.resolve(TokenCountingRef);
+    if (tokenCounting !== undefined) {
+      off.push(watch(tokenCounting.status, (status) => {
+        const max = host.state.appState.maxContextTokens;
+        host.setAppState({
+          contextTokens: status,
+          contextUsage: max > 0 ? status / max : 0,
+        });
+      }, { immediate: true }));
+    }
+
+    const usage = agent.resolve(UsageRef);
+    if (usage !== undefined) {
+      off.push(watch(usage.summary, (summary) => {
+        host.setAppState({ cumulativeTokens: sumTokenUsage(summary.total) });
+      }, { immediate: true }));
+    }
+
+    const tasks = agent.resolve(TaskRef);
+    if (tasks !== undefined) {
+      off.push(watch(tasks.records, (records) => {
+        let bashTasks = 0;
+        let agentTasks = 0;
+        for (const record of records.values()) {
+          if (record.status !== 'running') continue;
+          if (record.toolName === 'Agent' || record.toolName === 'AgentSwarm') agentTasks += 1;
+          else bashTasks += 1;
+        }
+        host.state.footer.setBackgroundCounts({ bashTasks, agentTasks });
+        host.state.ui.requestRender();
+      }, { immediate: true }));
+    }
+
+    const todos = agent.resolve(TodoRef);
+    if (todos !== undefined) {
+      off.push(watch(todos.items, (items) => {
+        host.streamingUI.setTodoList(
+          items.map((item: { title: string; status: 'pending' | 'in_progress' | 'done' }) => ({
+            title: item.title,
+            status: item.status,
+          })),
+        );
+      }, { immediate: true }));
+    }
+
+    const goal = agent.resolve(GoalRef);
+    if (goal !== undefined) {
+      this.lastGoalId = goal.getGoal().goal?.goalId ?? null;
+      off.push(watch(goal.state, () => {
+        host.setAppState({ goal: goal.getGoal().goal });
+      }, { immediate: true }));
+    }
+
+    return () => {
+      for (const stop of off) stop();
     };
-    this.host.appendTranscriptEntry(entry);
-  }
-
-  private syncBackgroundTaskBadge(): void {
-    const { state } = this.host;
-    let bashTasks = 0;
-    let agentTasks = 0;
-    for (const info of this.backgroundTasks.values()) {
-      if (
-        info.status === 'completed' ||
-        info.status === 'failed' ||
-        info.status === 'timed_out' ||
-        info.status === 'killed' ||
-        info.status === 'lost'
-      ) {
-        continue;
-      }
-      if (info.kind === 'agent') {
-        agentTasks += 1;
-      } else {
-        bashTasks += 1;
-      }
-    }
-    state.footer.setBackgroundCounts({ bashTasks, agentTasks });
-    state.ui.requestRender();
   }
 }

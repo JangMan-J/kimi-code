@@ -1,27 +1,17 @@
 /**
- * Scenario: one VS Code session runtime adapts the public Node SDK session for one or more Webviews.
+ * Scenario: one VS Code session runtime adapts a v3 Kimi session for one or more Webviews.
  * Responsibilities: prompt conversion, event/terminal delivery, reverse RPC, cancellation, and baseline capture.
- * Wiring: SessionRuntime is real; a small in-memory Session implements only the public SDK boundary.
+ * Wiring: SessionRuntime and the v3 event source are real; a fake engine session forms the boundary.
  * Run: pnpm exec vitest run --config apps/vscode/vitest.config.ts apps/vscode/test/session-runtime.test.ts
  */
 
-import type {
-  ApprovalHandler,
-  ApprovalRequest,
-  Event,
-  JsonObject,
-  PermissionMode,
-  PromptInput,
-  QuestionHandler,
-  QuestionRequest,
-  Session,
-  SessionSummary,
-} from "@moonshot-ai/kimi-code-sdk";
-import { describe, expect, it } from "vitest";
+import { CompactionRef } from "@moonshot-ai/harness-core";
+import { describe, expect, it, vi } from "vitest";
 
 import { Events } from "../shared/bridge";
 import type { LegacyApprovalFlags } from "../src/runtime/legacy-approval";
 import { SessionRuntime } from "../src/runtime/session-runtime";
+import { createFakeEngineSession, type FakeEngineSession } from "./fake-engine-session";
 
 interface BroadcastRecord {
   readonly event: string;
@@ -30,196 +20,81 @@ interface BroadcastRecord {
 }
 
 interface BaselineRecord {
-  readonly session: Pick<SessionSummary, "id" | "workDir" | "metadata">;
+  readonly session: { readonly id: string; readonly workDir: string; readonly metadata?: Readonly<Record<string, unknown>> };
   readonly filePath: string;
   readonly webviewIds: readonly string[];
 }
 
-interface FakeSessionBoundary {
-  readonly session: Session;
-  readonly promptInputs: Array<string | PromptInput>;
-  readonly steerInputs: Array<string | PromptInput>;
-  readonly handlerInstallations: { approval: number; question: number };
-  readonly metadataUpdates: JsonObject[];
-  readonly setPermissions: PermissionMode[];
-  readonly subscriptionCount: () => number;
-  readonly cancelCount: () => number;
-  readonly cancelCompactionCount: () => number;
-  readonly closeCount: () => number;
-  emit(event: Event): void;
-  rejectNextPrompt(error: Error): void;
-  rejectNextMetadataUpdate(error: Error): void;
-  requestApproval(request: ApprovalRequest): Promise<Awaited<ReturnType<ApprovalHandler>>>;
-  requestQuestion(request: QuestionRequest): Promise<Awaited<ReturnType<QuestionHandler>>>;
-}
-
 const DEFAULT_LEGACY_APPROVAL: LegacyApprovalFlags = { yolo: false, afk: false };
 
-function createFakeSession(): FakeSessionBoundary {
-  const listeners = new Set<(event: Event) => void>();
-  const promptInputs: Array<string | PromptInput> = [];
-  const steerInputs: Array<string | PromptInput> = [];
-  const handlerInstallations = { approval: 0, question: 0 };
-  const metadataUpdates: JsonObject[] = [];
-  const setPermissions: PermissionMode[] = [];
-  let approvalHandler: ApprovalHandler | undefined;
-  let questionHandler: QuestionHandler | undefined;
-  let nextPromptError: Error | undefined;
-  let nextMetadataError: Error | undefined;
-  let subscriptions = 0;
-  let cancellations = 0;
-  let compactionCancellations = 0;
-  let closes = 0;
-  let permission: PermissionMode = "manual";
-
-  const summary: SessionSummary = {
-    id: "session-1",
-    workDir: "/workspace",
-    sessionDir: "/home/sessions/session-1",
-    createdAt: 1,
-    updatedAt: 2,
-    metadata: { source: "vscode-test" },
-  };
-
-  const session = {
-    id: summary.id,
-    workDir: summary.workDir,
-    summary,
-    setApprovalHandler(handler: ApprovalHandler | undefined) {
-      approvalHandler = handler;
-      if (handler !== undefined) handlerInstallations.approval += 1;
-    },
-    setQuestionHandler(handler: QuestionHandler | undefined) {
-      questionHandler = handler;
-      if (handler !== undefined) handlerInstallations.question += 1;
-    },
-    onEvent(listener: (event: Event) => void) {
-      subscriptions += 1;
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    async prompt(input: string | PromptInput) {
-      promptInputs.push(input);
-      if (nextPromptError !== undefined) {
-        const error = nextPromptError;
-        nextPromptError = undefined;
-        throw error;
-      }
-    },
-    async steer(input: string | PromptInput) {
-      steerInputs.push(input);
-    },
-    async cancel() {
-      cancellations += 1;
-    },
-    async cancelCompaction() {
-      compactionCancellations += 1;
-    },
-    async getStatus() {
-      return {
-        thinkingEffort: "off",
-        permission,
-        planMode: false,
-        contextTokens: 0,
-        maxContextTokens: 128_000,
-        contextUsage: 0,
-      };
-    },
-    async setPermission(mode: PermissionMode) {
-      permission = mode;
-      setPermissions.push(mode);
-    },
-    async updateMetadata(patch: JsonObject) {
-      if (nextMetadataError !== undefined) {
-        const error = nextMetadataError;
-        nextMetadataError = undefined;
-        throw error;
-      }
-      metadataUpdates.push(patch);
-    },
-    async close() {
-      closes += 1;
-    },
-  } as unknown as Session;
-
-  return {
-    session,
-    promptInputs,
-    steerInputs,
-    handlerInstallations,
-    metadataUpdates,
-    setPermissions,
-    subscriptionCount: () => subscriptions,
-    cancelCount: () => cancellations,
-    cancelCompactionCount: () => compactionCancellations,
-    closeCount: () => closes,
-    emit(event) {
-      for (const listener of listeners) listener(event);
-    },
-    rejectNextPrompt(error) {
-      nextPromptError = error;
-    },
-    rejectNextMetadataUpdate(error) {
-      nextMetadataError = error;
-    },
-    async requestApproval(request) {
-      if (approvalHandler === undefined) throw new Error("Approval handler is unavailable");
-      return approvalHandler(request);
-    },
-    async requestQuestion(request) {
-      if (questionHandler === undefined) throw new Error("Question handler is unavailable");
-      return questionHandler(request);
-    },
-  };
-}
-
-function createRuntime(legacyApproval = DEFAULT_LEGACY_APPROVAL) {
-  const sdk = createFakeSession();
+function createRuntime(
+  legacyApproval = DEFAULT_LEGACY_APPROVAL,
+  options: {
+    readonly updateMetadata?: (
+      id: string,
+      patch: Record<string, unknown>,
+    ) => Promise<Readonly<Record<string, unknown>> | undefined>;
+  } = {},
+) {
+  const engine = createFakeEngineSession("session-1");
   const broadcasts: BroadcastRecord[] = [];
   const baselines: BaselineRecord[] = [];
+  const metadataUpdates: Record<string, unknown>[] = [];
+  const compaction = {
+    compact: vi.fn(async (_instruction?: string) => ({ branchId: "branch-2" })),
+    cancel: vi.fn(),
+    status: vi.fn(() => "idle"),
+  };
+  engine.main.facades.set(CompactionRef, compaction);
   const runtime = new SessionRuntime({
-    session: sdk.session,
+    session: engine.session,
+    workDir: "/workspace",
     legacyApproval,
     broadcast: (event, data, webviewId) => broadcasts.push({ event, data, webviewId }),
     captureBaseline: (session, filePath, webviewIds) => {
       baselines.push({ session, filePath, webviewIds });
     },
+    updateMetadata:
+      options.updateMetadata ??
+      (async (_id, patch) => {
+        metadataUpdates.push(patch);
+        return { ...patch };
+      }),
+    recreateSession: async () => engine.session,
     log: () => undefined,
   });
+  runtime.setSessionRecord({ id: "session-1", metadata: { source: "vscode-test" } });
   runtime.subscribe("view-1");
-  return { runtime, sdk, broadcasts, baselines };
+  return { runtime, engine, broadcasts, baselines, metadataUpdates, compaction };
 }
 
 function streamData(records: readonly BroadcastRecord[]): unknown[] {
   return records.filter((record) => record.event === Events.StreamEvent).map((record) => record.data);
 }
 
-function turnStarted(): Event {
-  return {
-    type: "turn.started",
-    sessionId: "session-1",
-    agentId: "main",
-    turnId: 7,
-    origin: { kind: "user" },
-    input: [],
-  };
+function turnStarted(engine: FakeEngineSession): void {
+  engine.emitAgent({ type: "turn.started", turnId: 7, branchId: "branch-1" });
 }
 
-function turnEnded(
-  reason: "completed" | "cancelled" | "failed",
-  error?: Extract<Event, { type: "turn.ended" }>["error"],
-): Event {
-  return {
-    type: "turn.ended",
-    sessionId: "session-1",
-    agentId: "main",
+function turnDone(
+  engine: FakeEngineSession,
+  outcome: "done" | "aborted" | { readonly failure: unknown },
+): void {
+  engine.emitAgent({
+    type: "turn.done",
     turnId: 7,
-    reason,
-    error,
-  };
+    branchId: "branch-1",
+    messages: [],
+    outcome:
+      outcome === "done"
+        ? { type: "done" }
+        : outcome === "aborted"
+          ? { type: "aborted" }
+          : { type: "failed", failure: outcome.failure },
+  });
 }
 
-describe("session runtime (adapts one SDK session for subscribed Webviews)", () => {
+describe("session runtime (adapts one v3 session for subscribed Webviews)", () => {
   it("announces the current context usage to a subscribed Webview", async () => {
     const { runtime, broadcasts } = createRuntime();
 
@@ -264,15 +139,15 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
   });
 
   it("cancels a long-running host action and ignores its late completion", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime();
+    const { runtime, engine, broadcasts, compaction } = createRuntime();
     const actionId = runtime.beginHostAction("/init");
 
     await runtime.cancel();
     runtime.emitHostText("AGENTS.md has been generated.", actionId);
     runtime.completeHostAction("finished", actionId);
 
-    expect(sdk.cancelCount()).toBe(1);
-    expect(sdk.cancelCompactionCount()).toBe(1);
+    expect(engine.main.abortCount).toBe(1);
+    expect(compaction.cancel).toHaveBeenCalledOnce();
     expect(streamData(broadcasts)).toContainEqual({
       type: "stream_complete",
       result: { status: "cancelled" },
@@ -298,9 +173,9 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
   });
 
   it("waits for the cancelled turn to settle before running an exclusive operation", async () => {
-    const { runtime, sdk } = createRuntime();
+    const { runtime, engine } = createRuntime();
     const prompt = runtime.prompt("keep working");
-    sdk.emit(turnStarted());
+    turnStarted(engine);
     let operationStarted = false;
 
     const operation = runtime.runExclusiveAfterCancelling(async () => {
@@ -310,11 +185,11 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(sdk.cancelCount()).toBe(1);
+    expect(engine.main.abortCount).toBe(1);
     expect(operationStarted).toBe(false);
     expect(runtime.isBusy).toBe(true);
 
-    sdk.emit(turnEnded("cancelled"));
+    turnDone(engine, "aborted");
 
     await expect(prompt).resolves.toEqual({ status: "cancelled" });
     await expect(operation).resolves.toBe("forked");
@@ -323,11 +198,11 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
   });
 
   it("keeps a public turn action attached to its original slash input", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime();
+    const { runtime, engine, broadcasts } = createRuntime();
 
     const result = runtime.runTurnAction("/skill:review carefully", async () => {
-      sdk.emit(turnStarted());
-      sdk.emit(turnEnded("completed"));
+      turnStarted(engine);
+      turnDone(engine, "done");
     });
 
     await expect(result).resolves.toEqual({ status: "finished" });
@@ -338,36 +213,41 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     });
   });
 
-  it("converts legacy media keys when a prompt crosses the SDK boundary", async () => {
-    const { runtime, sdk } = createRuntime();
+  it("converts legacy media keys when a prompt crosses the engine boundary", async () => {
+    const { runtime, engine } = createRuntime();
     const completion = runtime.prompt([
       { type: "text", text: "Describe these files" },
       { type: "image_url", image_url: { url: "data:image/png;base64,AA", id: "image-1" } },
       { type: "video_url", video_url: { url: "file:///workspace/demo.mp4", id: "video-1" } },
+      { type: "audio_url", audio_url: { url: "file:///workspace/demo.mp3" } },
     ]);
 
-    sdk.emit(turnStarted());
-    sdk.emit(turnEnded("completed"));
+    turnStarted(engine);
+    turnDone(engine, "done");
     await completion;
 
-    expect(sdk.promptInputs).toEqual([
-      [
-        { type: "text", text: "Describe these files" },
-        { type: "image_url", imageUrl: { url: "data:image/png;base64,AA", id: "image-1" } },
-        { type: "video_url", videoUrl: { url: "file:///workspace/demo.mp4", id: "video-1" } },
-      ],
+    expect(engine.main.submitted).toEqual([
+      {
+        message: {
+          role: "user",
+          content: [
+            { type: "text", text: "Describe these files" },
+            { type: "image_url", source: { kind: "inline", mimeType: "image/png", data: "AA" } },
+            { type: "video_url", source: { kind: "url", url: "file:///workspace/demo.mp4" } },
+            { type: "audio_url", source: { kind: "url", url: "file:///workspace/demo.mp3" } },
+          ],
+        },
+        meta: expect.objectContaining({ origin: { kind: "user" }, tracked: true }),
+      },
     ]);
   });
 
-  it("broadcasts assistant text when the SDK streams a text delta", () => {
-    const { sdk, broadcasts } = createRuntime();
+  it("broadcasts assistant text when the engine streams a text delta", () => {
+    const { engine, broadcasts } = createRuntime();
 
-    sdk.emit({
-      type: "assistant.delta",
-      sessionId: "session-1",
-      agentId: "main",
-      turnId: 7,
-      delta: "Implemented",
+    engine.emitAgent({
+      type: "llm.streaming.part",
+      part: { type: "text", text: "Implemented" },
     });
 
     expect(streamData(broadcasts)).toContainEqual({
@@ -377,15 +257,12 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     });
   });
 
-  it("broadcasts model thinking when the SDK streams a thinking delta", () => {
-    const { sdk, broadcasts } = createRuntime();
+  it("broadcasts model thinking when the engine streams a thinking delta", () => {
+    const { engine, broadcasts } = createRuntime();
 
-    sdk.emit({
-      type: "thinking.delta",
-      sessionId: "session-1",
-      agentId: "main",
-      turnId: 7,
-      delta: "Checking the edge case",
+    engine.emitAgent({
+      type: "llm.streaming.part",
+      part: { type: "think", think: "Checking the edge case" },
     });
 
     expect(streamData(broadcasts)).toContainEqual({
@@ -395,17 +272,19 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     });
   });
 
-  it("broadcasts a legacy tool call when an SDK tool starts", () => {
-    const { sdk, broadcasts } = createRuntime();
+  it("broadcasts a legacy tool call when engine tools spawn", () => {
+    const { engine, broadcasts } = createRuntime();
 
-    sdk.emit({
-      type: "tool.call.started",
-      sessionId: "session-1",
-      agentId: "main",
-      turnId: 7,
-      toolCallId: "tool-1",
-      name: "Read",
-      args: { path: "src/index.ts" },
+    engine.emitAgent({
+      type: "turn.spawn_tools",
+      toolCalls: [
+        {
+          type: "function",
+          id: "tool-1",
+          name: "Read",
+          arguments: JSON.stringify({ path: "src/index.ts" }),
+        },
+      ],
     });
 
     expect(streamData(broadcasts)).toContainEqual({
@@ -420,17 +299,17 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
   });
 
   it.each([
-    ["completed", "finished"],
-    ["cancelled", "cancelled"],
+    ["done", "finished"],
+    ["aborted", "cancelled"],
   ] as const)(
     "emits one stream completion when a turn ends as %s",
-    async (reason, expectedStatus) => {
-      const { runtime, sdk, broadcasts } = createRuntime();
+    async (outcome, expectedStatus) => {
+      const { runtime, engine, broadcasts } = createRuntime();
       const completion = runtime.prompt("hello");
-      sdk.emit(turnStarted());
+      turnStarted(engine);
 
-      sdk.emit(turnEnded(reason));
-      sdk.emit(turnEnded(reason));
+      turnDone(engine, outcome);
+      turnDone(engine, outcome);
 
       await expect(completion).resolves.toEqual({ status: expectedStatus });
       expect(
@@ -452,17 +331,12 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
   );
 
   it("emits one error when a failed turn terminal is repeated", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime();
+    const { runtime, engine, broadcasts } = createRuntime();
     const completion = runtime.prompt("hello");
-    const error = {
-      code: "provider.api_error" as const,
-      message: "Provider rejected the request",
-      retryable: true,
-    };
-    sdk.emit(turnStarted());
+    turnStarted(engine);
 
-    sdk.emit(turnEnded("failed", error));
-    sdk.emit(turnEnded("failed", error));
+    turnDone(engine, { failure: { reason: "error", error: { kind: "status", message: "Provider rejected the request" } } });
+    turnDone(engine, { failure: { reason: "error", error: { kind: "status", message: "Provider rejected the request" } } });
 
     await expect(completion).resolves.toEqual({ status: "failed" });
     expect(
@@ -473,22 +347,35 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     ).toHaveLength(1);
   });
 
-  it("suppresses the trailing SDK error when a failed terminal already reported the same error", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime();
+  it("maps an engine connection failure to the connection error code", async () => {
+    const { runtime, engine, broadcasts } = createRuntime();
     const completion = runtime.prompt("hello");
-    const error = {
-      code: "provider.api_error" as const,
-      message: "Provider rejected the request",
-      retryable: true,
-    };
-    sdk.emit(turnStarted());
+    turnStarted(engine);
 
-    sdk.emit(turnEnded("failed", error));
-    sdk.emit({
-      type: "error",
-      sessionId: "session-1",
-      agentId: "main",
-      ...error,
+    turnDone(engine, {
+      failure: { reason: "error", error: { kind: "connection", message: "fetch failed" } },
+    });
+
+    await expect(completion).resolves.toEqual({ status: "failed" });
+    expect(streamData(broadcasts)).toContainEqual(
+      expect.objectContaining({
+        type: "error",
+        code: "provider.connection_error",
+        phase: "runtime",
+        _sessionId: "session-1",
+      }),
+    );
+  });
+
+  it("suppresses the trailing engine error when a failed terminal already reported it", async () => {
+    const { runtime, engine, broadcasts } = createRuntime();
+    const completion = runtime.prompt("hello");
+    turnStarted(engine);
+
+    turnDone(engine, { failure: { reason: "error", error: { kind: "status", message: "Provider rejected the request" } } });
+    engine.emitAgent({
+      type: "agent.failed",
+      error: { kind: "status", message: "Provider rejected the request" },
     });
 
     await completion;
@@ -500,9 +387,9 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     ).toHaveLength(1);
   });
 
-  it("reports a preflight error when SDK prompt setup throws before turn start", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime();
-    sdk.rejectNextPrompt(new Error("Unable to initialize provider"));
+  it("reports a preflight error when engine prompt submission throws before turn start", async () => {
+    const { runtime, engine, broadcasts } = createRuntime();
+    engine.main.submitError = new Error("Unable to initialize provider");
 
     await expect(runtime.prompt("hello")).resolves.toEqual({ status: "failed" });
 
@@ -516,25 +403,25 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     });
   });
 
-  it("requests SDK cancellation when the active response is stopped", async () => {
-    const { runtime, sdk } = createRuntime();
+  it("requests engine cancellation when the active response is stopped", async () => {
+    const { runtime, engine } = createRuntime();
     void runtime.prompt("hello");
 
     await runtime.cancel();
 
-    expect(sdk.cancelCount()).toBe(1);
+    expect(engine.main.abortCount).toBe(1);
   });
 
-  it("still reaches the SDK cancel when the host lost track of active work", async () => {
-    const { runtime, sdk } = createRuntime();
+  it("still reaches the engine abort when the host lost track of active work", async () => {
+    const { runtime, engine } = createRuntime();
 
     await runtime.cancel();
 
-    expect(sdk.cancelCount()).toBe(1);
+    expect(engine.main.abortCount).toBe(1);
   });
 
   it("converts legacy media keys when steering an active response", async () => {
-    const { runtime, sdk } = createRuntime();
+    const { runtime, engine } = createRuntime();
     void runtime.prompt("hello");
 
     await runtime.steer([
@@ -542,12 +429,14 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
       { type: "image_url", image_url: { url: "file:///workspace/new.png" } },
     ]);
 
-    expect(sdk.steerInputs).toEqual([
-      [
+    expect(engine.main.submitted.at(-1)?.message).toEqual({
+      role: "user",
+      content: [
         { type: "text", text: "Use this instead" },
-        { type: "image_url", imageUrl: { url: "file:///workspace/new.png" } },
+        { type: "image_url", source: { kind: "url", url: "file:///workspace/new.png" } },
       ],
-    ]);
+    });
+    expect(engine.main.steered).toHaveLength(1);
   });
 
   it("echoes a successful steer into the subscribed Webview", async () => {
@@ -567,13 +456,30 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     ["approve", { decision: "approved" }],
     ["approve_for_session", { decision: "approved", scope: "session" }],
     ["reject", { decision: "rejected" }],
-  ] as const)("resolves SDK approval when the Webview responds with %s", async (response, expected) => {
-    const { runtime, sdk, broadcasts } = createRuntime();
-    const pending = sdk.requestApproval({
-      toolCallId: "tool-1",
-      toolName: "Bash",
-      action: "Run command",
-      display: { kind: "command", command: "pnpm test" },
+  ] as const)("resolves the engine approval when the Webview responds with %s", async (response, expected) => {
+    const { runtime, engine, broadcasts } = createRuntime();
+    const pending = engine.interactions.request({
+      kind: "approval",
+      payload: {
+        id: "approval-1",
+        sessionId: "session-1",
+        agentId: "main",
+        toolCallId: "tool-1",
+        toolName: "Bash",
+        action: "Approve Bash",
+        display: { kind: "generic", summary: "Approve Bash", detail: { command: "pnpm test" } },
+      },
+      tags: { agentId: "main", toolCallId: "tool-1" },
+    });
+    await vi.waitFor(() => {
+      const request = streamData(broadcasts).find(
+        (event) =>
+          typeof event === "object" &&
+          event !== null &&
+          "type" in event &&
+          event.type === "ApprovalRequest",
+      ) as { payload: { id: string } } | undefined;
+      expect(request).toBeDefined();
     });
     const request = streamData(broadcasts).find(
       (event) =>
@@ -587,13 +493,31 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     await expect(pending).resolves.toEqual(expected);
   });
 
-  it("forwards SDK approval requests to the Webview in legacy yolo mode", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime({ yolo: true, afk: false });
-    const pending = sdk.requestApproval({
-      toolCallId: "tool-yolo",
-      toolName: "Bash",
-      action: "Run command",
-      display: { kind: "command", command: "pnpm test" },
+  it("forwards engine approval requests to the Webview in legacy yolo mode", async () => {
+    const { runtime, engine, broadcasts } = createRuntime({ yolo: true, afk: false });
+    const pending = engine.interactions.request({
+      kind: "approval",
+      payload: {
+        id: "approval-yolo",
+        sessionId: "session-1",
+        agentId: "main",
+        toolCallId: "tool-yolo",
+        toolName: "Bash",
+        action: "Approve Bash",
+        display: { kind: "generic", summary: "Approve Bash", detail: { command: "pnpm test" } },
+      },
+      tags: { agentId: "main", toolCallId: "tool-yolo" },
+    });
+    await vi.waitFor(() => {
+      expect(
+        streamData(broadcasts).some(
+          (event) =>
+            typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
+            event.type === "ApprovalRequest",
+        ),
+      ).toBe(true);
     });
     const request = streamData(broadcasts).find(
       (event) =>
@@ -607,28 +531,48 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     await expect(pending).resolves.toEqual({ decision: "approved" });
   });
 
-  it("restores core permission when a legacy flag cannot be persisted", async () => {
-    const { runtime, sdk } = createRuntime();
-    sdk.rejectNextMetadataUpdate(new Error("state is read-only"));
+  it("restores engine permission when a legacy flag cannot be persisted", async () => {
+    const { runtime, engine } = createRuntime(
+      { yolo: false, afk: false },
+      {
+        updateMetadata: async () => {
+          throw new Error("state is read-only");
+        },
+      },
+    );
 
     await expect(runtime.toggleLegacyApproval("afk")).rejects.toThrow("state is read-only");
 
-    expect(sdk.setPermissions).toEqual(["auto", "manual"]);
+    expect(engine.permission.modes).toEqual(["auto", "manual"]);
     expect(runtime.legacyApprovalFlags).toEqual({ yolo: false, afk: false });
   });
 
-  it("resolves an SDK question when the Webview submits answers", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime();
-    const pending = sdk.requestQuestion({
-      toolCallId: "question-1",
-      questions: [
-        {
-          question: "Choose a target",
-          header: "Target",
-          options: [{ label: "Tests", description: "Run focused tests" }],
-          multiSelect: false,
-        },
-      ],
+  it("resolves an engine question when the Webview submits answers", async () => {
+    const { runtime, engine, broadcasts } = createRuntime();
+    const pending = engine.interactions.request({
+      kind: "question",
+      payload: {
+        questions: [
+          {
+            question: "Choose a target",
+            header: "Target",
+            options: [{ label: "Tests", description: "Run focused tests" }],
+            multi_select: false,
+          },
+        ],
+      },
+      tags: { agentId: "main", toolCallId: "question-1" },
+    });
+    await vi.waitFor(() => {
+      expect(
+        streamData(broadcasts).some(
+          (event) =>
+            typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
+            event.type === "QuestionRequest",
+        ),
+      ).toBe(true);
     });
     const request = streamData(broadcasts).find(
       (event) =>
@@ -636,23 +580,39 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
         event !== null &&
         "type" in event &&
         event.type === "QuestionRequest",
-    ) as { payload: { id: string } };
+    ) as { payload: { id: string; tool_call_id: string } };
+    expect(request.payload.tool_call_id).toBe("question-1");
 
     expect(runtime.respondQuestion(request.payload.id, { "Choose a target": "Tests" })).toBe(true);
     await expect(pending).resolves.toEqual({ answers: { "Choose a target": "Tests" } });
   });
 
-  it("keeps SDK questions interactive in legacy yolo mode", async () => {
-    const { runtime, sdk, broadcasts } = createRuntime({ yolo: true, afk: false });
-    const pending = sdk.requestQuestion({
-      toolCallId: "question-yolo",
-      questions: [
-        {
-          question: "Continue?",
-          options: [{ label: "Yes" }],
-          multiSelect: false,
-        },
-      ],
+  it("keeps engine questions interactive in legacy yolo mode", async () => {
+    const { runtime, engine, broadcasts } = createRuntime({ yolo: true, afk: false });
+    const pending = engine.interactions.request({
+      kind: "question",
+      payload: {
+        questions: [
+          {
+            question: "Continue?",
+            header: "",
+            options: [{ label: "Yes", description: "" }],
+            multi_select: false,
+          },
+        ],
+      },
+      tags: { agentId: "main", toolCallId: "question-yolo" },
+    });
+    await vi.waitFor(() => {
+      expect(
+        streamData(broadcasts).some(
+          (event) =>
+            typeof event === "object" &&
+            event !== null &&
+            "type" in event &&
+            event.type === "QuestionRequest",
+        ),
+      ).toBe(true);
     });
     const request = streamData(broadcasts).find(
       (event) =>
@@ -666,13 +626,20 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     await expect(pending).resolves.toEqual({ answers: { "Continue?": "Yes" } });
   });
 
-  it("cancels a pending SDK approval when the session closes", async () => {
-    const { runtime, sdk } = createRuntime();
-    const pending = sdk.requestApproval({
-      toolCallId: "tool-1",
-      toolName: "Bash",
-      action: "Run command",
-      display: { kind: "command", command: "pnpm test" },
+  it("cancels a pending engine approval when the session closes", async () => {
+    const { runtime, engine } = createRuntime();
+    const pending = engine.interactions.request({
+      kind: "approval",
+      payload: {
+        id: "approval-close",
+        sessionId: "session-1",
+        agentId: "main",
+        toolCallId: "tool-1",
+        toolName: "Bash",
+        action: "Approve Bash",
+        display: { kind: "generic", summary: "Approve Bash", detail: {} },
+      },
+      tags: { agentId: "main", toolCallId: "tool-1" },
     });
 
     await runtime.close();
@@ -683,49 +650,55 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     });
   });
 
-  it("cancels a pending SDK question when the session closes", async () => {
-    const { runtime, sdk } = createRuntime();
-    const pending = sdk.requestQuestion({
-      questions: [
-        { question: "Continue?", options: [{ label: "Yes" }], multiSelect: false },
-      ],
+  it("cancels a pending engine question when the session closes", async () => {
+    const { runtime, engine } = createRuntime();
+    const pending = engine.interactions.request({
+      kind: "question",
+      payload: {
+        questions: [
+          {
+            question: "Continue?",
+            header: "",
+            options: [{ label: "Yes", description: "" }],
+            multi_select: false,
+          },
+        ],
+      },
+      tags: { agentId: "main", toolCallId: "question-close" },
     });
 
     await runtime.close();
 
-    await expect(pending).resolves.toBeNull();
+    await expect(pending).resolves.toEqual({ cancelled: true, reason: "turn_ended" });
   });
 
-  it("fans out one SDK subscription to every Webview attached to the session", () => {
-    const { runtime, sdk, broadcasts } = createRuntime();
+  it("fans out one engine subscription to every Webview attached to the session", () => {
+    const { runtime, engine, broadcasts } = createRuntime();
     runtime.subscribe("view-2");
 
-    sdk.emit({
-      type: "assistant.delta",
-      sessionId: "session-1",
-      agentId: "main",
-      turnId: 7,
-      delta: "Shared update",
+    engine.emitAgent({
+      type: "llm.streaming.part",
+      part: { type: "text", text: "Shared update" },
     });
 
-    expect(sdk.subscriptionCount()).toBe(1);
-    expect(sdk.handlerInstallations).toEqual({ approval: 1, question: 1 });
     expect(broadcasts.map((record) => record.webviewId)).toEqual(["view-1", "view-2"]);
   });
 
   it.each(["Write", "Edit"] as const)(
     "captures the original file when %s starts with a path",
     (name) => {
-      const { sdk, baselines } = createRuntime();
+      const { engine, baselines } = createRuntime();
 
-      sdk.emit({
-        type: "tool.call.started",
-        sessionId: "session-1",
-        agentId: "main",
-        turnId: 7,
-        toolCallId: "tool-1",
-        name,
-        args: { path: "src/index.ts" },
+      engine.emitAgent({
+        type: "turn.spawn_tools",
+        toolCalls: [
+          {
+            type: "function",
+            id: "tool-1",
+            name,
+            arguments: JSON.stringify({ path: "src/index.ts" }),
+          },
+        ],
       });
 
       expect(baselines).toEqual([
@@ -747,16 +720,18 @@ describe("session runtime (adapts one SDK session for subscribed Webviews)", () 
     ["Write", {}],
     ["Edit", { path: "" }],
   ] as const)("does not capture a baseline when %s receives non-write input %#", (name, args) => {
-    const { sdk, baselines } = createRuntime();
+    const { engine, baselines } = createRuntime();
 
-    sdk.emit({
-      type: "tool.call.started",
-      sessionId: "session-1",
-      agentId: "main",
-      turnId: 7,
-      toolCallId: "tool-1",
-      name,
-      args,
+    engine.emitAgent({
+      type: "turn.spawn_tools",
+      toolCalls: [
+        {
+          type: "function",
+          id: "tool-1",
+          name,
+          arguments: JSON.stringify(args),
+        },
+      ],
     });
 
     expect(baselines).toEqual([]);

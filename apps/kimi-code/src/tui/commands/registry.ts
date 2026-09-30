@@ -1,148 +1,6 @@
-import { readdirSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { basename, dirname, join, relative, resolve } from 'pathe';
-
 import type { AutocompleteItem } from '@moonshot-ai/pi-tui';
 
-import { completeLeadingArg, type ArgCompletionSpec } from './complete-args';
 import type { KimiSlashCommand, SlashCommandAvailability } from './types';
-
-/** Subcommands offered when autocompleting `/goal <…>`. */
-const GOAL_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
-  { value: 'status', description: 'Show the current goal' },
-  { value: 'pause', description: 'Pause the active goal' },
-  { value: 'resume', description: 'Resume a paused goal' },
-  { value: 'cancel', description: 'Cancel and remove the current goal' },
-  { value: 'replace', description: 'Replace the current goal with a new objective' },
-  { value: 'next', description: 'Queue an upcoming goal' },
-];
-
-const GOAL_NEXT_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
-  { value: 'manage', description: 'Manage upcoming goals' },
-];
-
-const SWARM_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
-  { value: 'on', description: 'Turn swarm mode on' },
-  { value: 'off', description: 'Turn swarm mode off' },
-];
-
-const TOWER_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
-  { value: 'status', description: 'Report tower status' },
-  { value: 'teardown', description: 'Tear down the tower' },
-  { value: 'on', description: 'Turn tower mode on' },
-  { value: 'off', description: 'Turn tower mode off' },
-];
-
-const ADD_DIR_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
-  { value: 'list', description: 'Show configured additional workspace directories' },
-];
-
-/** Argument autocompletion for the `/goal` command (subcommands). */
-export function goalArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
-  const nextMatch = argumentPrefix.match(/^next\s+(\S*)$/i);
-  if (nextMatch !== null) {
-    return (
-      completeLeadingArg(GOAL_NEXT_ARG_COMPLETIONS, nextMatch[1] ?? '')?.map((item) => ({
-        ...item,
-        value: `next ${item.value}`,
-      })) ?? null
-    );
-  }
-  return completeLeadingArg(GOAL_ARG_COMPLETIONS, argumentPrefix);
-}
-
-/** Argument autocompletion for the `/swarm` command (subcommands). */
-export function swarmArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
-  return completeLeadingArg(SWARM_ARG_COMPLETIONS, argumentPrefix);
-}
-
-/** Argument autocompletion for the `/tower` command (subcommands). */
-export function towerArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
-  return completeLeadingArg(TOWER_ARG_COMPLETIONS, argumentPrefix);
-}
-
-/** Argument autocompletion for the `/add-dir` command. */
-export function addDirArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
-  if (isPathLikeAddDirArgument(argumentPrefix)) {
-    return completeAddDirPath(argumentPrefix);
-  }
-  return completeLeadingArg(ADD_DIR_ARG_COMPLETIONS, argumentPrefix);
-}
-
-function isPathLikeAddDirArgument(argumentPrefix: string): boolean {
-  return argumentPrefix === '.' || argumentPrefix === '..' || argumentPrefix.startsWith('./') || argumentPrefix.startsWith('../') || argumentPrefix.startsWith('/') || argumentPrefix.startsWith('~');
-}
-
-function completeAddDirPath(argumentPrefix: string): AutocompleteItem[] | null {
-  const normalizedPrefix = argumentPrefix === '~' ? '~/' : argumentPrefix;
-  const expandedPrefix = expandHomePrefix(normalizedPrefix);
-  const parentInput = getDirectoryCompletionParentInput(normalizedPrefix, expandedPrefix);
-  const partialName = normalizedPrefix.endsWith('/') ? '' : basename(expandedPrefix);
-  const parentDir = resolveDirectoryCompletionParent(parentInput);
-  let entries;
-  try {
-    entries = readdirSync(parentDir, { withFileTypes: true });
-  } catch {
-    return null;
-  }
-
-  const items: AutocompleteItem[] = [];
-  for (const entry of entries) {
-    if (entry.name === '.' || entry.name === '..' || entry.name.startsWith('.')) continue;
-    if (partialName.length > 0 && !entry.name.toLowerCase().startsWith(partialName.toLowerCase())) continue;
-    const absolutePath = join(parentDir, entry.name);
-    if (!isDirectoryPath(absolutePath, entry.isDirectory(), entry.isSymbolicLink())) continue;
-    const value = formatDirectoryCompletionValue(normalizedPrefix, parentInput, entry.name);
-    items.push({
-      value,
-      label: `${entry.name}/`,
-      description: absolutePath,
-    });
-  }
-
-  return items.length > 0 ? items : null;
-}
-
-function expandHomePrefix(argumentPrefix: string): string {
-  if (argumentPrefix === '~') return homedir();
-  if (argumentPrefix.startsWith('~/')) return join(homedir(), argumentPrefix.slice(2));
-  return argumentPrefix;
-}
-
-function getDirectoryCompletionParentInput(argumentPrefix: string, expandedPrefix: string): string {
-  if (argumentPrefix === '/') return '/';
-  if (argumentPrefix === '~/') return homedir();
-  if (argumentPrefix.endsWith('/')) return expandedPrefix.slice(0, -1);
-  return dirname(expandedPrefix);
-}
-
-function resolveDirectoryCompletionParent(parentInput: string): string {
-  if (parentInput === '~') return homedir();
-  if (parentInput.startsWith('~/')) return join(homedir(), parentInput.slice(2));
-  return resolve(parentInput);
-}
-
-function isDirectoryPath(path: string, isDirectory: boolean, isSymlink: boolean): boolean {
-  if (isDirectory) return true;
-  if (!isSymlink) return false;
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function formatDirectoryCompletionValue(argumentPrefix: string, parentInput: string, entryName: string): string {
-  if (argumentPrefix.startsWith('~/')) {
-    const home = homedir();
-    const homeRelative = relative(home, parentInput);
-    return `~${homeRelative.length > 0 ? `/${homeRelative}` : ''}/${entryName}/`;
-  }
-  if (argumentPrefix.startsWith('/')) {
-    return `${join(parentInput, entryName)}/`;
-  }
-  return `${join(parentInput, entryName)}/`;
-}
 
 export const BUILTIN_SLASH_COMMANDS = [
   {
@@ -181,28 +39,6 @@ export const BUILTIN_SLASH_COMMANDS = [
     availability: (args) => (args.trim().toLowerCase() === 'clear' ? 'idle-only' : 'always'),
   },
   {
-    name: 'swarm',
-    aliases: [],
-    description: 'Toggle swarm mode or run one task in swarm mode',
-    priority: 100,
-    argumentHint: '[on|off] | <task>',
-    completeArgs: swarmArgumentCompletions,
-    availability: 'idle-only',
-  },
-  {
-    name: 'tower',
-    aliases: [],
-    description: 'Report tower status, toggle tower mode, or turn it on with a base branch',
-    priority: 100,
-    argumentHint: '[status|teardown|on|off] | <base-branch>',
-    completeArgs: towerArgumentCompletions,
-    // Every form stays available while busy: base selections apply to the next
-    // TowerInit of the running coordinator turn, so /tower commands never wait
-    // for the previous one to finish.
-    availability: 'always',
-    experimentalFlag: 'tower',
-  },
-  {
     name: 'model',
     aliases: [],
     description: 'Switch LLM model',
@@ -210,31 +46,10 @@ export const BUILTIN_SLASH_COMMANDS = [
     availability: 'always',
   },
   {
-    name: 'secondary-model',
-    aliases: ['subagent-model'],
-    description: 'Configure the secondary model for subagents',
-    priority: 90,
-    availability: 'always',
-  },
-  {
     name: 'effort',
     aliases: ['thinking'],
     description: 'Switch thinking effort',
     priority: 95,
-    availability: 'always',
-  },
-  {
-    name: 'provider',
-    aliases: ['providers'],
-    description: 'Manage AI providers (add / delete / refresh)',
-    priority: 95,
-    availability: 'always',
-  },
-  {
-    name: 'btw',
-    aliases: [],
-    description: 'Ask a forked side agent a question',
-    priority: 90,
     availability: 'always',
   },
   {
@@ -271,40 +86,75 @@ export const BUILTIN_SLASH_COMMANDS = [
     availability: 'always',
   },
   {
-    name: 'plugins',
+    name: 'goal',
     aliases: [],
-    description: 'Manage plugins',
+    description: 'Start or manage a goal (status/pause/resume/cancel)',
+    priority: 80,
+    argumentHint: '<objective>',
+  },
+  {
+    name: 'btw',
+    aliases: [],
+    description: 'Ask a side question in a read-only fork',
     priority: 60,
+    argumentHint: '<question>',
     availability: 'always',
   },
   {
-    name: 'add-dir',
+    name: 'swarm',
     aliases: [],
-    description: 'Add or list an additional workspace directory',
+    description: 'Toggle swarm mode or start a swarm task',
     priority: 60,
-    availability: 'idle-only',
-    argumentHint: '[list] | <path>',
-    completeArgs: addDirArgumentCompletions,
+    argumentHint: 'on|off|<task>',
   },
   {
-    name: 'experiments',
-    aliases: ['experimental'],
-    description: 'Manage experimental features',
+    name: 'fork',
+    aliases: [],
+    description: 'Fork the current session and switch to the fork',
+    priority: 60,
+    availability: 'idle-only',
+  },
+  {
+    name: 'export-md',
+    aliases: ['export'],
+    description: 'Export the current session as Markdown',
+    priority: 50,
+    argumentHint: '[output-path]',
+    availability: 'always',
+  },
+  {
+    name: 'export-debug-zip',
+    aliases: [],
+    description: 'Export the current session as a debug zip',
+    priority: 50,
+    availability: 'always',
+  },
+  {
+    name: 'init',
+    aliases: [],
+    description: 'Generate an AGENTS.md for this workspace',
     priority: 60,
     availability: 'idle-only',
   },
   {
     name: 'reload',
     aliases: [],
-    description: 'Reload session and apply config.toml settings plus tui.toml UI preferences',
+    description: 'Reload config, skills, profiles, plugins, and MCP servers',
     priority: 60,
-    availability: 'idle-only',
+    availability: 'always',
   },
   {
-    name: 'reload-tui',
+    name: 'provider',
     aliases: [],
-    description: 'Reload only tui.toml UI preferences',
+    description: 'Manage providers and models',
     priority: 60,
+    availability: 'always',
+  },
+  {
+    name: 'plugins',
+    aliases: ['plugin'],
+    description: 'Manage installed plugins',
+    priority: 50,
     availability: 'always',
   },
   {
@@ -313,34 +163,6 @@ export const BUILTIN_SLASH_COMMANDS = [
     description: 'Compact the conversation context',
     priority: 80,
     argumentHint: '<instruction>',
-  },
-  {
-    name: 'goal',
-    aliases: [],
-    description: 'Start or manage an autonomous goal',
-    priority: 80,
-    argumentHint: '[status|pause|resume|cancel|replace|next] | <objective>',
-    completeArgs: goalArgumentCompletions,
-    // status / pause / cancel are always available; creation, replacement, and
-    // resume start (or restart) a turn and so are idle-only.
-    availability: (args) => {
-      const trimmed = args.trim();
-      if (trimmed === 'next' || trimmed.startsWith('next ')) return 'always';
-      return trimmed === '' || trimmed === 'status' || trimmed === 'pause' || trimmed === 'cancel'
-        ? 'always'
-        : 'idle-only';
-    },
-  },
-  {
-    name: 'init',
-    aliases: [],
-    description: 'Analyze the codebase and generate AGENTS.md',
-  },
-  {
-    name: 'fork',
-    aliases: [],
-    description: 'Fork the current session into a copy without switching to it',
-    priority: 80,
   },
   {
     name: 'title',
@@ -393,6 +215,13 @@ export const BUILTIN_SLASH_COMMANDS = [
     availability: 'always',
   },
   {
+    name: 'reload-tui',
+    aliases: [],
+    description: 'Reload only tui.toml UI preferences',
+    priority: 60,
+    availability: 'always',
+  },
+  {
     name: 'logout',
     aliases: ['disconnect'],
     description: 'Log out of a configured provider',
@@ -405,36 +234,10 @@ export const BUILTIN_SLASH_COMMANDS = [
     priority: 40,
   },
   {
-    name: 'export-md',
-    aliases: ['export'],
-    description: 'Export current session as a Markdown file',
-    priority: 40,
-  },
-  {
-    name: 'export-debug-zip',
-    aliases: [],
-    description: 'Export current session as a debug ZIP archive',
-    priority: 40,
-  },
-  {
     name: 'copy',
     aliases: [],
     description: 'Copy the last assistant message to the clipboard',
     priority: 40,
-  },
-  {
-    name: 'web',
-    aliases: [],
-    description: 'Open the current session in the Web UI by starting a new server',
-    priority: 40,
-    availability: 'always',
-  },
-  {
-    name: 'remote-control',
-    aliases: ['rc'],
-    description: 'Open the current session through Kimi Remote Control',
-    priority: 40,
-    availability: 'always',
   },
   {
     name: 'exit',
@@ -474,3 +277,5 @@ export function sortSlashCommands(commands: readonly KimiSlashCommand[]): KimiSl
     (a, b) => (b.priority ?? 0) - (a.priority ?? 0) || a.name.localeCompare(b.name),
   );
 }
+
+export type { AutocompleteItem };

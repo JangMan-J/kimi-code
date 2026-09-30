@@ -7,7 +7,15 @@ import {
   type Focusable,
 } from '@moonshot-ai/pi-tui';
 
-import type { WorkspaceTrustMcpServerInfo } from '@moonshot-ai/kimi-code-sdk';
+export interface WorkspaceTrustMcpServerInfo {
+  readonly name: string;
+  readonly source?: 'project' | 'user';
+  readonly transport?: string;
+  readonly command?: string;
+  readonly args?: readonly string[];
+  readonly cwd?: string;
+  readonly url?: string;
+}
 
 import { SELECT_POINTER } from '#/tui/constant/symbols';
 import { currentTheme } from '#/tui/theme';

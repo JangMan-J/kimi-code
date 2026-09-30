@@ -1,14 +1,5 @@
-/**
- * Low-profile transcript markers for the autonomous goal loop.
- *
- * Lifecycle changes (paused / resumed / cancelled) and `no_progress` verdicts
- * render as a single dim line — `◦ Goal paused` — that expands (ctrl+o, shared
- * with tool output) to show the reason when there is one. Terminal outcomes use
- * the richer completion card (the `/goal` box), not this marker.
- */
-
 import { truncateToWidth, type Component } from '@moonshot-ai/pi-tui';
-import type { GoalChange } from '@moonshot-ai/kimi-code-sdk';
+import type { GoalActor, GoalChange } from '@moonshot-ai/harness-core';
 
 import { STATUS_BULLET } from '#/tui/constant/symbols';
 import { currentTheme } from '#/tui/theme';
@@ -16,8 +7,6 @@ import type { ColorToken } from '#/tui/theme';
 
 const HEAD_INDENT = '  ';
 const DETAIL_INDENT = '    ';
-
-type GoalMarkerActor = 'user' | 'model' | 'runtime' | 'system';
 
 interface GoalMarkerOptions {
   readonly marker?: string;
@@ -54,6 +43,14 @@ export class GoalMarkerComponent implements Component {
     this.expanded = expanded;
   }
 
+  isExpanded(): boolean {
+    return this.expanded;
+  }
+
+  hasHiddenContent(): boolean {
+    return this.expandable && this.detail !== undefined && this.detail.length > 0;
+  }
+
   render(width: number): string[] {
     const dot = currentTheme.fg(this.accentToken, this.marker);
     const head = currentTheme.fg(this.textToken, this.headline);
@@ -71,7 +68,7 @@ export class GoalMarkerComponent implements Component {
     }
     const out = [`${this.indent}${dot} ${head}`];
     const wrapWidth = Math.max(20, width - DETAIL_INDENT.length);
-    for (const line of wrap(this.detail!, wrapWidth)) {
+    for (const line of wrap(this.detail ?? '', wrapWidth)) {
       out.push(DETAIL_INDENT + currentTheme.fg('textDim', line));
     }
     return this.clampToWidth(out, width);
@@ -88,15 +85,10 @@ export class GoalMarkerComponent implements Component {
   }
 }
 
-/**
- * Builds a marker for a lifecycle change (paused / resumed / blocked), or `null`
- * when the change should be silent (a `completion` change posts its own message,
- * not a marker). `expanded` seeds the initial ctrl+o state.
- */
 export function buildGoalMarker(
   change: GoalChange,
   expanded: boolean,
-  actor?: GoalMarkerActor,
+  actor?: GoalActor,
 ): GoalMarkerComponent | null {
   const spec = markerSpec(change, actor);
   if (spec === null) return null;
@@ -112,7 +104,7 @@ export function buildGoalMarker(
 
 function markerSpec(
   change: GoalChange,
-  actor?: GoalMarkerActor,
+  actor?: GoalActor,
 ): {
   headline: string;
   accentToken: ColorToken;
@@ -126,13 +118,12 @@ function markerSpec(
       case 'active':
         return prominentMarker(resumedHeadline(actor), 'primary');
       case 'blocked':
-        // The system stopped pursuing the goal; resumable via `/goal resume`.
         return { headline: 'Goal blocked', accentToken: 'warning' };
       default:
         return null;
     }
   }
-  return null; // completion -> posts its own message, not a marker
+  return null;
 }
 
 function prominentMarker(headline: string, accentToken: ColorToken) {
@@ -150,7 +141,7 @@ function prominentMarker(headline: string, accentToken: ColorToken) {
   };
 }
 
-function pausedHeadline(reason: string | undefined, actor: GoalMarkerActor | undefined): string {
+function pausedHeadline(reason: string | undefined, actor: GoalActor | undefined): string {
   if (reason === 'Paused after interruption') return "Goal paused due to user's interruption";
   if (actor === 'user') return 'Goal paused by the user.';
   if (reason?.startsWith('Paused ') === true) return `Goal ${lowercaseFirst(reason)}`;
@@ -159,7 +150,7 @@ function pausedHeadline(reason: string | undefined, actor: GoalMarkerActor | und
   return 'Goal paused';
 }
 
-function resumedHeadline(actor: GoalMarkerActor | undefined): string {
+function resumedHeadline(actor: GoalActor | undefined): string {
   if (actor === 'user') return 'Goal resumed by the user.';
   if (actor === 'model') return 'Goal resumed by the agent.';
   return 'Goal resumed';

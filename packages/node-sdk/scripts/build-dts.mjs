@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 
@@ -12,18 +12,29 @@ const providerClientShimPath = path.join(dtsRoot, 'provider-clients.d.ts');
 const tscBinPath = packageBinPath('typescript', 'bin/tsc');
 const apiExtractorBinPath = packageBinPath('@microsoft/api-extractor', 'bin/api-extractor');
 
-const packageDirs = new Set(['agent-core-v2', 'klient', 'node-sdk', 'oauth']);
+const packageDirs = new Set(['agent-core', 'harness-core', 'tree-sitter-bash', 'node-sdk', 'oauth']);
 const workspacePackages = new Map([
-  ['@moonshot-ai/agent-core-v2', 'agent-core-v2'],
+  ['@moonshot-ai/agent-core', 'agent-core'],
+  ['@moonshot-ai/harness-core', 'harness-core'],
   ['@moonshot-ai/kimi-code-oauth', 'oauth'],
-  ['@moonshot-ai/klient', 'klient'],
+  ['@moonshot-ai/tree-sitter-bash', 'tree-sitter-bash'],
 ]);
+const thirdPartyPackages = [
+  '@agentclientprotocol/sdk',
+  '@modelcontextprotocol/sdk',
+  '@types/express',
+  '@vue/reactivity',
+  'express',
+  'xstate',
+  'zod',
+];
 
 try {
   await rm(tempDir, { recursive: true, force: true });
   await run('tsc', tscBinPath, ['-p', 'tsconfig.dts.json']);
   await writeProviderClientShim();
   await rewriteWorkspaceSpecifiers();
+  await linkThirdPartyPackages();
   await run('api-extractor', apiExtractorBinPath, ['run', '--local']);
 } finally {
   await rm(tempDir, { recursive: true, force: true });
@@ -73,6 +84,27 @@ async function writeProviderClientShim() {
   );
 }
 
+async function linkThirdPartyPackages() {
+  const nodeModulesDir = path.join(tempDir, 'node_modules');
+  const resolvers = [...packageDirs].map((packageDir) =>
+    createRequire(path.join(packageRoot, '..', packageDir, 'package.json')),
+  );
+  for (const packageName of thirdPartyPackages) {
+    for (const resolver of resolvers) {
+      let target;
+      try {
+        target = path.dirname(resolver.resolve(`${packageName}/package.json`));
+      } catch {
+        continue;
+      }
+      const linkPath = path.join(nodeModulesDir, packageName);
+      await mkdir(path.dirname(linkPath), { recursive: true });
+      await symlink(target, linkPath, process.platform === 'win32' ? 'junction' : 'dir');
+      break;
+    }
+  }
+}
+
 async function rewriteWorkspaceSpecifiers() {
   const files = await findDtsFiles(dtsRoot);
   const emittedFiles = new Set(files.map((file) => path.resolve(file)));
@@ -104,7 +136,7 @@ async function rewriteWorkspaceSpecifiers() {
           `import { GoogleGenAI as GenAIClient } from '${providerClientSpecifier}';`,
         );
       const updated = providerClientText.replaceAll(
-        /(["'])(#\/[^"']+|@moonshot-ai\/(?:agent-core-v2|kimi-code-oauth|klient)(?:\/[^"']+)?)\1/g,
+        /(["'])(#\/[^"']+|@moonshot-ai\/(?:agent-core|harness-core|kimi-code-oauth|tree-sitter-bash)(?:\/[^"']+)?)\1/g,
         (_match, quote, specifier) => {
           const resolved = resolveSpecifier({
             currentFile: file,

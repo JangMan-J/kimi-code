@@ -11,10 +11,8 @@ interface Harness {
   readonly host: EditorKeyboardHost;
   readonly editor: Record<string, ((...args: never[]) => unknown) | undefined>;
   readonly openUndoSelector: ReturnType<typeof vi.fn>;
-  readonly cancelRunningShellCommand: ReturnType<typeof vi.fn>;
-  readonly cancelCompaction: ReturnType<typeof vi.fn>;
-  readonly btwCancelRunning: ReturnType<typeof vi.fn>;
-  readonly btwCloseOrCancel: ReturnType<typeof vi.fn>;
+  readonly cancelOngoingWork: ReturnType<typeof vi.fn>;
+  readonly cancelCurrentCompaction: ReturnType<typeof vi.fn>;
   readonly survey: {
     readonly handlePreInput: ReturnType<typeof vi.fn<(data: string) => boolean>>;
     readonly handleSubmit: ReturnType<typeof vi.fn<(text: string) => boolean>>;
@@ -31,18 +29,14 @@ function createHarness(options: { streamingPhase?: string; isCompacting?: boolea
     setText: vi.fn() as unknown as (...args: never[]) => unknown,
   };
   const openUndoSelector = vi.fn();
-  const cancelRunningShellCommand = vi.fn();
-  const cancelCompaction = vi.fn(async () => {});
-  const btwCancelRunning = vi.fn(() => false);
-  const btwCloseOrCancel = vi.fn(() => false);
+  const cancelOngoingWork = vi.fn();
+  const cancelCurrentCompaction = vi.fn();
   const survey = {
     handlePreInput: vi.fn<(data: string) => boolean>(() => false),
     handleSubmit: vi.fn<(text: string) => boolean>(() => false),
     handleEditorChange: vi.fn<(text: string) => void>(() => {}),
     closeSilently: vi.fn<() => void>(() => {}),
   };
-  const session = { cancel: vi.fn(async () => {}), cancelCompaction };
-
   const host = {
     state: {
       editor,
@@ -55,16 +49,23 @@ function createHarness(options: { streamingPhase?: string; isCompacting?: boolea
       footer: { setTransientHint: vi.fn() },
       ui: { requestRender: vi.fn() },
     },
-    session,
-    btwPanelController: { cancelRunning: btwCancelRunning, closeOrCancel: btwCloseOrCancel },
+    session: { id: 's1' },
     surveyController: survey,
+    btwPanelController: {
+      isActive: () => false,
+      clear: vi.fn(),
+      closeOrCancel: vi.fn(() => false),
+      cancelRunning: vi.fn(() => false),
+      sendUserInput: vi.fn(() => false),
+      scroll: vi.fn(() => false),
+    },
     openUndoSelector,
-    cancelRunningShellCommand,
+    cancelOngoingWork,
+    cancelCurrentCompaction,
     updateEditorBorderHighlight: vi.fn(),
     updateGoalLengthWarning: vi.fn(),
     handleUserInput: vi.fn(),
     track: vi.fn(),
-    openExternalEditor: vi.fn(),
     showError: vi.fn(),
     stop: vi.fn(),
   } as unknown as EditorKeyboardHost;
@@ -79,10 +80,8 @@ function createHarness(options: { streamingPhase?: string; isCompacting?: boolea
     host,
     editor,
     openUndoSelector,
-    cancelRunningShellCommand,
-    cancelCompaction,
-    btwCancelRunning,
-    btwCloseOrCancel,
+    cancelOngoingWork,
+    cancelCurrentCompaction,
     survey,
   };
 }
@@ -159,7 +158,7 @@ describe('EditorKeyboardController double-Esc undo', () => {
   });
 
   it('does not trigger undo while streaming; Esc cancels the stream instead', () => {
-    const { editor, host, openUndoSelector, cancelRunningShellCommand } = createHarness({
+    const { editor, openUndoSelector, cancelOngoingWork } = createHarness({
       streamingPhase: 'waiting',
     });
 
@@ -167,73 +166,25 @@ describe('EditorKeyboardController double-Esc undo', () => {
     pressEscape(editor);
 
     expect(openUndoSelector).not.toHaveBeenCalled();
-    expect(cancelRunningShellCommand).toHaveBeenCalled();
-    const session = host.session as unknown as { cancel: ReturnType<typeof vi.fn> };
-    expect(session.cancel).toHaveBeenCalled();
+    expect(cancelOngoingWork).toHaveBeenCalled();
   });
 });
 
-describe('EditorKeyboardController btw panel priority', () => {
-  it('Esc closes the btw panel first while compacting, without cancelling compaction', () => {
-    const { editor, btwCloseOrCancel, cancelCompaction } = createHarness({ isCompacting: true });
-    btwCloseOrCancel.mockReturnValue(true);
+describe('EditorKeyboardController compaction cancel', () => {
+  it('Esc cancels compaction while compacting', () => {
+    const { editor, cancelCurrentCompaction } = createHarness({ isCompacting: true });
 
     pressEscape(editor);
 
-    expect(btwCloseOrCancel).toHaveBeenCalledOnce();
-    expect(cancelCompaction).not.toHaveBeenCalled();
+    expect(cancelCurrentCompaction).toHaveBeenCalledOnce();
   });
 
-  it('Esc cancels compaction on the next press once the btw panel is gone', () => {
-    const { editor, btwCloseOrCancel, cancelCompaction } = createHarness({ isCompacting: true });
-    btwCloseOrCancel.mockReturnValueOnce(true);
-
-    pressEscape(editor);
-    expect(cancelCompaction).not.toHaveBeenCalled();
-
-    pressEscape(editor);
-    expect(cancelCompaction).toHaveBeenCalledOnce();
-  });
-
-  it('Esc cancels compaction directly when no btw panel is open', () => {
-    const { editor, btwCloseOrCancel, cancelCompaction } = createHarness({ isCompacting: true });
-
-    pressEscape(editor);
-
-    expect(btwCloseOrCancel).toHaveBeenCalledOnce();
-    expect(cancelCompaction).toHaveBeenCalledOnce();
-  });
-
-  it('Ctrl+C cancels a running btw question first while compacting', () => {
-    const { editor, btwCancelRunning, cancelCompaction } = createHarness({ isCompacting: true });
-    btwCancelRunning.mockReturnValue(true);
+  it('Ctrl+C cancels compaction while compacting', () => {
+    const { editor, cancelCurrentCompaction } = createHarness({ isCompacting: true });
 
     pressCtrlC(editor);
 
-    expect(btwCancelRunning).toHaveBeenCalledOnce();
-    expect(cancelCompaction).not.toHaveBeenCalled();
-  });
-
-  it('Ctrl+C closes an idle btw panel while compacting, without cancelling compaction', () => {
-    const { editor, btwCloseOrCancel, cancelCompaction } = createHarness({ isCompacting: true });
-    btwCloseOrCancel.mockReturnValue(true);
-
-    pressCtrlC(editor);
-
-    expect(btwCloseOrCancel).toHaveBeenCalledOnce();
-    expect(cancelCompaction).not.toHaveBeenCalled();
-  });
-
-  it('Ctrl+C cancels compaction when no btw panel is open', () => {
-    const { editor, btwCancelRunning, btwCloseOrCancel, cancelCompaction } = createHarness({
-      isCompacting: true,
-    });
-
-    pressCtrlC(editor);
-
-    expect(btwCancelRunning).toHaveBeenCalledOnce();
-    expect(btwCloseOrCancel).toHaveBeenCalledOnce();
-    expect(cancelCompaction).toHaveBeenCalledOnce();
+    expect(cancelCurrentCompaction).toHaveBeenCalledOnce();
   });
 });
 
@@ -426,12 +377,11 @@ describe('EditorKeyboardController Shift-Tab plan toggle', () => {
         footer: { setTransientHint: vi.fn() },
         ui: { requestRender: vi.fn() },
       },
-      session: options.sessionless ? undefined : { cancel: vi.fn(async () => {}) },
+      session: options.sessionless ? undefined : { id: 's1' },
       ensureSession,
       handlePlanToggle,
       track,
       showError,
-      btwPanelController: { cancelRunning: vi.fn(), closeOrCancel: vi.fn() },
     } as unknown as EditorKeyboardHost;
 
     new EditorKeyboardController(host, undefined as unknown as ImageAttachmentStore).install();
@@ -476,20 +426,9 @@ describe('EditorKeyboardController Shift-Tab plan toggle', () => {
   });
 });
 
-/**
- * Ctrl-S steering of the TUI queue: plain-text items steer as messages,
- * slash-skill items fire as real activations into the running turn (never as
- * literal text), grouped inline-skill submissions stay queued for the drain
- * path, bash items stay queued — all in queue order.
- */
 describe('EditorKeyboardController Ctrl-S steering', () => {
-  function createCtrlSHarness(options: {
-    editorText: string;
-    queued: Array<Record<string, unknown>>;
-    skillCommandMap?: Map<string, string>;
-  }) {
-    const steerMessage = vi.fn();
-    const steerSkillActivation = vi.fn();
+  function createCtrlSHarness(options: { editorText: string; inputMode?: 'prompt' | 'bash' }) {
+    const steerQueuedAndDraft = vi.fn();
     const updateQueueDisplay = vi.fn();
     const setText = vi.fn();
     const editor: Record<string, ((...args: never[]) => unknown) | undefined> = {
@@ -497,29 +436,22 @@ describe('EditorKeyboardController Ctrl-S steering', () => {
       setInputMode: vi.fn() as unknown as (...args: never[]) => unknown,
       getText: vi.fn(() => options.editorText) as unknown as (...args: never[]) => unknown,
       setText: setText as unknown as (...args: never[]) => unknown,
-      inputMode: 'prompt' as unknown as (...args: never[]) => unknown,
+      inputMode: (options.inputMode ?? 'prompt') as unknown as (...args: never[]) => unknown,
     };
     const host = {
       state: {
         editor,
         activeDialog: null,
-        queuedMessages: options.queued,
         appState: { streamingPhase: 'waiting', isCompacting: false, model: 'k2' },
         footer: { setTransientHint: vi.fn() },
         ui: { requestRender: vi.fn() },
       },
       session: { id: 's1' },
-      skillCommandMap: options.skillCommandMap ?? new Map(),
-      steerMessage,
-      steerSkillActivation,
+      skillCommandMap: new Map(),
+      steerQueuedAndDraft,
       updateQueueDisplay,
-      validateMediaCapabilities: vi.fn(() => true),
       showError: vi.fn(),
       track: vi.fn(),
-      btwPanelController: {
-        cancelRunning: vi.fn(() => false),
-        closeOrCancel: vi.fn(() => false),
-      },
     } as unknown as EditorKeyboardHost;
     const controller = new EditorKeyboardController(
       host,
@@ -529,133 +461,46 @@ describe('EditorKeyboardController Ctrl-S steering', () => {
     const onCtrlS = editor['onCtrlS'];
     if (onCtrlS === undefined) throw new Error('onCtrlS handler not installed');
     return {
-      host,
       editor,
       setText,
-      steerMessage,
-      steerSkillActivation,
+      steerQueuedAndDraft,
       updateQueueDisplay,
       onCtrlS: onCtrlS as () => void,
     };
   }
 
-  it('steers text as a message, skill items as activations, and keeps bash queued', () => {
-    const { host, steerMessage, steerSkillActivation, updateQueueDisplay, onCtrlS } =
-      createCtrlSHarness({
-        editorText: '',
-        queued: [
-          { text: 'queued text', agentId: 'main' },
-          {
-            text: '/tower status',
-            agentId: 'main',
-            mode: 'skill',
-            skillName: 'tower',
-            skillArgs: 'status',
-          },
-          { text: '!ls', agentId: 'main', mode: 'bash' },
-        ],
-      });
+  it('steers the queued prompts and clears the editor draft', () => {
+    const { setText, steerQueuedAndDraft, updateQueueDisplay, onCtrlS } = createCtrlSHarness({
+      editorText: 'focus on tests',
+    });
 
     onCtrlS();
 
-    expect(steerMessage).toHaveBeenCalledWith(host.session, [
-      { text: 'queued text', parts: undefined, imageAttachmentIds: undefined },
-    ]);
-    expect(steerSkillActivation).toHaveBeenCalledWith(host.session, 'tower', 'status');
-    expect(host.state.queuedMessages).toEqual([{ text: '!ls', agentId: 'main', mode: 'bash' }]);
+    expect(steerQueuedAndDraft).toHaveBeenCalledWith('focus on tests');
+    expect(setText).toHaveBeenCalledWith('');
     expect(updateQueueDisplay).toHaveBeenCalled();
   });
 
-  it('steers plain queued messages but keeps grouped inline-skill submissions queued', () => {
-    const { host, steerMessage, updateQueueDisplay, onCtrlS } = createCtrlSHarness({
+  it('steers the queue without touching an empty editor draft', () => {
+    const { setText, steerQueuedAndDraft, onCtrlS } = createCtrlSHarness({
       editorText: '',
-      queued: [
-        { text: 'plain note', agentId: 'main' },
-        {
-          text: 'check /skill:review',
-          agentId: 'main',
-          inlineSkillActivations: [{ skillName: 'review' }],
-        },
-      ],
     });
 
     onCtrlS();
 
-    expect(steerMessage).toHaveBeenCalledWith(host.session, [
-      { text: 'plain note', parts: undefined, imageAttachmentIds: undefined },
-    ]);
-    expect(host.state.queuedMessages).toEqual([
-      {
-        text: 'check /skill:review',
-        agentId: 'main',
-        inlineSkillActivations: [{ skillName: 'review' }],
-      },
-    ]);
-    expect(updateQueueDisplay).toHaveBeenCalled();
-  });
-
-  it('stops steering at the first bundle so later messages keep FIFO order', () => {
-    const { host, steerMessage, onCtrlS } = createCtrlSHarness({
-      editorText: '',
-      queued: [
-        { text: 'earlier note', agentId: 'main' },
-        {
-          text: 'check /skill:review',
-          agentId: 'main',
-          inlineSkillActivations: [{ skillName: 'review' }],
-        },
-        { text: 'later note', agentId: 'main' },
-      ],
-    });
-
-    onCtrlS();
-
-    expect(steerMessage).toHaveBeenCalledWith(host.session, [
-      { text: 'earlier note', parts: undefined, imageAttachmentIds: undefined },
-    ]);
-    expect(host.state.queuedMessages).toEqual([
-      {
-        text: 'check /skill:review',
-        agentId: 'main',
-        inlineSkillActivations: [{ skillName: 'review' }],
-      },
-      { text: 'later note', agentId: 'main' },
-    ]);
-  });
-
-  it('steers nothing when a bundle leads the queue', () => {
-    const { host, steerMessage, onCtrlS } = createCtrlSHarness({
-      editorText: '',
-      queued: [
-        {
-          text: 'check /skill:review',
-          agentId: 'main',
-          inlineSkillActivations: [{ skillName: 'review' }],
-        },
-        { text: 'later note', agentId: 'main' },
-      ],
-    });
-
-    onCtrlS();
-
-    expect(steerMessage).not.toHaveBeenCalled();
-    expect(host.state.queuedMessages).toHaveLength(2);
-  });
-
-  it('leaves an editor draft with inline skill tokens in the editor for the grouped path', () => {
-    const { host, setText, steerMessage, onCtrlS } = createCtrlSHarness({
-      editorText: 'check /skill:review',
-      queued: [{ text: 'plain note', agentId: 'main' }],
-      skillCommandMap: new Map([['skill:review', 'review']]),
-    });
-
-    onCtrlS();
-
-    expect(steerMessage).toHaveBeenCalledWith(host.session, [
-      { text: 'plain note', parts: undefined, imageAttachmentIds: undefined },
-    ]);
+    expect(steerQueuedAndDraft).toHaveBeenCalledWith(undefined);
     expect(setText).not.toHaveBeenCalled();
-    expect(host.state.queuedMessages).toEqual([]);
+  });
+
+  it('does not steer a bash-mode draft', () => {
+    const { steerQueuedAndDraft, onCtrlS } = createCtrlSHarness({
+      editorText: 'ls -la',
+      inputMode: 'bash',
+    });
+
+    onCtrlS();
+
+    expect(steerQueuedAndDraft).not.toHaveBeenCalled();
   });
 });
 

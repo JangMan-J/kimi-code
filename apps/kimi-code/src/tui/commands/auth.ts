@@ -1,5 +1,5 @@
 import {
-  applyOpenPlatformConfig,
+  capabilitiesForModel,
   fetchOpenPlatformModels,
   filterModelsByPrefix,
   getOpenPlatformById,
@@ -7,18 +7,18 @@ import {
   OpenPlatformApiError,
   type KimiRegion,
   type ManagedKimiCodeModelInfo,
-  type ManagedKimiConfigShape,
   type OpenPlatformDefinition,
 } from '@moonshot-ai/kimi-code-oauth';
 import { log } from '@moonshot-ai/kimi-code-sdk';
 
 import type { ChoiceOption } from '../components/dialogs/choice-picker';
 import { DEFAULT_OAUTH_PROVIDER_NAME, PRODUCT_NAME } from '../constant/kimi-tui';
-import { formatErrorMessage } from '../utils/event-payload';
+import { formatErrorMessage } from '../utils/errors';
 import {
   KIMI_CODE_GLOBAL_PLATFORM_VALUE,
   refreshKimiRegion,
 } from '#/utils/region';
+import { removeProviderFromConfig } from '#/utils/provider-config';
 import type { LoginProgressSpinnerHandle } from '../types';
 import {
   promptApiKey,
@@ -169,29 +169,40 @@ async function handleOpenPlatformLogin(
   const selection = await promptModelSelectionForOpenPlatform(host, models, platform);
   if (selection === undefined) return;
 
-  const existingConfig = await host.harness.getConfig();
-  if (existingConfig.providers[platform.id] !== undefined) {
-    await host.harness.removeProvider(platform.id);
+  const providers = {
+    ...host.harness.config.get<Record<string, unknown>>('providers'),
+  };
+  const modelRecords = {
+    ...host.harness.config.get<Record<string, unknown>>('models'),
+  };
+  for (const key of Object.keys(modelRecords)) {
+    if (key.startsWith(`${platform.id}/`)) delete modelRecords[key];
   }
-
-  const config = await host.harness.getConfig();
-  applyOpenPlatformConfig(config as ManagedKimiConfigShape, {
-    platform,
-    models,
-    selectedModel: selection.model,
-    thinking: selection.thinking !== 'off',
-    effort:
-      selection.thinking !== 'off' && selection.thinking !== 'on'
-        ? selection.thinking
-        : undefined,
+  providers[platform.id] = {
+    type: 'kimi',
+    baseUrl: platform.baseUrl,
     apiKey,
-  });
-
-  await host.harness.setConfig({
-    providers: config.providers,
-    models: config.models,
-    defaultModel: config.defaultModel,
-    thinking: config.thinking,
+  };
+  for (const model of models) {
+    modelRecords[`${platform.id}/${model.id}`] = {
+      provider: platform.id,
+      model: model.id,
+      maxContextSize: model.contextLength,
+      capability: capabilityStruct(capabilitiesForModel(model)),
+      displayName: model.displayName,
+      supportEfforts: model.supportEfforts,
+      defaultEffort: model.defaultEffort,
+    };
+  }
+  const effort =
+    selection.thinking !== 'off' && selection.thinking !== 'on'
+      ? selection.thinking
+      : undefined;
+  await host.harness.config.replace({
+    providers,
+    models: modelRecords,
+    defaultModel: `${platform.id}/${selection.model.id}`,
+    thinking: { enabled: selection.thinking !== 'off', effort },
   });
 
   await host.authFlow.refreshConfigAfterLogin();
@@ -199,15 +210,32 @@ async function handleOpenPlatformLogin(
   host.showStatus(`Setup complete: ${platform.name} · ${selection.model.id}`);
 }
 
+function capabilityStruct(caps: readonly string[] | undefined): {
+  image_in: boolean;
+  video_in: boolean;
+  audio_in: boolean;
+  thinking: boolean;
+  tool_use: boolean;
+} {
+  const set = new Set(caps ?? []);
+  return {
+    image_in: set.has('image_in'),
+    video_in: set.has('video_in'),
+    audio_in: set.has('audio_in'),
+    thinking: set.has('thinking'),
+    tool_use: true,
+  };
+}
+
 export async function handleLogoutCommand(host: SlashCommandHost): Promise<void> {
   const oauthStatus = await host.harness.auth.status(DEFAULT_OAUTH_PROVIDER_NAME);
   const hasOAuthToken = oauthStatus.providers.some(
     (p) => p.providerName === DEFAULT_OAUTH_PROVIDER_NAME && p.hasToken,
   );
-  const config = await host.harness.getConfig();
+  const providers = host.harness.config.get<Record<string, { baseUrl?: unknown }>>('providers') ?? {};
   const hasManagedRemnant =
-    hasOAuthToken || config.providers[DEFAULT_OAUTH_PROVIDER_NAME] !== undefined;
-  const apiKeyProviderIds = Object.keys(config.providers ?? {})
+    hasOAuthToken || providers[DEFAULT_OAUTH_PROVIDER_NAME] !== undefined;
+  const apiKeyProviderIds = Object.keys(providers)
     .filter((id) => id !== DEFAULT_OAUTH_PROVIDER_NAME)
     .toSorted();
 
@@ -220,7 +248,7 @@ export async function handleLogoutCommand(host: SlashCommandHost): Promise<void>
     });
   }
   for (const id of apiKeyProviderIds) {
-    const baseUrl = config.providers[id]?.baseUrl;
+    const baseUrl = providers[id]?.baseUrl;
     options.push({
       value: id,
       label: id,
@@ -242,17 +270,14 @@ export async function handleLogoutCommand(host: SlashCommandHost): Promise<void>
   if (target === DEFAULT_OAUTH_PROVIDER_NAME) {
     await host.harness.auth.logout(DEFAULT_OAUTH_PROVIDER_NAME);
   } else {
-    await host.harness.removeProvider(target);
+    await removeProviderFromConfig(host.harness.config, target);
   }
 
   if (target === currentProvider) {
     await host.authFlow.refreshConfigAfterLogout();
   } else {
-    const updated = await host.harness.getConfig({ reload: true });
-    host.setAppState({
-      availableModels: updated.models ?? {},
-      availableProviders: updated.providers ?? {},
-    });
+    await host.harness.config.reload();
+    host.refreshAvailableModels();
   }
   refreshKimiRegion();
 

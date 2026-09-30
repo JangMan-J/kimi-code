@@ -1,6 +1,5 @@
 import type { Component } from '@moonshot-ai/pi-tui';
-import type { ContextMessage } from '@moonshot-ai/kimi-code-sdk';
-import { isKimiError } from '@moonshot-ai/kimi-code-sdk';
+import { UndoRef } from '@moonshot-ai/agent-core';
 
 import { WelcomeComponent } from '../components/chrome/welcome';
 import { CompactionComponent } from '../components/dialogs/compaction';
@@ -9,19 +8,16 @@ import {
   type UndoChoice,
 } from '../components/dialogs/undo-selector';
 import { AgentGroupComponent } from '../components/messages/agent-group';
-import { AgentSwarmProgressComponent } from '../components/messages/agent-swarm-progress';
 import { AssistantMessageComponent } from '../components/messages/assistant-message';
-import { BackgroundAgentStatusComponent } from '../components/messages/background-agent-status';
 import { CronMessageComponent } from '../components/messages/cron-message';
 import { ReadGroupComponent } from '../components/messages/read-group';
 import { SkillActivationComponent } from '../components/messages/skill-activation';
-import { PluginCommandComponent } from '../components/messages/plugin-command';
 import { ThinkingComponent } from '../components/messages/thinking';
 import { ToolCallComponent } from '../components/messages/tool-call';
 import { UserMessageComponent } from '../components/messages/user-message';
 import { NO_ACTIVE_SESSION_MESSAGE } from '../constant/kimi-tui';
 import type { TranscriptEntry } from '../types';
-import { formatErrorMessage } from '../utils/event-payload';
+import { formatErrorMessage } from '../utils/errors';
 import { getTranscriptComponentEntry } from '../utils/transcript-component-metadata';
 import { nextTranscriptId } from '../utils/transcript-id';
 import type { SlashCommandHost } from './dispatch';
@@ -34,10 +30,6 @@ interface UndoAvailability {
   readonly maxCount: number;
   readonly stoppedAtCompaction: boolean;
 }
-
-type UndoSessionContext = Awaited<
-  ReturnType<NonNullable<SlashCommandHost['session']>['getContext']>
->;
 
 const UNDO_LIMIT_STATUS_TURN_ID = 'undo-limit-status';
 
@@ -68,7 +60,7 @@ export async function handleUndoCommand(
     return;
   }
 
-  const availability = await resolveUndoAvailability(host);
+  const availability = resolveUndoAvailability(host);
   if (count > availability.maxCount) {
     showUndoLimitStatus(host, formatUndoLimitMessage(count, availability));
     return;
@@ -78,8 +70,8 @@ export async function handleUndoCommand(
 }
 
 async function undoByCount(host: SlashCommandHost, count: number): Promise<boolean> {
-  const session = host.session;
-  if (session === undefined) {
+  const main = host.mainAgent();
+  if (main === undefined) {
     host.showError(NO_ACTIVE_SESSION_MESSAGE);
     return false;
   }
@@ -90,63 +82,30 @@ async function undoByCount(host: SlashCommandHost, count: number): Promise<boole
     showUndoLimitStatus(host, 'Nothing to undo.');
     return false;
   }
-  // When the anchor is a bundled prompt, its skill activation cards sit
-  // before it (contiguous, marked at submission/replay time) and are removed
-  // together with it.
 
+  const undoFace = main.resolve(UndoRef);
+  if (undoFace === undefined) {
+    host.showError('Failed to undo: undo feature is not installed');
+    return false;
+  }
   try {
-    await session.undoHistory(count);
+    await undoFace.undo(count);
   } catch (error) {
-    const limit = undoLimitFromError(error);
-    if (limit !== undefined) {
-      showUndoLimitStatus(host, formatUndoLimitMessage(limit.requestedCount, limit));
-      return false;
-    }
     const message = formatErrorMessage(error);
     host.showError(`Failed to undo: ${message}`);
     return false;
   }
-  host.noteContextCut?.();
-  await refreshTodoPanel(host);
 
   const children = host.state.transcriptContainer.children;
   const lastUserComponentIndex = findUndoAnchorComponentIndex(children, count);
   if (lastUserComponentIndex !== undefined) {
-    // A hook result may interleave between the bundle's cards and its prompt
-    // and survives undo in the engine, so it is skipped (kept) while the
-    // cards around it are removed. Only the contiguous marked run belongs to
-    // this submission: a standalone `/skill` card is unmarked and never
-    // swept. Structural removal only: the container's ref-checked render
-    // cache detects the child-list change; no tree-wide invalidate needed.
-    const groupChildIndices = new Set<number>();
-    for (let i = lastUserComponentIndex - 1; i >= 0; i--) {
-      const entry = getTranscriptComponentEntry(children[i]!);
-      if (entry?.bundledWithPrompt === true) {
-        groupChildIndices.add(i);
-        continue;
-      }
-      if (entry?.hookResult === true) continue;
-      break;
-    }
-    removeUndoContextComponents(children, lastUserComponentIndex, groupChildIndices);
+    // Structural removal only: the container's ref-checked render cache
+    // detects the child-list change; no tree-wide invalidate needed.
+    removeUndoContextComponents(children, lastUserComponentIndex);
   }
 
-  const groupEntryIndices = new Set<number>();
-  for (let i = lastUserIndex - 1; i >= 0; i--) {
-    const prev = entries[i];
-    if (prev?.bundledWithPrompt === true) {
-      groupEntryIndices.add(i);
-      continue;
-    }
-    if (prev?.hookResult === true) continue;
-    break;
-  }
   const preservedEntries = entries.filter(
-    (entry, index) =>
-      !(
-        (index >= lastUserIndex || groupEntryIndices.has(index)) &&
-        isUndoContextEntry(entry)
-      ),
+    (entry, index) => !(index >= lastUserIndex && isUndoContextEntry(entry)),
   );
   entries.splice(0, entries.length, ...preservedEntries);
 
@@ -158,28 +117,13 @@ async function undoByCount(host: SlashCommandHost, count: number): Promise<boole
   return true;
 }
 
-async function refreshTodoPanel(host: SlashCommandHost): Promise<void> {
-  const session = host.session;
-  if (session === undefined) return;
-  try {
-    const todos = await session.getTodos();
-    if (todos.length > 0 && todos.every((todo) => todo.status === 'done')) {
-      host.streamingUI.setTodoList([]);
-      return;
-    }
-    host.streamingUI.setTodoList(todos);
-  } catch {
-    return;
-  }
-}
-
 async function showUndoSelector(host: SlashCommandHost): Promise<void> {
   if (host.session === undefined) {
     host.showError(NO_ACTIVE_SESSION_MESSAGE);
     return;
   }
 
-  const availability = await resolveUndoAvailability(host);
+  const availability = resolveUndoAvailability(host);
   const choices = createUndoChoices(
     host.state.transcriptEntries,
     host.state.transcriptContainer.children,
@@ -217,80 +161,25 @@ function parseUndoCount(args: string): number | undefined {
   return Number.isSafeInteger(count) ? count : undefined;
 }
 
-async function resolveUndoAvailability(
-  host: SlashCommandHost,
-): Promise<UndoAvailability> {
-  const local = undoAvailabilityFromTranscript(
+function resolveUndoAvailability(host: SlashCommandHost): UndoAvailability {
+  const { anchors, stoppedAtCompaction } = activeUndoAnchorEntries(
     host.state.transcriptEntries,
     host.state.transcriptContainer.children,
   );
-  const context = await getSessionContext(host.session);
-  if (context === undefined) return local;
-
-  const activeContext = undoAvailabilityFromContext(context.history);
+  const engine = engineUndoAvailability(host);
   return {
-    maxCount: Math.min(local.maxCount, activeContext.maxCount),
-    stoppedAtCompaction:
-      local.stoppedAtCompaction || activeContext.stoppedAtCompaction,
+    maxCount: engine === undefined ? anchors.length : Math.min(anchors.length, engine.maxCount),
+    stoppedAtCompaction: stoppedAtCompaction || (engine?.stoppedAtCompaction ?? false),
   };
 }
 
-async function getSessionContext(
-  session: SlashCommandHost['session'],
-): Promise<UndoSessionContext | undefined> {
-  const getContext = (
-    session as { getContext?: () => Promise<UndoSessionContext> } | undefined
-  )?.getContext;
-  if (session === undefined || getContext === undefined) return undefined;
-  try {
-    return await getContext.call(session);
-  } catch {
-    return undefined;
-  }
-}
-
-function undoAvailabilityFromTranscript(
-  entries: readonly TranscriptEntry[],
-  children: readonly Component[],
-): UndoAvailability {
-  const { anchors, stoppedAtCompaction } = activeUndoAnchorEntries(entries, children);
-  return {
-    maxCount: anchors.length,
-    stoppedAtCompaction,
-  };
-}
-
-function undoAvailabilityFromContext(
-  history: readonly ContextMessage[],
-): UndoAvailability {
-  let maxCount = 0;
-  let stoppedAtCompaction = false;
-
-  for (let i = history.length - 1; i >= 0; i--) {
-    const message = history[i];
-    if (message === undefined) continue;
-    if (message.origin?.kind === 'injection') continue;
-    if (message.origin?.kind === 'compaction_summary') {
-      stoppedAtCompaction = true;
-      break;
-    }
-    if (isContextUndoAnchor(message)) maxCount++;
-  }
-
-  return { maxCount, stoppedAtCompaction };
-}
-
-function isContextUndoAnchor(message: ContextMessage): boolean {
-  if (message.role !== 'user') return false;
-  const origin = message.origin;
-  if (origin === undefined || origin.kind === 'user') return true;
-  if (origin.kind === 'skill_activation') {
-    return origin.trigger === 'user-slash';
-  }
-  if (origin.kind === 'plugin_command') {
-    return origin.trigger === 'user-slash';
-  }
-  return false;
+function engineUndoAvailability(host: SlashCommandHost): UndoAvailability | undefined {
+  const main = host.mainAgent();
+  if (main === undefined) return undefined;
+  const undo = main.resolve(UndoRef);
+  if (undo === undefined) return undefined;
+  const availability = undo.availability();
+  return { maxCount: availability.maxTurns, stoppedAtCompaction: availability.stoppedAtCompaction };
 }
 
 function createUndoChoices(
@@ -348,9 +237,6 @@ function formatUndoChoiceLabel(
     if (name.length === 0) return 'Skill: unknown';
     return args.length > 0 ? `/${name} ${args}` : `/${name}`;
   }
-  if (entry.kind === 'plugin_command' && entry.pluginCommandData !== undefined) {
-    return formatPluginCommandSlash(entry.pluginCommandData) ?? 'User message';
-  }
 
   const content = singleLine(entry.content);
   const imageCount = entry.imageAttachmentIds?.length ?? 0;
@@ -370,17 +256,7 @@ function formatUndoChoiceInput(entry: TranscriptEntry): string {
     if (name.length === 0) return '';
     return args.length > 0 ? `/${name} ${args}` : `/${name}`;
   }
-  if (entry.kind === 'plugin_command' && entry.pluginCommandData !== undefined) {
-    return formatPluginCommandSlash(entry.pluginCommandData) ?? entry.content;
-  }
   return entry.content;
-}
-
-function formatPluginCommandSlash(data: NonNullable<TranscriptEntry['pluginCommandData']>): string | undefined {
-  const name = `${data.pluginId}:${data.commandName}`;
-  const args = singleLine(data.args ?? '');
-  if (name.length === 0) return undefined;
-  return args.length > 0 ? `/${name} ${args}` : `/${name}`;
 }
 
 function singleLine(text: string): string {
@@ -418,32 +294,10 @@ function showUndoLimitStatus(host: SlashCommandHost, message: string): void {
   });
 }
 
-function undoLimitFromError(
-  error: unknown,
-): (UndoAvailability & { readonly requestedCount: number }) | undefined {
-  if (!isKimiError(error)) return undefined;
-  const details = error.details;
-  if (details?.['reason'] !== 'undo_limit') return undefined;
-  const requestedCount = details['requestedCount'];
-  const maxCount = details['undoableCount'];
-  const stoppedAtCompaction = details['stoppedAtCompaction'];
-  if (
-    typeof requestedCount !== 'number' ||
-    typeof maxCount !== 'number' ||
-    typeof stoppedAtCompaction !== 'boolean'
-  ) {
-    return undefined;
-  }
-  return { requestedCount, maxCount, stoppedAtCompaction };
-}
-
 function isUndoAnchorEntry(entry: TranscriptEntry): boolean {
   return (
     entry.kind === 'user' ||
-    (entry.kind === 'skill_activation' &&
-      entry.skillTrigger === 'user-slash' &&
-      entry.bundledWithPrompt !== true) ||
-    entry.kind === 'plugin_command'
+    (entry.kind === 'skill_activation' && entry.skillTrigger === 'user-slash')
   );
 }
 
@@ -469,11 +323,9 @@ function isUndoContextEntry(entry: TranscriptEntry): boolean {
     case 'tool_call':
     case 'thinking':
     case 'skill_activation':
-    case 'plugin_command':
     case 'cron':
       return true;
     case 'status':
-    case 'goal':
       return entry.turnId !== undefined;
     case 'welcome':
       return false;
@@ -498,28 +350,19 @@ function findUndoAnchorComponentIndex(
 function removeUndoContextComponents(
   children: Component[],
   startIndex: number,
-  additionalIndices: ReadonlySet<number>,
 ): void {
   for (let i = children.length - 1; i >= 0; i--) {
     const child = children[i];
-    if (
-      child !== undefined &&
-      (i >= startIndex || additionalIndices.has(i)) &&
-      isUndoContextComponent(child)
-    ) {
+    if (child !== undefined && i >= startIndex && isUndoContextComponent(child)) {
       children.splice(i, 1);
     }
   }
 }
 
 function isUndoAnchorComponent(child: Component): boolean {
-  const entry = getTranscriptComponentEntry(child);
   return (
     child instanceof UserMessageComponent ||
-    (child instanceof SkillActivationComponent &&
-      child.trigger === 'user-slash' &&
-      entry?.bundledWithPrompt !== true) ||
-    child instanceof PluginCommandComponent
+    (child instanceof SkillActivationComponent && child.trigger === 'user-slash')
   );
 }
 
@@ -535,11 +378,8 @@ function isUndoContextComponent(child: Component): boolean {
     child instanceof ThinkingComponent ||
     child instanceof ToolCallComponent ||
     child instanceof AgentGroupComponent ||
-    child instanceof AgentSwarmProgressComponent ||
     child instanceof ReadGroupComponent ||
     child instanceof SkillActivationComponent ||
-    child instanceof PluginCommandComponent ||
-    child instanceof BackgroundAgentStatusComponent ||
     child instanceof CronMessageComponent
   );
 }

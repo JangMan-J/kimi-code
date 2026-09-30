@@ -34,49 +34,26 @@ describe('resolveSlashCommandInput', () => {
     expect(resolve('/help')).toMatchObject({ kind: 'builtin', name: 'help', args: '' });
     expect(resolve('/q')).toMatchObject({ kind: 'builtin', name: 'exit', args: '' });
     expect(resolve('/clear')).toMatchObject({ kind: 'builtin', name: 'new', args: '' });
-    expect(resolve('/fork')).toMatchObject({ kind: 'builtin', name: 'fork', args: '' });
     expect(resolve('/title New title')).toMatchObject({
       kind: 'builtin',
       name: 'title',
       args: 'New title',
     });
-    expect(resolve('/add-dir list')).toMatchObject({
-      kind: 'builtin',
-      name: 'add-dir',
-      args: 'list',
-    });
-    expect(resolve('/init')).toMatchObject({ kind: 'builtin', name: 'init', args: '' });
-    expect(resolve('/btw')).toMatchObject({
-      kind: 'builtin',
-      name: 'btw',
-      args: '',
-    });
-    expect(resolve('/btw what are you doing?')).toMatchObject({
-      kind: 'builtin',
-      name: 'btw',
-      args: 'what are you doing?',
-    });
-    expect(resolve('/experiments')).toMatchObject({
-      kind: 'builtin',
-      name: 'experiments',
-      args: '',
-    });
   });
 
-  it('resolves /remote-control and /rc as built-ins', () => {
-    expect(resolve('/rc')).toMatchObject({ kind: 'builtin', name: 'remote-control' });
-    expect(resolve('/remote-control')).toMatchObject({ kind: 'builtin', name: 'remote-control' });
+  it('resolves /compact and /undo as built-ins', () => {
+    expect(resolve('/compact focus on tests')).toMatchObject({
+      kind: 'builtin',
+      name: 'compact',
+      args: 'focus on tests',
+    });
+    expect(resolve('/undo 2')).toMatchObject({ kind: 'builtin', name: 'undo', args: '2' });
   });
 
   it('blocks idle-only built-ins while streaming', () => {
     expect(resolve('/new', { isStreaming: true })).toEqual({
       kind: 'blocked',
       commandName: 'new',
-      reason: 'streaming',
-    });
-    expect(resolve('/init', { isStreaming: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'init',
       reason: 'streaming',
     });
     expect(resolve('/sessions', { isStreaming: true })).toEqual({
@@ -94,31 +71,6 @@ describe('resolveSlashCommandInput', () => {
       commandName: 'undo',
       reason: 'streaming',
     });
-    expect(resolve('/reload', { isStreaming: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'reload',
-      reason: 'streaming',
-    });
-    expect(resolve('/add-dir ../shared', { isStreaming: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'add-dir',
-      reason: 'streaming',
-    });
-    expect(resolve('/experiments', { isStreaming: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'experiments',
-      reason: 'streaming',
-    });
-    expect(resolve('/swarm on', { isStreaming: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'swarm',
-      reason: 'streaming',
-    });
-    expect(resolve('/swarm off', { isStreaming: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'swarm',
-      reason: 'streaming',
-    });
   });
 
   it('blocks model and session pickers while compacting', () => {
@@ -132,31 +84,6 @@ describe('resolveSlashCommandInput', () => {
       commandName: 'resume',
       reason: 'compacting',
     });
-    expect(resolve('/reload', { isCompacting: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'reload',
-      reason: 'compacting',
-    });
-    expect(resolve('/add-dir ../shared', { isCompacting: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'add-dir',
-      reason: 'compacting',
-    });
-    expect(resolve('/experiments', { isCompacting: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'experiments',
-      reason: 'compacting',
-    });
-    expect(resolve('/swarm on', { isCompacting: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'swarm',
-      reason: 'compacting',
-    });
-    expect(resolve('/swarm off', { isCompacting: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'swarm',
-      reason: 'compacting',
-    });
   });
 
   it('allows always-available built-ins while streaming', () => {
@@ -164,16 +91,6 @@ describe('resolveSlashCommandInput', () => {
       kind: 'builtin',
       name: 'plan',
       args: 'on',
-    });
-    expect(resolve('/mcp', { isStreaming: true })).toMatchObject({
-      kind: 'builtin',
-      name: 'mcp',
-      args: '',
-    });
-    expect(resolve('/mcp', { isCompacting: true })).toMatchObject({
-      kind: 'builtin',
-      name: 'mcp',
-      args: '',
     });
     expect(resolve('/reload-tui', { isStreaming: true })).toMatchObject({
       kind: 'builtin',
@@ -185,10 +102,10 @@ describe('resolveSlashCommandInput', () => {
       name: 'reload-tui',
       args: '',
     });
-    expect(resolve('/btw side question', { isStreaming: true })).toMatchObject({
+    expect(resolve('/permission', { isStreaming: true })).toMatchObject({
       kind: 'builtin',
-      name: 'btw',
-      args: 'side question',
+      name: 'permission',
+      args: '',
     });
   });
 
@@ -250,79 +167,6 @@ describe('resolveSlashCommandInput', () => {
       kind: 'message',
       input: '/does-not-exist arg',
     });
-  });
-
-  it('resolves /swarm without an experimental flag', () => {
-    expect(resolve('/swarm Ship feature X')).toMatchObject({
-      kind: 'builtin',
-      name: 'swarm',
-      args: 'Ship feature X',
-    });
-  });
-
-  it('resolves /tower to the builtin command when the tower flag is enabled', () => {
-    setExperimentalFeatures([{ id: 'tower', enabled: true }]);
-
-    expect(resolve('/tower Ship feature X')).toMatchObject({
-      kind: 'builtin',
-      name: 'tower',
-      args: 'Ship feature X',
-    });
-  });
-
-  it('does not resolve /tower as a builtin when the tower flag is disabled', () => {
-    expect(resolve('/tower Ship feature X')).toEqual({
-      kind: 'message',
-      input: '/tower Ship feature X',
-    });
-  });
-});
-
-describe('goal command resolution', () => {
-  afterEach(() => {
-    setExperimentalFeatures([]);
-  });
-
-  it('resolves /goal to the builtin command without an experimental flag', () => {
-    expect(resolve('/goal Ship feature X')).toMatchObject({
-      kind: 'builtin',
-      name: 'goal',
-      args: 'Ship feature X',
-    });
-  });
-
-  it('blocks goal creation while streaming', () => {
-    expect(resolve('/goal Ship feature X', { isStreaming: true })).toEqual({
-      kind: 'blocked',
-      commandName: 'goal',
-      reason: 'streaming',
-    });
-  });
-
-  it('does not block status/pause/cancel/bare goal while streaming', () => {
-    for (const sub of ['status', 'pause', 'cancel']) {
-      expect(resolve(`/goal ${sub}`, { isStreaming: true })).toMatchObject({
-        kind: 'builtin',
-        name: 'goal',
-      });
-    }
-    expect(resolve('/goal', { isStreaming: true })).toMatchObject({
-      kind: 'builtin',
-      name: 'goal',
-    });
-  });
-});
-
-describe('slash command busy helpers', () => {
-  it('resolves skill command aliases with and without skill prefix', () => {
-    const map = new Map([
-      ['skill:review', 'review'],
-      ['mcp-config', 'mcp-config'],
-    ]);
-
-    expect(resolveSkillCommand(map, 'skill:review')).toBe('review');
-    expect(resolveSkillCommand(map, 'review')).toBe('review');
-    expect(resolveSkillCommand(map, 'mcp-config')).toBe('mcp-config');
   });
 
   it('formats busy messages', () => {

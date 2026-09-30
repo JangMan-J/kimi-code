@@ -48,11 +48,8 @@ import {
   type SurveyMachineEffect,
   type SurveyMachineState,
 } from '../utils/survey-policy';
-import type { BtwPanelController } from './btw-panel';
-
 export interface SurveyHost {
   readonly state: TUIState;
-  readonly btwPanelController: BtwPanelController;
   track(event: string, props?: Record<string, unknown>): void;
 }
 
@@ -430,9 +427,7 @@ export class SurveyController {
       state.editorReplacementMounted ||
       state.activeDialog !== null ||
       state.livePane.pendingApproval !== null ||
-      state.livePane.pendingQuestion !== null ||
-      state.tasksBrowser !== undefined ||
-      this.host.btwPanelController.isActive()
+      state.livePane.pendingQuestion !== null
     );
   }
 

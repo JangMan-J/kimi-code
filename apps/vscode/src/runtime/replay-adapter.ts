@@ -1,10 +1,10 @@
 import type {
-  AgentReplayRecord,
-  ContentPart,
-  PromptOrigin,
-  ResumedAgentState,
-  ResumedSessionState,
-} from "@moonshot-ai/kimi-code-sdk";
+  ContentPart as EngineContentPart,
+  HistoryMessage,
+  MediaSource,
+  ToolCall as EngineToolCall,
+  ToolMeta,
+} from "@moonshot-ai/agent-core";
 
 import type {
   ContentPart as LegacyContentPart,
@@ -15,8 +15,40 @@ import type {
   ToolCall,
 } from "../../shared/legacy-sdk";
 import type { UIStreamEvent } from "../../shared/types";
-import { toLegacyToolName } from "./event-adapter";
-import { toLegacyDisplay } from "./tool-display";
+import { toLegacyToolName, type AdapterTokenUsage } from "./event-adapter";
+import { deriveToolDisplay } from "./tool-display";
+
+function mediaUrlFromSource(source: MediaSource): string {
+  switch (source.kind) {
+    case "url":
+      return source.url;
+    case "store":
+      return source.ref;
+    case "inline":
+      return `data:${source.mimeType};base64,${source.data}`;
+    case "file":
+      return source.id;
+  }
+}
+
+export interface ReplayStatus {
+  readonly modelAlias?: string;
+  readonly thinkingEffort?: string;
+  readonly planMode?: boolean;
+  readonly contextTokens?: number;
+  readonly maxContextTokens?: number;
+  readonly usage?: AdapterTokenUsage;
+}
+
+export interface ReplayAgentSource {
+  readonly history: readonly HistoryMessage[];
+}
+
+export interface ReplaySessionSource {
+  readonly agents: Readonly<Record<string, ReplayAgentSource>>;
+  readonly roster?: Readonly<Record<string, { readonly source?: string }>>;
+  readonly status?: ReplayStatus;
+}
 
 interface SubagentReplayInvocation {
   readonly parentAgentId: string;
@@ -24,34 +56,39 @@ interface SubagentReplayInvocation {
   readonly childAgentId: string;
   readonly startedAt: number;
   readonly order: number;
-  records: readonly AgentReplayRecord[];
+  records: readonly HistoryMessage[];
 }
 
 interface SubagentReplayIndex {
   readonly byParentCall: ReadonlyMap<string, readonly SubagentReplayInvocation[]>;
 }
 
-/** Projects a complete resumed SDK session, including persisted subagent steps. */
 export function replaySessionToWebviewEvents(
-  state: ResumedSessionState,
+  source: ReplaySessionSource,
   sessionId: string,
 ): UIStreamEvent[] {
-  const main = state.agents["main"];
+  const main = source.agents["main"];
   if (main === undefined) throw new Error("Session history is unavailable.");
-  return replayAgentToWebviewEvents(main, sessionId, buildSubagentReplayIndex(state));
+  return replayAgentToWebviewEvents(
+    main.history,
+    sessionId,
+    source.status,
+    buildSubagentReplayIndex(source),
+  );
 }
 
-/** Projects the public SDK resume replay into the released Webview protocol. */
 export function replayToWebviewEvents(
-  agent: ResumedAgentState,
+  history: readonly HistoryMessage[],
   sessionId: string,
+  status?: ReplayStatus,
 ): UIStreamEvent[] {
-  return replayAgentToWebviewEvents(agent, sessionId);
+  return replayAgentToWebviewEvents(history, sessionId, status);
 }
 
 function replayAgentToWebviewEvents(
-  agent: ResumedAgentState,
+  history: readonly HistoryMessage[],
   sessionId: string,
+  status?: ReplayStatus,
   subagents?: SubagentReplayIndex,
 ): UIStreamEvent[] {
   const events: UIStreamEvent[] = [];
@@ -59,19 +96,13 @@ function replayAgentToWebviewEvents(
   let step = 0;
   const toolDisplays = new Map<string, readonly DisplayBlock[]>();
 
-  events.push(
-    withSession(
-      {
-        type: "StatusUpdate",
-        payload: {
-          ...(agent.config.modelAlias === undefined ? {} : { model: agent.config.modelAlias }),
-          thinking_effort: agent.config.thinkingEffort,
-          plan_mode: agent.plan !== null,
-        },
-      },
-      sessionId,
-    ),
-  );
+  const leadingStatus: Record<string, unknown> = {};
+  if (status?.modelAlias !== undefined) leadingStatus["model"] = status.modelAlias;
+  if (status?.thinkingEffort !== undefined) leadingStatus["thinking_effort"] = status.thinkingEffort;
+  if (status?.planMode !== undefined) leadingStatus["plan_mode"] = status.planMode;
+  if (Object.keys(leadingStatus).length > 0) {
+    events.push(withSession({ type: "StatusUpdate", payload: leadingStatus }, sessionId));
+  }
 
   const completeTurn = () => {
     if (!turnOpen) return;
@@ -88,164 +119,138 @@ function replayAgentToWebviewEvents(
     }
   };
 
-  for (const record of agent.replay) {
-    switch (record.type) {
-      case "message": {
-        const message = record.message;
-        if (message.role === "user") {
-          if (!isVisibleUserMessage(message.origin)) break;
-          const imported = importedContextReplay(message.content);
-          completeTurn();
-          step = 0;
-          turnOpen = true;
-          events.push(
-            withSession(
-              {
-                type: "TurnBegin",
-                payload: {
-                  user_input: imported?.input ?? replayUserInput(message.content, message.origin),
-                },
-              },
-              sessionId,
-            ),
-          );
-          if (imported !== undefined) {
-            ensureStep();
-            events.push(
-              withSession(
-                { type: "ContentPart", payload: { type: "text", text: imported.confirmation } },
-                sessionId,
-              ),
-            );
-          }
-          break;
-        }
-
-        if (message.role === "assistant") {
-          if (!turnOpen) break;
-          ensureStep();
-          for (const part of toLegacyContent(message.content)) {
-            events.push(withSession({ type: "ContentPart", payload: part }, sessionId));
-          }
-          for (const call of message.toolCalls) {
-            const display = message.toolCallDisplays?.[call.id];
-            if (display !== undefined) {
-              toolDisplays.set(call.id, toLegacyDisplay(display));
-            }
-            const toolCall: ToolCall = {
-              type: "function",
-              id: call.id,
-              function: {
-                name: toLegacyToolName(call.name),
-                arguments: call.arguments,
-              },
-            };
-            events.push(withSession({ type: "ToolCall", payload: toolCall }, sessionId));
-            if (subagents !== undefined) {
-              for (const nested of renderSubagentInvocations(
-                subagents,
-                "main",
-                call.id,
-                [],
-                new Set(),
-              )) {
-                events.push(withSession(nested, sessionId));
-              }
-            }
-          }
-          break;
-        }
-
-        if (message.role === "tool" && turnOpen && message.toolCallId !== undefined) {
-          ensureStep();
-          const display = toolDisplays.get(message.toolCallId) ?? [];
-          toolDisplays.delete(message.toolCallId);
-          events.push(
-            withSession(
-              {
-                type: "ToolResult",
-                payload: {
-                  tool_call_id: message.toolCallId,
-                  return_value: {
-                    is_error: message.isError === true,
-                    output: toLegacyContent(message.content),
-                    message: "",
-                    display: [...display],
-                  },
-                },
-              },
-              sessionId,
-            ),
-          );
-        }
-        break;
-      }
-      case "compaction":
-        if (!turnOpen) break;
-        ensureStep();
-        events.push(withSession({ type: "CompactionBegin", payload: {} }, sessionId));
-        if (record.result !== undefined) {
-          events.push(withSession({ type: "CompactionEnd", payload: {} }, sessionId));
-        }
-        break;
-      case "plan_updated":
+  for (const entry of history) {
+    const message = entry.message;
+    if (message.role === "user") {
+      if (isCompactionSummary(entry)) {
         if (turnOpen) {
           ensureStep();
-          events.push(
-            withSession(
-              { type: "StatusUpdate", payload: { plan_mode: record.enabled } },
-              sessionId,
-            ),
-          );
+          events.push(withSession({ type: "CompactionBegin", payload: {} }, sessionId));
+          events.push(withSession({ type: "CompactionEnd", payload: {} }, sessionId));
         }
-        break;
-      case "config_updated":
-      case "permission_updated":
-      case "approval_result":
-      case "goal_updated":
-        break;
+        continue;
+      }
+      if (isInternalEntry(entry)) continue;
+      if (!isVisibleUserMessage(entry)) continue;
+      const imported = importedContextReplay(message.content);
+      completeTurn();
+      step = 0;
+      turnOpen = true;
+      events.push(
+        withSession(
+          {
+            type: "TurnBegin",
+            payload: {
+              user_input: imported?.input ?? replayUserInput(message.content, entry),
+            },
+          },
+          sessionId,
+        ),
+      );
+      if (imported !== undefined) {
+        ensureStep();
+        events.push(
+          withSession(
+            { type: "ContentPart", payload: { type: "text", text: imported.confirmation } },
+            sessionId,
+          ),
+        );
+      }
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      if (!turnOpen) continue;
+      ensureStep();
+      for (const part of toLegacyContent(message.content)) {
+        events.push(withSession({ type: "ContentPart", payload: part }, sessionId));
+      }
+      for (const call of message.toolCalls) {
+        const display = deriveToolDisplay(call.name, parseToolArguments(call.arguments));
+        toolDisplays.set(call.id, display);
+        const toolCall: ToolCall = {
+          type: "function",
+          id: call.id,
+          function: {
+            name: toLegacyToolName(call.name),
+            arguments: call.arguments,
+          },
+        };
+        events.push(withSession({ type: "ToolCall", payload: toolCall }, sessionId));
+        if (subagents !== undefined) {
+          for (const nested of renderSubagentInvocations(
+            subagents,
+            "main",
+            call.id,
+            [],
+            new Set(),
+          )) {
+            events.push(withSession(nested, sessionId));
+          }
+        }
+      }
+      continue;
+    }
+
+    if (message.role === "tool" && turnOpen) {
+      ensureStep();
+      const display = toolDisplays.get(message.toolCallId) ?? [];
+      toolDisplays.delete(message.toolCallId);
+      events.push(
+        withSession(
+          {
+            type: "ToolResult",
+            payload: {
+              tool_call_id: message.toolCallId,
+              return_value: {
+                is_error: (entry.meta as ToolMeta | undefined)?.isError === true,
+                output: toLegacyContent(message.content),
+                message: "",
+                display: [...display],
+              },
+            },
+          },
+          sessionId,
+        ),
+      );
     }
   }
 
   completeTurn();
-  const resumedStatus = resumedStatusPayload(agent);
+  const resumedStatus = resumedStatusPayload(status);
   if (Object.keys(resumedStatus).length > 0) {
     events.push(withSession({ type: "StatusUpdate", payload: resumedStatus }, sessionId));
   }
   return events;
 }
 
-function buildSubagentReplayIndex(state: ResumedSessionState): SubagentReplayIndex {
+function buildSubagentReplayIndex(source: ReplaySessionSource): SubagentReplayIndex {
   const invocations: SubagentReplayInvocation[] = [];
   let order = 0;
 
-  for (const [parentAgentId, parent] of Object.entries(state.agents)) {
-    const calls = new Map<
-      string,
-      { readonly name: string; readonly startedAt: number; readonly order: number }
-    >();
-    for (const record of parent.replay) {
-      if (record.type !== "message") continue;
-      const { message } = record;
+  for (const [parentAgentId, parent] of Object.entries(source.agents)) {
+    const calls = new Map<string, { readonly name: string; readonly order: number }>();
+    let time = 0;
+    for (const entry of parent.history) {
+      time += 1;
+      const { message } = entry;
       if (message.role === "assistant") {
         for (const call of message.toolCalls) {
-          calls.set(call.id, { name: call.name, startedAt: record.time, order: order++ });
+          calls.set(call.id, { name: call.name, order: order++ });
         }
         continue;
       }
-      if (message.role !== "tool" || message.toolCallId === undefined) continue;
+      if (message.role !== "tool") continue;
       const call = calls.get(message.toolCallId);
       if (call === undefined || (call.name !== "Agent" && call.name !== "AgentSwarm")) continue;
       for (const childAgentId of subagentIdsFromResult(call.name, message.content)) {
-        const metadata = state.sessionMetadata.agents[childAgentId];
-        if (metadata?.parentAgentId !== parentAgentId || state.agents[childAgentId] === undefined) {
-          continue;
-        }
+        if (source.agents[childAgentId] === undefined) continue;
+        if (parentAgentIdOf(source, childAgentId) !== parentAgentId) continue;
         invocations.push({
           parentAgentId,
           parentToolCallId: message.toolCallId,
           childAgentId,
-          startedAt: call.startedAt,
+          startedAt: time,
           order: call.order,
           records: [],
         });
@@ -261,14 +266,14 @@ function buildSubagentReplayIndex(state: ResumedSessionState): SubagentReplayInd
   }
   for (const [childAgentId, entries] of byChild) {
     entries.sort(compareInvocation);
-    const replay = state.agents[childAgentId]?.replay ?? [];
+    const history = source.agents[childAgentId]?.history ?? [];
+    const promptStarts = history.flatMap((entry, index) =>
+      entry.message.role === "user" ? [index] : [],
+    );
     for (const [index, invocation] of entries.entries()) {
-      const next = entries[index + 1];
-      invocation.records = replay.filter(
-        (record) =>
-          record.time >= invocation.startedAt &&
-          (next === undefined || record.time < next.startedAt),
-      );
+      const start = promptStarts[Math.min(index, promptStarts.length - 1)] ?? 0;
+      const end = promptStarts[index + 1] ?? history.length;
+      invocation.records = index < promptStarts.length ? history.slice(start, end) : [];
     }
   }
 
@@ -283,16 +288,24 @@ function buildSubagentReplayIndex(state: ResumedSessionState): SubagentReplayInd
   return { byParentCall };
 }
 
+function parentAgentIdOf(source: ReplaySessionSource, childAgentId: string): string | undefined {
+  const origin = source.roster?.[childAgentId]?.source;
+  if (origin === undefined) return undefined;
+  const match = /^spawn:([^:]+):/.exec(origin);
+  if (match !== null) return match[1];
+  return origin === "session-init" ? "main" : undefined;
+}
+
 function compareInvocation(a: SubagentReplayInvocation, b: SubagentReplayInvocation): number {
   return a.startedAt - b.startedAt || a.order - b.order;
 }
 
 function subagentIdsFromResult(
   toolName: "Agent" | "AgentSwarm",
-  content: readonly ContentPart[],
+  content: readonly EngineContentPart[],
 ): readonly string[] {
   const text = content
-    .filter((part): part is Extract<ContentPart, { type: "text" }> => part.type === "text")
+    .filter((part): part is Extract<EngineContentPart, { type: "text" }> => part.type === "text")
     .map((part) => part.text)
     .join("");
   if (toolName === "Agent") {
@@ -318,7 +331,7 @@ function renderSubagentInvocations(
   const result: LegacyWireEvent[] = [];
   const invocations = index.byParentCall.get(parentCallKey(parentAgentId, parentToolCallId)) ?? [];
   for (const invocation of invocations) {
-    const invocationKey = `${invocation.parentAgentId}\u0000${invocation.parentToolCallId}\u0000${invocation.childAgentId}\u0000${String(invocation.startedAt)}`;
+    const invocationKey = `${invocation.parentAgentId} ${invocation.parentToolCallId} ${invocation.childAgentId} ${String(invocation.startedAt)}`;
     if (visited.has(invocationKey)) continue;
     const nextVisited = new Set([...visited, invocationKey]);
     result.push(
@@ -342,81 +355,60 @@ function renderSubagentInvocation(
     events.push(wrapSubagentEvent(event, chain));
   };
 
-  for (const record of invocation.records) {
-    switch (record.type) {
-      case "message": {
-        const { message } = record;
-        if (message.role === "user") {
-          step = 0;
-          break;
-        }
-        if (message.role === "assistant") {
-          step += 1;
-          emit({ type: "StepBegin", payload: { n: step } });
-          for (const part of toLegacyContent(message.content)) {
-            emit({ type: "ContentPart", payload: part });
-          }
-          for (const call of message.toolCalls) {
-            const toolCallId = scopedReplayToolCallId(invocation.childAgentId, call.id);
-            const display = message.toolCallDisplays?.[call.id];
-            if (display !== undefined) toolDisplays.set(toolCallId, toLegacyDisplay(display));
-            emit({
-              type: "ToolCall",
-              payload: {
-                type: "function",
-                id: toolCallId,
-                function: {
-                  name: toLegacyToolName(call.name),
-                  arguments: call.arguments,
-                },
-              },
-            });
-            events.push(
-              ...renderSubagentInvocations(
-                index,
-                invocation.childAgentId,
-                call.id,
-                chain,
-                visited,
-              ),
-            );
-          }
-          break;
-        }
-        if (message.role === "tool" && message.toolCallId !== undefined) {
-          const toolCallId = scopedReplayToolCallId(
-            invocation.childAgentId,
-            message.toolCallId,
-          );
-          const display = toolDisplays.get(toolCallId) ?? [];
-          toolDisplays.delete(toolCallId);
-          emit({
-            type: "ToolResult",
-            payload: {
-              tool_call_id: toolCallId,
-              return_value: {
-                is_error: message.isError === true,
-                output: toLegacyContent(message.content),
-                message: "",
-                display: [...display],
-              },
-            },
-          });
-        }
-        break;
+  for (const entry of invocation.records) {
+    const { message } = entry;
+    if (message.role === "user") {
+      step = 0;
+      continue;
+    }
+    if (message.role === "assistant") {
+      step += 1;
+      emit({ type: "StepBegin", payload: { n: step } });
+      for (const part of toLegacyContent(message.content)) {
+        emit({ type: "ContentPart", payload: part });
       }
-      case "compaction":
-        emit({ type: "CompactionBegin", payload: {} });
-        if (record.result !== undefined) emit({ type: "CompactionEnd", payload: {} });
-        break;
-      case "plan_updated":
-        emit({ type: "StatusUpdate", payload: { plan_mode: record.enabled } });
-        break;
-      case "config_updated":
-      case "permission_updated":
-      case "approval_result":
-      case "goal_updated":
-        break;
+      for (const call of message.toolCalls) {
+        const toolCallId = scopedReplayToolCallId(invocation.childAgentId, call.id);
+        toolDisplays.set(toolCallId, deriveToolDisplay(call.name, parseToolArguments(call.arguments)));
+        emit({
+          type: "ToolCall",
+          payload: {
+            type: "function",
+            id: toolCallId,
+            function: {
+              name: toLegacyToolName(call.name),
+              arguments: call.arguments,
+            },
+          },
+        });
+        events.push(
+          ...renderSubagentInvocations(
+            index,
+            invocation.childAgentId,
+            call.id,
+            chain,
+            visited,
+          ),
+        );
+      }
+      continue;
+    }
+    if (message.role === "tool") {
+      const toolCallId = scopedReplayToolCallId(invocation.childAgentId, message.toolCallId);
+      const display = toolDisplays.get(toolCallId) ?? [];
+      toolDisplays.delete(toolCallId);
+      emit({
+        type: "ToolResult",
+        payload: {
+          tool_call_id: toolCallId,
+          return_value: {
+            is_error: (entry.meta as ToolMeta | undefined)?.isError === true,
+            output: toLegacyContent(message.content),
+            message: "",
+            display: [...display],
+          },
+        },
+      });
     }
   }
   return events;
@@ -447,48 +439,36 @@ function scopedReplayToolCallId(agentId: string, toolCallId: string): string {
 }
 
 function parentCallKey(agentId: string, toolCallId: string): string {
-  return `${agentId}\u0000${toolCallId}`;
+  return `${agentId} ${toolCallId}`;
 }
 
-function resumedStatusPayload(agent: ResumedAgentState): {
+function resumedStatusPayload(status: ReplayStatus | undefined): {
   context_usage?: number;
   token_usage?: TokenUsage;
 } {
-  const maxContextTokens = agent.config.modelCapabilities.max_context_tokens;
-  const totalUsage = agent.usage.total ?? sumUsage(agent.usage.byModel) ?? agent.usage.currentTurn;
+  if (status === undefined) return {};
+  const contextUsage =
+    status.contextTokens !== undefined &&
+    status.maxContextTokens !== undefined &&
+    status.maxContextTokens > 0
+      ? status.contextTokens / status.maxContextTokens
+      : undefined;
   return {
-    ...(maxContextTokens > 0
-      ? { context_usage: agent.context.tokenCount / maxContextTokens }
-      : {}),
-    ...(totalUsage === undefined
+    ...(contextUsage === undefined ? {} : { context_usage: contextUsage }),
+    ...(status.usage === undefined
       ? {}
       : {
           token_usage: {
-            input_other: totalUsage.inputOther,
-            output: totalUsage.output,
-            input_cache_read: totalUsage.inputCacheRead,
-            input_cache_creation: totalUsage.inputCacheCreation,
+            input_other: status.usage.inputOther,
+            output: status.usage.output,
+            input_cache_read: status.usage.inputCacheRead,
+            input_cache_creation: status.usage.inputCacheCreation,
           },
         }),
   };
 }
 
-function sumUsage(
-  byModel: ResumedAgentState["usage"]["byModel"],
-): ResumedAgentState["usage"]["total"] {
-  if (byModel === undefined || Object.keys(byModel).length === 0) return undefined;
-  return Object.values(byModel).reduce(
-    (total, usage) => ({
-      inputOther: total.inputOther + usage.inputOther,
-      output: total.output + usage.output,
-      inputCacheRead: total.inputCacheRead + usage.inputCacheRead,
-      inputCacheCreation: total.inputCacheCreation + usage.inputCacheCreation,
-    }),
-    { inputOther: 0, output: 0, inputCacheRead: 0, inputCacheCreation: 0 },
-  );
-}
-
-function toLegacyContent(content: readonly ContentPart[]): LegacyContentPart[] {
+function toLegacyContent(content: readonly EngineContentPart[]): LegacyContentPart[] {
   const result: LegacyContentPart[] = [];
   for (const part of content) {
     switch (part.type) {
@@ -496,6 +476,7 @@ function toLegacyContent(content: readonly ContentPart[]): LegacyContentPart[] {
         result.push({ type: "text", text: part.text });
         break;
       case "think":
+        if (part.hidden === true) break;
         result.push({
           type: "think",
           think: part.think,
@@ -503,53 +484,80 @@ function toLegacyContent(content: readonly ContentPart[]): LegacyContentPart[] {
         });
         break;
       case "image_url":
-        result.push({ type: "image_url", image_url: { ...part.imageUrl } });
+        result.push({ type: "image_url", image_url: { url: mediaUrlFromSource(part.source) } });
         break;
       case "audio_url":
-        result.push({ type: "audio_url", audio_url: { ...part.audioUrl } });
+        result.push({ type: "audio_url", audio_url: { url: mediaUrlFromSource(part.source) } });
         break;
       case "video_url":
-        result.push({ type: "video_url", video_url: { ...part.videoUrl } });
+        result.push({ type: "video_url", video_url: { url: mediaUrlFromSource(part.source) } });
         break;
     }
   }
   return result;
 }
 
-function isVisibleUserMessage(origin: PromptOrigin | undefined): boolean {
-  if (origin === undefined || origin.kind === "user") return true;
+function isCompactionSummary(entry: HistoryMessage): boolean {
+  const meta = entry.meta as { readonly source?: string; readonly key?: string } | undefined;
+  return meta?.source === "compaction" && meta.key === "summary";
+}
+
+function isInternalEntry(entry: HistoryMessage): boolean {
+  const source = (entry.meta as { readonly source?: string } | undefined)?.source;
+  return (
+    source === "reminder" ||
+    source === "notify" ||
+    source === "async-tool" ||
+    source === "compaction"
+  );
+}
+
+function isVisibleUserMessage(entry: HistoryMessage): boolean {
+  const origin = (entry.meta as { readonly origin?: unknown } | undefined)?.origin as
+    | { readonly kind?: unknown }
+    | undefined;
+  if (origin === undefined || origin.kind === undefined || origin.kind === "user") return true;
   if (origin.kind === "skill_activation" || origin.kind === "plugin_command") {
-    return origin.trigger === "user-slash";
+    return (origin as { readonly trigger?: unknown }).trigger === "user-slash";
   }
-  return origin.kind === "shell_command" && origin.phase === "input";
+  return (
+    origin.kind === "shell_command" &&
+    (origin as { readonly phase?: unknown }).phase === "input"
+  );
 }
 
 function replayUserInput(
-  content: readonly ContentPart[],
-  origin: PromptOrigin | undefined,
+  content: readonly EngineContentPart[],
+  entry: HistoryMessage,
 ): LegacyContentPart[] {
-  if (origin?.kind === "skill_activation" && origin.trigger === "user-slash") {
-    const args = origin.skillArgs?.trim();
+  const origin = (entry.meta as { readonly origin?: unknown } | undefined)?.origin as
+    | Record<string, unknown>
+    | undefined;
+  if (origin?.["kind"] === "skill_activation" && origin["trigger"] === "user-slash") {
+    const skillName = typeof origin["skillName"] === "string" ? origin["skillName"] : "skill";
+    const args = typeof origin["skillArgs"] === "string" ? origin["skillArgs"].trim() : "";
     return [{
       type: "text",
-      text: `/skill:${origin.skillName}${args ? ` ${args}` : ""}`,
+      text: `/skill:${skillName}${args.length > 0 ? ` ${args}` : ""}`,
     }];
   }
-  if (origin?.kind === "plugin_command") {
-    const args = origin.commandArgs?.trim();
+  if (origin?.["kind"] === "plugin_command") {
+    const pluginId = typeof origin["pluginId"] === "string" ? origin["pluginId"] : "plugin";
+    const commandName = typeof origin["commandName"] === "string" ? origin["commandName"] : "command";
+    const args = typeof origin["commandArgs"] === "string" ? origin["commandArgs"].trim() : "";
     return [{
       type: "text",
-      text: `/${origin.pluginId}:${origin.commandName}${args ? ` ${args}` : ""}`,
+      text: `/${pluginId}:${commandName}${args.length > 0 ? ` ${args}` : ""}`,
     }];
   }
   return toLegacyContent(content);
 }
 
 function importedContextReplay(
-  content: readonly ContentPart[],
+  content: readonly EngineContentPart[],
 ): { input: LegacyContentPart[]; confirmation: string } | undefined {
   const importedPart = content.find(
-    (part): part is Extract<ContentPart, { type: "text" }> =>
+    (part): part is Extract<EngineContentPart, { type: "text" }> =>
       part.type === "text" && part.text.startsWith("<imported_context "),
   );
   if (importedPart === undefined) return undefined;
@@ -580,15 +588,15 @@ function decodeXml(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
-function withSession<T extends LegacyWireEvent>(event: T, sessionId: string): T & { _sessionId: string } {
-  return { ...event, _sessionId: sessionId };
+function parseToolArguments(raw: string | null): unknown {
+  if (raw === null || raw.trim().length === 0) return {};
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return {};
+  }
 }
 
-export function replayRecordTurnCount(records: readonly AgentReplayRecord[]): number {
-  return records.filter(
-    (record) =>
-      record.type === "message" &&
-      record.message.role === "user" &&
-      isVisibleUserMessage(record.message.origin),
-  ).length;
+function withSession<T extends LegacyWireEvent>(event: T, sessionId: string): T & { _sessionId: string } {
+  return { ...event, _sessionId: sessionId };
 }

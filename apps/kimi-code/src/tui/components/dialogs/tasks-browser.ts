@@ -1,18 +1,3 @@
-/**
- * TasksBrowserApp — full-screen alt-screen takeover for browsing
- * background tasks. Three-pane layout (left task list, right top
- * detail, right bottom preview output) framed by a header row and
- * footer key hint.
- *
- * Mounted by `kimi-tui.ts` via container swap rather than `showOverlay`
- * — the main TUI's children are saved, cleared, and this component is
- * added as the sole child so it covers the entire screen. The
- * controller restores the children when the user exits.
- *
- * Data (tasks list, tail output) flows in via `setProps`; user actions
- * fire the `on*` callbacks back to the controller.
- */
-
 import {
   Container,
   Key,
@@ -22,87 +7,67 @@ import {
   visibleWidth,
   type Focusable,
 } from '@moonshot-ai/pi-tui';
-import type {
-  BackgroundTaskInfo,
-  BackgroundTaskStatus,
-  ModelAlias,
-} from '@moonshot-ai/kimi-code-sdk';
+import type { TaskRecord, TaskStatus } from '@moonshot-ai/harness-core';
 
-import { SELECT_POINTER } from '@/tui/constant/symbols';
+import { SELECT_POINTER } from '#/tui/constant/symbols';
 import { currentTheme } from '#/tui/theme';
-import { printableChar } from '@/tui/utils/printable-key';
+import { printableChar } from '#/tui/utils/printable-key';
 import { sanitizeShellOutput } from '#/tui/utils/shell-output';
-import { modelDisplayName } from './model-selector';
 
 const ELLIPSIS = '…';
 
 export type TasksFilter = 'all' | 'active';
 
+export interface TaskRow {
+  readonly record: TaskRecord;
+  readonly agentId?: string;
+}
+
 export interface TasksBrowserProps {
-  readonly tasks: readonly BackgroundTaskInfo[];
+  readonly tasks: readonly TaskRow[];
   readonly filter: TasksFilter;
   readonly selectedTaskId: string | undefined;
-  readonly tailOutput: string | undefined;
-  readonly tailLoading: boolean;
   readonly flashMessage: string | undefined;
-  /** Model catalog from the app config, used to resolve task model aliases
-   *  to display names (same mapping as the other subagent surfaces). */
-  readonly availableModels: Record<string, ModelAlias>;
   readonly onSelect: (taskId: string) => void;
   readonly onToggleFilter: () => void;
-  readonly onRefresh: () => void;
   readonly onCancel: () => void;
-  /** Fired when the user confirms a stop request via the inline `y` prompt. */
   readonly onStopConfirmed: (taskId: string) => void;
-  /** Fired when the user presses Enter or O on a selected task. */
   readonly onOpenOutput: (taskId: string) => void;
-  /** Fired when stop is requested on a task that cannot be stopped. */
   readonly onStopIgnored?: (taskId: string, reason: 'terminal') => void;
 }
 
-const STATUS_LABEL: Record<BackgroundTaskStatus, string> = {
+export const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
   running: 'running',
   completed: 'completed',
   failed: 'failed',
-  timed_out: 'timed out',
   killed: 'killed',
   lost: 'lost',
 };
 
-/** Auto-cancel the inline stop confirmation after this many ms. */
 const STOP_CONFIRM_TIMEOUT_MS = 5_000;
 
-/** Minimum dimensions before we just print a "too small" message. */
 const MIN_WIDTH = 48;
 const MIN_HEIGHT = 10;
 
-/** Hard caps so a tiny / huge terminal still gets a sensible left-column width. */
 const LIST_COL_MIN = 28;
 const LIST_COL_MAX = 44;
 const LIST_COL_RATIO = 0.32;
 
-function statusColor(status: BackgroundTaskStatus): 'success' | 'textMuted' | 'error' {
+export function taskStatusColor(status: TaskStatus): 'success' | 'textMuted' | 'error' {
   switch (status) {
     case 'running':
       return 'success';
     case 'completed':
       return 'textMuted';
     case 'failed':
-    case 'timed_out':
     case 'killed':
     case 'lost':
       return 'error';
   }
 }
 
-function isTerminal(status: BackgroundTaskStatus): boolean {
-  return (
-    status === 'completed' ||
-    status === 'failed' ||
-    status === 'timed_out' ||
-    status === 'killed' ||
-    status === 'lost'
-  );
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return status !== 'running';
 }
 
 function formatRelativeTime(ts: number | null | undefined): string {
@@ -128,59 +93,31 @@ function padToWidth(line: string, width: number): string {
   return line + ' '.repeat(width - w);
 }
 
-/** Fit `line` into exactly `width` columns, even after CJK-edge truncation. */
 function fitExactly(line: string, width: number): string {
   let s = line;
   if (visibleWidth(s) > width) s = truncateToWidth(s, width, ELLIPSIS);
   return padToWidth(s, width);
 }
 
-function visibleTasks(
-  tasks: readonly BackgroundTaskInfo[],
-  filter: TasksFilter,
-): BackgroundTaskInfo[] {
-  // The /tasks panel is for background task management. Foreground tasks
-  // (detached === false) are shown in the main transcript instead, and only
-  // appear here after being detached via Ctrl+B. `detached !== false` keeps
-  // reconcile ghosts whose `detached` field may be undefined.
-  const backgroundOnly = tasks.filter((t) => t.detached !== false);
-  if (filter === 'all') return [...backgroundOnly];
-  return backgroundOnly.filter((t) => !isTerminal(t.status));
+function visibleTasks(tasks: readonly TaskRow[], filter: TasksFilter): TaskRow[] {
+  if (filter === 'all') return [...tasks];
+  return tasks.filter((row) => !isTerminalTaskStatus(row.record.status));
 }
 
-function compareTasks(a: BackgroundTaskInfo, b: BackgroundTaskInfo): number {
-  const aTerminal = isTerminal(a.status);
-  const bTerminal = isTerminal(b.status);
+function compareTasks(a: TaskRow, b: TaskRow): number {
+  const aTerminal = isTerminalTaskStatus(a.record.status);
+  const bTerminal = isTerminalTaskStatus(b.record.status);
   if (aTerminal !== bTerminal) return aTerminal ? 1 : -1;
-  if (!aTerminal) return a.startedAt - b.startedAt;
-  return (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt);
+  if (!aTerminal) return a.record.startedAt - b.record.startedAt;
+  return (b.record.endedAt ?? b.record.startedAt) - (a.record.endedAt ?? a.record.startedAt);
 }
 
-interface StatusCounts {
-  running: number;
-  completed: number;
-  terminalFailed: number;
-}
-
-function countByStatus(tasks: readonly BackgroundTaskInfo[]): StatusCounts {
-  const counts: StatusCounts = { running: 0, completed: 0, terminalFailed: 0 };
-  for (const t of tasks) {
-    switch (t.status) {
-      case 'running':
-        counts.running += 1;
-        break;
-      case 'completed':
-        counts.completed += 1;
-        break;
-      case 'failed':
-      case 'timed_out':
-      case 'killed':
-      case 'lost':
-        counts.terminalFailed += 1;
-        break;
-    }
-  }
-  return counts;
+export function previewOutputOf(row: TaskRow | undefined): string {
+  if (row === undefined) return '';
+  const { record } = row;
+  if (record.output !== undefined && record.output.length > 0) return record.output;
+  if (record.detachText !== undefined && record.detachText.length > 0) return record.detachText;
+  return '';
 }
 
 export class TasksBrowserApp extends Container implements Focusable {
@@ -188,7 +125,7 @@ export class TasksBrowserApp extends Container implements Focusable {
 
   private props: TasksBrowserProps;
   private readonly terminal: Terminal;
-  private sortedVisible: BackgroundTaskInfo[];
+  private sortedVisible: TaskRow[];
   private selectedIndex = 0;
   private listScroll = 0;
   private pendingStopTaskId: string | undefined = undefined;
@@ -207,8 +144,8 @@ export class TasksBrowserApp extends Container implements Focusable {
     this.sortedVisible = visibleTasks(next.tasks, next.filter).toSorted(compareTasks);
     this.syncSelectionFromProps();
     if (this.pendingStopTaskId !== undefined) {
-      const task = next.tasks.find((t) => t.taskId === this.pendingStopTaskId);
-      if (task === undefined || isTerminal(task.status)) this.clearPendingStop();
+      const task = next.tasks.find((row) => row.record.taskId === this.pendingStopTaskId);
+      if (task === undefined || isTerminalTaskStatus(task.record.status)) this.clearPendingStop();
     }
     this.invalidate();
   }
@@ -220,7 +157,9 @@ export class TasksBrowserApp extends Container implements Focusable {
       return;
     }
     if (this.props.selectedTaskId !== undefined) {
-      const idx = this.sortedVisible.findIndex((t) => t.taskId === this.props.selectedTaskId);
+      const idx = this.sortedVisible.findIndex(
+        (row) => row.record.taskId === this.props.selectedTaskId,
+      );
       if (idx !== -1) {
         this.selectedIndex = idx;
         return;
@@ -240,8 +179,8 @@ export class TasksBrowserApp extends Container implements Focusable {
   }
 
   private emitSelect(): void {
-    const task = this.sortedVisible[this.selectedIndex];
-    if (task) this.props.onSelect(task.taskId);
+    const row = this.sortedVisible[this.selectedIndex];
+    if (row !== undefined) this.props.onSelect(row.record.taskId);
   }
 
   handleInput(data: string): void {
@@ -282,18 +221,14 @@ export class TasksBrowserApp extends Container implements Focusable {
       this.props.onToggleFilter();
       return;
     }
-    if (k === 'r' || k === 'R') {
-      this.props.onRefresh();
-      return;
-    }
     if (k === 's' || k === 'S') {
-      const task = this.sortedVisible[this.selectedIndex];
-      if (task === undefined) return;
-      if (isTerminal(task.status)) {
-        this.props.onStopIgnored?.(task.taskId, 'terminal');
+      const row = this.sortedVisible[this.selectedIndex];
+      if (row === undefined) return;
+      if (isTerminalTaskStatus(row.record.status)) {
+        this.props.onStopIgnored?.(row.record.taskId, 'terminal');
         return;
       }
-      this.pendingStopTaskId = task.taskId;
+      this.pendingStopTaskId = row.record.taskId;
       this.pendingStopTimer = setTimeout(() => {
         this.clearPendingStop();
         this.invalidate();
@@ -302,16 +237,12 @@ export class TasksBrowserApp extends Container implements Focusable {
       return;
     }
     if (k === 'o' || k === 'O' || matchesKey(data, Key.enter)) {
-      const task = this.sortedVisible[this.selectedIndex];
-      if (task) this.props.onOpenOutput(task.taskId);
+      const row = this.sortedVisible[this.selectedIndex];
+      if (row !== undefined) this.props.onOpenOutput(row.record.taskId);
       return;
     }
   }
 
-  /**
-   * Render the entire screen as `terminal.rows` lines of `width` cols.
-   * Layout: header(1) + body(rows-2) + footer(1).
-   */
   override render(width: number): string[] {
     const rows = Math.max(1, this.terminal.rows);
     if (width < MIN_WIDTH || rows < MIN_HEIGHT) {
@@ -339,28 +270,27 @@ export class TasksBrowserApp extends Container implements Focusable {
     return lines;
   }
 
-  // ── header / footer ──────────────────────────────────────────────────
-
   private renderHeader(width: number): string {
     const title = currentTheme.boldFg('primary', ' TASK BROWSER ');
     const filterText = currentTheme.fg(
       'textMuted',
       ` filter=${this.props.filter === 'all' ? 'ALL' : 'ACTIVE'} `,
     );
-    // Count only the tasks actually listed (background tasks after the
-    // foreground-task filter), so a foreground-only session doesn't read
-    // "1 running / 1 total" above an empty list.
     const visible = visibleTasks(this.props.tasks, this.props.filter);
-    const counts = countByStatus(visible);
+    let running = 0;
+    let completed = 0;
+    let interrupted = 0;
+    for (const row of visible) {
+      if (row.record.status === 'running') running += 1;
+      else if (row.record.status === 'completed') completed += 1;
+      else interrupted += 1;
+    }
     const countSegments: string[] = [];
-    if (counts.running > 0)
-      countSegments.push(currentTheme.fg('success', ` ${String(counts.running)} running `));
-    if (counts.completed > 0)
-      countSegments.push(currentTheme.fg('textDim', ` ${String(counts.completed)} completed `));
-    if (counts.terminalFailed > 0)
-      countSegments.push(
-        currentTheme.fg('error', ` ${String(counts.terminalFailed)} interrupted `),
-      );
+    if (running > 0) countSegments.push(currentTheme.fg('success', ` ${String(running)} running `));
+    if (completed > 0)
+      countSegments.push(currentTheme.fg('textDim', ` ${String(completed)} completed `));
+    if (interrupted > 0)
+      countSegments.push(currentTheme.fg('error', ` ${String(interrupted)} interrupted `));
     const totals = currentTheme.fg('textMuted', ` ${String(visible.length)} total `);
 
     const composed = title + filterText + countSegments.join('') + totals;
@@ -383,7 +313,6 @@ export class TasksBrowserApp extends Container implements Focusable {
       ` ${key('↑↓')} ${dim('select')}`,
       `${key('Enter/O')} ${dim('output')}`,
       `${key('S')} ${dim('stop')}`,
-      `${key('R')} ${dim('refresh')}`,
       `${key('Tab')} ${dim('filter')}`,
       `${key('Q/Esc')} ${dim('cancel')} `,
     ];
@@ -399,13 +328,6 @@ export class TasksBrowserApp extends Container implements Focusable {
     return fitExactly(left, width);
   }
 
-  // ── frame primitive ──────────────────────────────────────────────────
-
-  /**
-   * Render a framed box: `┌─ Title ─┐` top, `│ <content> │` sides, `└─┘`
-   * bottom. Result is exactly `width × height` cells. `content` is a
-   * pre-rendered array of inner-width-sized lines; extra rows are padded.
-   */
   private renderFrame(
     title: string,
     content: readonly string[],
@@ -444,8 +366,6 @@ export class TasksBrowserApp extends Container implements Focusable {
     return lines;
   }
 
-  // ── left: task list frame ────────────────────────────────────────────
-
   private renderListFrame(width: number, height: number): string[] {
     const title = `Tasks [${this.props.filter}]`;
     const innerHeight = Math.max(0, height - 2);
@@ -464,12 +384,8 @@ export class TasksBrowserApp extends Container implements Focusable {
 
     const innerWidth = width - 2;
     const allLines: string[] = [];
-    for (const [index, task] of this.sortedVisible.entries()) {
-      allLines.push(this.renderListRow(task, index === this.selectedIndex, innerWidth));
-      const modelText = this.agentModelText(task);
-      if (modelText !== undefined) {
-        allLines.push(this.renderModelRow(modelText, innerWidth));
-      }
+    for (const [index, row] of this.sortedVisible.entries()) {
+      allLines.push(this.renderListRow(row, index === this.selectedIndex, innerWidth));
     }
     const lines = allLines.slice(this.listScroll, this.listScroll + innerHeight);
     while (lines.length < innerHeight) lines.push('');
@@ -477,62 +393,31 @@ export class TasksBrowserApp extends Container implements Focusable {
     return this.renderFrame(title, lines, width, height);
   }
 
-  private renderListRow(task: BackgroundTaskInfo, selected: boolean, innerWidth: number): string {
+  private renderListRow(row: TaskRow, selected: boolean, innerWidth: number): string {
     const pointer = selected ? `${SELECT_POINTER} ` : '  ';
     const pointerStyled = currentTheme.fg(selected ? 'primary' : 'textDim', pointer);
 
     const idColor = selected
       ? 'primary'
-      : task.kind === 'agent'
+      : row.record.toolName === 'Agent' || row.record.toolName === 'AgentSwarm'
         ? 'success'
-        : task.kind === 'question'
-          ? 'warning'
-          : 'accent';
+        : 'accent';
     const idText = selected
-      ? currentTheme.boldFg(idColor, task.taskId)
-      : currentTheme.fg(idColor, task.taskId);
-    const idPad = ' '.repeat(Math.max(0, 17 - task.taskId.length));
+      ? currentTheme.boldFg(idColor, row.record.taskId)
+      : currentTheme.fg(idColor, row.record.taskId);
+    const idPad = ' '.repeat(Math.max(0, 17 - row.record.taskId.length));
 
-    const status = STATUS_LABEL[task.status];
-    const statusBadge = currentTheme.fg(statusColor(task.status), status);
+    const status = TASK_STATUS_LABEL[row.record.status];
+    const statusBadge = currentTheme.fg(taskStatusColor(row.record.status), status);
 
     const prefix = `${pointerStyled}${idText}${idPad} ${statusBadge}`;
     const prefixWidth = visibleWidth(prefix);
     const descBudget = Math.max(0, innerWidth - prefixWidth - 1);
     if (descBudget < 4) return fitExactly(prefix, innerWidth);
 
-    const description =
-      singleLine(task.description) ||
-      (task.kind === 'process' ? singleLine(task.command) : '') ||
-      '(no description)';
+    const description = singleLine(row.record.description ?? '') || '(no description)';
     const desc = truncateToWidth(description, descBudget, ELLIPSIS);
     return fitExactly(`${prefix} ${currentTheme.fg('text', desc)}`, innerWidth);
-  }
-
-  /** Secondary line under an agent task's row: the model it runs on, resolved
-   *  through the model catalog like the other subagent surfaces. */
-  private agentModelText(task: BackgroundTaskInfo): string | undefined {
-    if (task.kind !== 'agent' || task.model === undefined) return undefined;
-    const name = modelDisplayName(task.model, this.props.availableModels[task.model]);
-    return name.length === 0 ? undefined : name;
-  }
-
-  private renderModelRow(text: string, innerWidth: number): string {
-    const indent = '  ';
-    const clipped = truncateToWidth(text, Math.max(0, innerWidth - indent.length), ELLIPSIS);
-    return indent + currentTheme.fg('textMuted', clipped);
-  }
-
-  // Agent tasks with a bound model take two lines (row + model line), so
-  // scrolling is tracked in rendered lines rather than task indices.
-  private taskLineStarts(): { starts: number[]; total: number } {
-    const starts: number[] = [];
-    let total = 0;
-    for (const task of this.sortedVisible) {
-      starts.push(total);
-      total += this.agentModelText(task) === undefined ? 1 : 2;
-    }
-    return { starts, total };
   }
 
   private adjustScroll(visibleRows: number): void {
@@ -540,26 +425,17 @@ export class TasksBrowserApp extends Container implements Focusable {
       this.listScroll = 0;
       return;
     }
-    const { starts, total } = this.taskLineStarts();
-    const selectedStart = starts[this.selectedIndex] ?? 0;
-    const selectedEnd = (starts[this.selectedIndex + 1] ?? total) - 1;
-    if (selectedStart < this.listScroll) {
-      this.listScroll = selectedStart;
-    } else if (selectedEnd >= this.listScroll + visibleRows) {
-      this.listScroll = selectedEnd - visibleRows + 1;
+    if (this.selectedIndex < this.listScroll) {
+      this.listScroll = this.selectedIndex;
+    } else if (this.selectedIndex >= this.listScroll + visibleRows) {
+      this.listScroll = this.selectedIndex - visibleRows + 1;
     }
-    const maxScroll = Math.max(0, total - visibleRows);
+    const maxScroll = Math.max(0, this.sortedVisible.length - visibleRows);
     if (this.listScroll < 0) this.listScroll = 0;
     if (this.listScroll > maxScroll) this.listScroll = maxScroll;
   }
 
-  // ── right: detail + preview stack ────────────────────────────────────
-
   private renderRightStack(width: number, height: number): string[] {
-    // Detail wants ~10 rows (or 40% of body, whichever is larger) — agent tasks
-    // carry Task ID / Status / Description / Agent ID / Agent type / Model /
-    // Effort / Time. Clamp it so the preview frame keeps its borders plus one
-    // content row even near the minimum terminal height.
     const detailHeight = Math.min(
       Math.max(10, Math.min(Math.floor(height * 0.4), height - 5)),
       Math.max(3, height - 3),
@@ -573,55 +449,36 @@ export class TasksBrowserApp extends Container implements Focusable {
 
   private renderDetailFrame(width: number, height: number): string[] {
     const innerHeight = Math.max(0, height - 2);
-    const task = this.sortedVisible[this.selectedIndex];
-    if (task === undefined) {
+    const row = this.sortedVisible[this.selectedIndex];
+    if (row === undefined) {
       const empty = currentTheme.fg('textMuted', 'Select a task from the list.');
       const lines: string[] = [empty];
       while (lines.length < innerHeight) lines.push('');
       return this.renderFrame('Detail', lines, width, height);
     }
 
+    const { record } = row;
     const label = (text: string): string => currentTheme.fg('textMuted', text.padEnd(14));
     const value = (text: string): string => currentTheme.fg('text', text);
 
     const lines: string[] = [
-      `${label('Task ID:')}${value(task.taskId)}`,
-      `${label('Status:')}${currentTheme.fg(statusColor(task.status), STATUS_LABEL[task.status])}`,
-      `${label('Description:')}${value(singleLine(task.description) || '—')}`,
+      `${label('Task ID:')}${value(record.taskId)}`,
+      `${label('Status:')}${currentTheme.fg(taskStatusColor(record.status), TASK_STATUS_LABEL[record.status])}`,
+      `${label('Tool:')}${value(record.toolName)}`,
+      `${label('Description:')}${value(singleLine(record.description ?? '') || '—')}`,
     ];
-    if (task.kind === 'process' && task.command && task.command !== task.description) {
-      lines.push(`${label('Command:')}${value(singleLine(task.command))}`);
-    }
-    if (task.kind === 'agent' && task.agentId !== undefined) {
-      lines.push(`${label('Agent ID:')}${value(task.agentId)}`);
-    }
-    if (task.kind === 'agent' && task.subagentType !== undefined) {
-      lines.push(`${label('Agent type:')}${value(task.subagentType)}`);
-    }
-    if (task.kind === 'agent' && task.model !== undefined) {
-      lines.push(`${label('Model:')}${value(this.agentModelText(task) ?? task.model)}`);
-    }
-    if (task.kind === 'agent' && task.thinkingEffort !== undefined) {
-      lines.push(`${label('Effort:')}${value(task.thinkingEffort)}`);
-    }
-    if (task.kind === 'question') {
-      lines.push(`${label('Questions:')}${currentTheme.fg('textMuted', String(task.questionCount))}`);
+    if (row.agentId !== undefined) {
+      lines.push(`${label('Agent ID:')}${value(row.agentId)}`);
     }
     const timing =
-      task.status === 'running'
-        ? `running ${formatRelativeTime(task.startedAt)}`
-        : task.endedAt !== null && task.endedAt !== undefined
-          ? `finished ${formatRelativeTime(task.endedAt)}`
+      record.status === 'running'
+        ? `running ${formatRelativeTime(record.startedAt)}`
+        : record.endedAt !== undefined
+          ? `finished ${formatRelativeTime(record.endedAt)}`
           : '';
     if (timing.length > 0) lines.push(`${label('Time:')}${currentTheme.fg('textMuted', timing)}`);
-    if (task.kind === 'process' && task.pid > 0) {
-      lines.push(`${label('Pid:')}${currentTheme.fg('textMuted', String(task.pid))}`);
-    }
-    if (task.kind === 'process' && task.exitCode !== null) {
-      lines.push(`${label('Exit code:')}${currentTheme.fg('textMuted', String(task.exitCode))}`);
-    }
-    if (task.stopReason !== undefined && task.stopReason.length > 0) {
-      lines.push(`${label('Reason:')}${currentTheme.fg('textMuted', task.stopReason)}`);
+    if (record.stopReason !== undefined && record.stopReason.length > 0) {
+      lines.push(`${label('Reason:')}${currentTheme.fg('textMuted', singleLine(record.stopReason))}`);
     }
     while (lines.length < innerHeight) lines.push('');
     return this.renderFrame('Detail', lines, width, height);
@@ -629,18 +486,18 @@ export class TasksBrowserApp extends Container implements Focusable {
 
   private renderPreviewFrame(width: number, height: number): string[] {
     const innerHeight = Math.max(0, height - 2);
-    const task = this.sortedVisible[this.selectedIndex];
-    if (task === undefined) {
+    const row = this.sortedVisible[this.selectedIndex];
+    if (row === undefined) {
       const lines: string[] = [currentTheme.fg('textMuted', 'No task selected.')];
       while (lines.length < innerHeight) lines.push('');
       return this.renderFrame('Preview Output', lines, width, height);
     }
 
-    let body: string;
-    if (this.props.tailLoading) body = '[loading…]';
-    else if (this.props.tailOutput === undefined || this.props.tailOutput.length === 0)
-      body = '[no output captured]';
-    else body = sanitizeShellOutput(this.props.tailOutput);
+    const output = previewOutputOf(row);
+    const body =
+      output.length === 0
+        ? '[no output captured]'
+        : sanitizeShellOutput(output);
 
     const rawLines = body.split('\n');
     const tailLines = rawLines.slice(-innerHeight);
@@ -648,8 +505,6 @@ export class TasksBrowserApp extends Container implements Focusable {
     while (styled.length < innerHeight) styled.push('');
     return this.renderFrame('Preview Output', styled, width, height);
   }
-
-  // ── too-small fallback ──────────────────────────────────────────────
 
   private renderTooSmall(width: number, rows: number): string[] {
     const lines: string[] = [];

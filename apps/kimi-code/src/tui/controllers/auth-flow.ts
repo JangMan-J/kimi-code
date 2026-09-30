@@ -1,46 +1,34 @@
 import {
-  removeProviderFromConfig,
-  type KimiConfig,
-  type KimiHarness,
-  type OAuthRef,
-  type Session,
-  type ThinkingEffort,
-} from '@moonshot-ai/kimi-code-sdk';
+  AgentModelRef,
+  ModelDefaultsRef,
+  type AgentHandle,
+} from '@moonshot-ai/agent-core';
+import type { KimiHarness, KimiSession } from '@moonshot-ai/kimi-code-sdk';
 
-import { createKimiCodeUserAgent } from '#/cli/version';
-
-import { OAUTH_LOGIN_REQUIRED_STARTUP_NOTICE } from '../constant/kimi-tui';
 import {
-  refreshAllProviderModels,
-  type RefreshProviderHost,
-  type RefreshProviderScope,
-  type RefreshResult,
-} from '../utils/refresh-providers';
+  OAUTH_LOGIN_REQUIRED_STARTUP_NOTICE,
+} from '../constant/kimi-tui';
 import { thinkingEffortFromConfig } from '../utils/thinking-config';
-import type { AppState, KimiTUIOptions } from '../types';
+import type { AppState, KimiTUIOptions, ThinkingEffort } from '../types';
+import type { TUIState } from '../tui-state';
 
 export interface AuthFlowHost {
-  session: Session | undefined;
+  session: KimiSession | undefined;
   readonly harness: KimiHarness;
   readonly options: KimiTUIOptions;
+  readonly state: TUIState;
+  mainAgent(): AgentHandle | undefined;
 
   setAppState(patch: Partial<AppState>): void;
   setStartupReady(): void;
   resetSessionRuntime(): void;
   appendStartupNotice(extra: string): void;
-  hydrateLazyConfigDefaults(): Promise<void>;
+  hydrateLazyConfigDefaults(): void;
+  refreshAvailableModels(): void;
 }
 
 export class AuthFlowController {
   constructor(private readonly host: AuthFlowHost) {}
-
-  async refreshAvailableModels(): Promise<void> {
-    const config = await this.host.harness.getConfig({ reload: true });
-    this.host.setAppState({
-      availableModels: config.models ?? {},
-      availableProviders: config.providers ?? {},
-    });
-  }
 
   enterLoginRequiredStartupState(): void {
     this.host.resetSessionRuntime();
@@ -58,38 +46,48 @@ export class AuthFlowController {
   }
 
   /**
-   * Apply a model pick to the runtime. Returns whether the activation made
-   * the engine emit `model_switch` — it reached an already-live session AND
-   * changed the bound alias (both engines track the event only on an actual
-   * alias change). `false` when no live session existed (session creation is
-   * deferred to the first prompt) or the alias was already bound, so callers
-   * mirroring the engine's telemetry must stay the producer for exactly
-   * those paths. Thinking-effort changes are orthogonal: the engine's
-   * `thinking_toggle` fires from `setThinking` regardless of this flag.
+   * Apply a model pick to the runtime. Returns whether the activation
+   * reached an already-live session. `false` when no live session existed
+   * (session creation is deferred to the first prompt), so callers mirroring
+   * the engine's telemetry must stay the producer for exactly those paths.
    */
   async activateModelAfterLogin(model: string, effort?: string): Promise<boolean> {
     const { host } = this;
-    if (host.session !== undefined) {
-      const session = host.session;
-      const modelChanged = (await session.getStatus()).model !== model;
-      await session.setModel(model);
+    const main = host.mainAgent();
+    if (main === undefined) {
+      // Lazy session creation: configure the persisted defaults only; the
+      // session is created on the first message and binds them then.
+      await this.persistModelDefaults(model, effort);
+      host.setAppState({ model });
       if (effort !== undefined) {
-        await session.setThinking(effort);
+        host.setAppState({ thinkingEffort: effort as ThinkingEffort });
       }
-      return modelChanged;
+      return false;
     }
+    try {
+      const agentModel = main.resolve(AgentModelRef);
+      if (agentModel === undefined) throw new Error('provider-catalog agent model is not available');
+      await agentModel.setModel(model);
+      if (effort !== undefined) {
+        await agentModel.setThinking(effort);
+      }
+    } finally {
+      await this.persistModelDefaults(model, effort);
+    }
+    return true;
+  }
 
-    // Lazy session creation (v2 engine): configure the model only; the
-    // session is created on the first message. The effort is carried as the
-    // first session's thinking override so a session-only choice (Alt+S)
-    // made before any session exists is applied on creation.
-    const patch: Partial<AppState> = { model };
-    if (effort !== undefined) {
-      patch.thinkingEffort = effort as ThinkingEffort;
-      patch.lazySessionThinking = effort as ThinkingEffort;
+  private async persistModelDefaults(model: string, effort?: string): Promise<void> {
+    const defaults = this.host.harness.app.resolve(ModelDefaultsRef);
+    if (defaults === undefined) return;
+    try {
+      await defaults.setDefaultModel(model);
+      if (effort !== undefined) {
+        await defaults.setDefaultThinking(effort);
+      }
+    } catch {
+      // Persistence is best-effort: the live switch already happened.
     }
-    host.setAppState(patch);
-    return false;
   }
 
   /**
@@ -99,141 +97,48 @@ export class AuthFlowController {
    */
   async refreshConfigAfterLogin(): Promise<boolean> {
     const { host } = this;
-    const config = await host.harness.getConfig({ reload: true });
-    const availableModels = config.models ?? {};
-    const availableProviders = config.providers ?? {};
-    const defaultModel = host.options.startup.model ?? config.defaultModel;
-    const selected = defaultModel !== undefined ? availableModels[defaultModel] : undefined;
-
-    if (defaultModel === undefined || selected === undefined) {
+    await host.harness.config.reload();
+    host.refreshAvailableModels();
+    const defaultModel =
+      host.options.startup.model ??
+      ((): string | undefined => {
+        const value = host.harness.config.get<unknown>('defaultModel');
+        return typeof value === 'string' && value.length > 0 ? value : undefined;
+      })();
+    if (defaultModel === undefined) {
       if (host.session === undefined) {
-        // Session-less v2: hydrate permission/plan defaults even without a
-        // default model.
-        await host.hydrateLazyConfigDefaults();
+        host.hydrateLazyConfigDefaults();
       }
-      host.setAppState({ availableModels, availableProviders });
       return false;
     }
-
-    const activated = await this.activateModelAfterLogin(
-      defaultModel,
-      thinkingEffortFromConfig(config.thinking),
+    const effort = thinkingEffortFromConfig(
+      host.harness.config.get<{ enabled?: boolean; effort?: string } | undefined>('thinking'),
     );
+    const activated = await this.activateModelAfterLogin(defaultModel, effort);
     if (host.session === undefined) {
-      // Session-less v2: also hydrate permission/plan defaults from the
-      // refreshed config, same as startup.
-      await host.hydrateLazyConfigDefaults();
-      host.setAppState({ availableModels, availableProviders });
+      host.hydrateLazyConfigDefaults();
       return activated;
     }
-    const appStatePatch: Partial<AppState> = {
-      availableModels,
-      availableProviders,
+    const selected = host.state.appState.availableModels[defaultModel];
+    host.setAppState({
       model: defaultModel,
-      maxContextTokens: selected.maxContextSize,
-    };
-    host.setAppState(appStatePatch);
+      ...(selected?.maxContextSize !== undefined
+        ? { maxContextTokens: selected.maxContextSize }
+        : {}),
+    });
     return activated;
   }
 
   async refreshConfigAfterLogout(): Promise<void> {
-    const config = await this.host.harness.getConfig({ reload: true });
-    const availableModels = config.models ?? {};
-    const availableProviders = config.providers ?? {};
-
-    if (this.host.session !== undefined) {
-      this.host.setAppState({ availableModels, availableProviders });
-      return;
-    }
-
+    await this.host.harness.config.reload();
+    this.host.refreshAvailableModels();
+    if (this.host.session !== undefined) return;
     this.host.setAppState({
-      availableModels,
-      availableProviders,
       model: '',
       thinkingEffort: 'off',
       maxContextTokens: 0,
       contextUsage: 0,
       contextTokens: 0,
     });
-  }
-
-  /**
-   * Re-fetch model lists from every provider whose upstream supports it
-   * (managed OAuth, open platforms, custom registries) and update local
-   * config.  Runs best-effort: individual provider failures are collected
-   * and returned instead of thrown.
-   */
-  async refreshProviderModels(): Promise<RefreshResult> {
-    return this.refreshProviderModelsWithScope('all');
-  }
-
-  async refreshOAuthProviderModels(): Promise<RefreshResult> {
-    return this.refreshProviderModelsWithScope('oauth');
-  }
-
-  private async refreshProviderModelsWithScope(scope: RefreshProviderScope): Promise<RefreshResult> {
-    const result = await refreshAllProviderModels(this.buildRefreshHost(), { scope });
-    if (result.changed.length > 0) {
-      await this.refreshAvailableModels();
-    }
-    return result;
-  }
-
-  /**
-   * Build the refresh orchestrator's persistence host. When the harness can
-   * persist several config sections as ONE atomic write (the v2 engine's
-   * `replaceSections`), the orchestrator's two-phase contract (removeProvider
-   * then setConfig) is absorbed the same way the v2 engine's own refresh path
-   * does it: the removal is staged in memory only, and the following
-   * setConfig persists the complete records in a single write — so a process
-   * exit mid-refresh can never leave config.toml in a "provider removed, not
-   * yet restored" state. The v1 harness keeps the legacy host (two
-   * whole-document writes, each atomic on its own).
-   */
-  private buildRefreshHost(): RefreshProviderHost {
-    const { host } = this;
-    const resolveOAuthToken = async (providerName: string, oauthRef?: OAuthRef): Promise<string> => {
-      const tokenProvider = host.harness.auth.resolveOAuthTokenProvider(providerName, oauthRef);
-      return tokenProvider.getAccessToken();
-    };
-    const userAgent = createKimiCodeUserAgent();
-    if (!host.harness.supportsAtomicSectionReplace()) {
-      return {
-        getConfig: () => host.harness.getConfig({ reload: true }),
-        removeProvider: (id) => host.harness.removeProvider(id),
-        setConfig: (patch) => host.harness.setConfig(patch),
-        resolveOAuthToken,
-        userAgent,
-      };
-    }
-    let staged: KimiConfig | undefined;
-    const requireStaged = (): KimiConfig => {
-      if (staged === undefined) {
-        throw new Error('refresh host: getConfig must be called before writes');
-      }
-      return staged;
-    };
-    return {
-      getConfig: async () => {
-        staged = await host.harness.getConfig({ reload: true });
-        return staged;
-      },
-      removeProvider: (id) => {
-        staged = removeProviderFromConfig(requireStaged(), id);
-        return Promise.resolve(staged);
-      },
-      setConfig: async (patch) => {
-        // The orchestrator always passes complete records (built from a full
-        // clone), so the Partial-shaped patch is a full KimiConfig overlay.
-        staged = { ...requireStaged(), ...patch } as KimiConfig;
-        // Object.entries keeps keys whose value is `undefined`, so a cleared
-        // section (e.g. a dangling defaultModel) is expressed as a removal in
-        // the atomic write; sections absent from the patch stay untouched.
-        await host.harness.replaceConfigSections(Object.fromEntries(Object.entries(patch)));
-        return staged;
-      },
-      resolveOAuthToken,
-      userAgent,
-    };
   }
 }

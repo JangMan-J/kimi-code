@@ -53,16 +53,9 @@
     "clean": "rm -rf dist .tmp-api-extractor"
   },
   "dependencies": {
-    "@antfu/utils": "^9.3.0",
-    "smol-toml": "^1.6.1",
-    "yazl": "^3.3.1",
-    "zod": "^4.3.6"
-  },
-  "devDependencies": {
-    "@moonshot-ai/agent-core-v2": "workspace:^",
+    "@moonshot-ai/agent-core": "workspace:^",
+    "@moonshot-ai/harness-core": "workspace:^",
     "@moonshot-ai/kimi-code-oauth": "workspace:^",
-    "@moonshot-ai/klient": "workspace:^",
-    "@types/yazl": "^2.4.6",
-    "jimp": "^1.6.1"
+    "smol-toml": "^1.6.1"
   }
 }

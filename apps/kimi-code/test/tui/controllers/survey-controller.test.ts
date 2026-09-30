@@ -108,7 +108,6 @@ function createHarness(deps: Partial<SurveyControllerDeps> = {}): Harness {
     activeDialog: null,
     livePane: { mode: 'idle', pendingApproval: null, pendingQuestion: null },
     externalEditorRunning: false,
-    tasksBrowser: undefined,
     editor,
     appState: {
       model: 'k2',
@@ -129,7 +128,6 @@ function createHarness(deps: Partial<SurveyControllerDeps> = {}): Harness {
   const { random: randomOverride, ...restDeps } = deps;
   const host = {
     state,
-    btwPanelController: { isActive: () => false },
     track,
   } as unknown as SurveyHost;
   const controller = new SurveyController(host, {
@@ -305,14 +303,6 @@ describe('SurveyController gating', () => {
     const harness = createHarness();
     await harness.flush();
     harness.state.transcriptEntries.push(userEntry('1. first item'));
-    harness.appear();
-    expect(harness.container.children).toHaveLength(0);
-  });
-
-  it('stays hidden while a btw panel is active', async () => {
-    const harness = createHarness();
-    (harness.host.btwPanelController as { isActive: () => boolean }).isActive = () => true;
-    await harness.flush();
     harness.appear();
     expect(harness.container.children).toHaveLength(0);
   });
@@ -658,7 +648,7 @@ describe('SurveyController long-context arm', () => {
   it('does not spend the roll while an active prompt suppresses the evaluation', async () => {
     const harness = createHarness();
     harness.state.appState.contextTokens = 250_000;
-    (harness.host.btwPanelController as { isActive: () => boolean }).isActive = () => true;
+    harness.state.editorReplacementMounted = true;
     await harness.flush();
 
     harness.controller.notifyTurnStarted(true);
@@ -667,7 +657,7 @@ describe('SurveyController long-context arm', () => {
     expect(harness.container.children).toHaveLength(0);
     expect(harness.randomCalls()).toBe(1);
 
-    (harness.host.btwPanelController as { isActive: () => boolean }).isActive = () => false;
+    harness.state.editorReplacementMounted = false;
     harness.controller.notifyTurnStarted(true);
     harness.controller.notifyTurnEnded();
     harness.elapse(2000);
@@ -1451,22 +1441,6 @@ describe('SurveyController interaction', () => {
       'long_context_survey',
       expect.objectContaining({ event_type: 'appeared' }),
     );
-  });
-
-  it('does not open while the tasks browser takeover is active', async () => {
-    const harness = createHarness();
-    await harness.flush();
-    harness.clock.mono += 600_000;
-    harness.state.tasksBrowser = {} as never;
-    harness.runTurns(5);
-    harness.elapse(2000);
-    expect(harness.container.children).toHaveLength(0);
-    expect(harness.track).not.toHaveBeenCalled();
-
-    harness.state.tasksBrowser = undefined;
-    harness.runTurns(1);
-    harness.elapse(2000);
-    expect(harness.container.children).not.toHaveLength(0);
   });
 
   it('does not select a hovered option with Enter after the terminal narrows', async () => {

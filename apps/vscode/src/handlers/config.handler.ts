@@ -1,16 +1,8 @@
 import * as vscode from "vscode";
-import {
-  effectiveModelAlias,
-  type KimiConfig as SdkKimiConfig,
-  type ModelAlias,
-  type ProviderType,
-  type ThinkingEffort,
-} from "@moonshot-ai/kimi-code-sdk";
 
 import { Methods } from "../../shared/bridge";
 import type {
   KimiConfig as WebviewKimiConfig,
-  ModelConfig,
   SlashCommandInfo,
 } from "../../shared/legacy-sdk";
 import type { ExtensionConfig, SessionConfig } from "../../shared/types";
@@ -40,27 +32,21 @@ const SLASH_COMMANDS: SlashCommandInfo[] = [
 const saveConfig: Handler<SessionConfig, { ok: boolean }> = async (params, ctx) => {
   const effort = sessionConfigEffort(params);
   const effortChanged = params.effortChanged !== false;
-  const config = await ctx.harness.getConfig({ reload: true });
-  const model = config.models?.[params.model];
-  // Resolve with the provider type the way the TUI's effectiveModelForHost
-  // does: without it the Anthropic fallback profile (e.g. `claude-latest`)
-  // never matches, so the inferred default that gates persistence is missed.
-  const providerType =
-    model === undefined ? undefined : (config.providers?.[model.provider]?.type ?? model.protocol);
+  const current = await ctx.runtime.getModels();
+  const model = current.models.find((entry) => entry.id === params.model);
   const full = thinkingConfig(
     effort,
-    model === undefined ? undefined : effectiveModelAlias(model, providerType),
+    model === undefined
+      ? undefined
+      : { supportEfforts: model.support_efforts, defaultEffort: model.default_effort },
   );
-  // Re-confirming the effort already shown is not an explicit choice —
-  // persist the model but leave the stored effort preference alone (the TUI's
-  // persistModelSelection rule).
   const patch = effortChanged ? full : { enabled: full.enabled };
   if (
-    config.defaultModel !== params.model
-    || config.thinking?.enabled !== patch.enabled
-    || (effortChanged && config.thinking?.effort !== patch.effort)
+    current.defaultModel !== params.model
+    || current.thinking?.enabled !== patch.enabled
+    || (effortChanged && current.thinking?.effort !== patch.effort)
   ) {
-    await ctx.harness.setConfig({
+    await ctx.runtime.setConfig({
       defaultModel: params.model,
       thinking: patch,
     });
@@ -68,9 +54,9 @@ const saveConfig: Handler<SessionConfig, { ok: boolean }> = async (params, ctx) 
 
   const runtime = ctx.getSession();
   if (runtime !== undefined) {
-    const status = await runtime.session.getStatus();
-    if (status.model !== params.model) await runtime.session.setModel(params.model);
-    if (status.thinkingEffort !== effort) await runtime.session.setThinking(effort);
+    const status = runtime.getStatus();
+    if (status.model !== params.model) await runtime.setModel(params.model);
+    if (status.thinkingEffort !== effort) await runtime.setThinking(effort);
   }
   return { ok: true };
 };
@@ -85,16 +71,15 @@ const openSettings: Handler<void, { ok: boolean }> = async () => {
 };
 
 const getModels: Handler<void, WebviewKimiConfig> = async (_, ctx) => {
-  const config = await ctx.harness.getConfig({ reload: true });
-  return toWebviewConfig(config);
+  return ctx.runtime.getModels();
 };
 
 const getSlashCommands: Handler<void, SlashCommandInfo[]> = async (_, ctx) => {
   if (!ctx.workDir) return SLASH_COMMANDS;
   try {
-    const skills = await ctx.harness.listWorkspaceSkills(ctx.workDir);
+    const skills = await ctx.runtime.listWorkspaceSkills(ctx.workDir);
     const skillCommands = skills
-      .filter((skill) => isUserActivatableSkill(skill.type))
+      .filter((skill) => isUserActivatableSkill(skill.type) && skill.isSubSkill !== true)
       .toSorted((left, right) => left.name.localeCompare(right.name))
       .map((skill) => ({
         name: `skill:${skill.name}`,
@@ -130,61 +115,14 @@ export const configHandlers = {
   [Methods.ReloadWebview]: reloadWebview,
 } as Record<string, Handler<any, any>>;
 
-export function toWebviewConfig(config: SdkKimiConfig): WebviewKimiConfig {
-  const models: ModelConfig[] = Object.entries(config.models ?? {})
-    // Resolve with the provider type the way saveConfig does: without it the
-    // Anthropic fallback profile never matches, and the webview's effort
-    // persistence seed would gate on a different effective model.
-    .map(([id, model]) =>
-      toWebviewModel(id, model, config.providers?.[model.provider]?.type ?? model.protocol),
-    )
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-  return {
-    defaultModel: config.defaultModel ?? models[0]?.id ?? null,
-    defaultThinking: config.thinking?.enabled !== false,
-    defaultThinkingEffort: config.thinking?.effort,
-    models,
-  };
-}
-
-function toWebviewModel(id: string, model: ModelAlias, providerType?: ProviderType): ModelConfig {
-  const effective = effectiveModelAlias(model, providerType);
-  return {
-    id,
-    name: effective.displayName ?? effective.model ?? id,
-    provider: effective.provider,
-    capabilities: [...(effective.capabilities ?? [])],
-    adaptive_thinking: effective.adaptiveThinking,
-    support_efforts:
-      effective.supportEfforts === undefined ? undefined : [...effective.supportEfforts],
-    default_effort: effective.defaultEffort,
-  };
-}
-
-function sessionConfigEffort(config: SessionConfig): ThinkingEffort {
-  if (config.effort !== undefined) return config.effort as ThinkingEffort;
+function sessionConfigEffort(config: SessionConfig): string {
+  if (config.effort !== undefined) return config.effort;
   return config.thinking === true ? "on" : "off";
 }
 
-/**
- * Project a thinking effort to the `[thinking]` config patch persisted to
- * config.toml — mirrors the TUI's thinkingEffortToConfig. "off" disables
- * thinking; "on" is the boolean-model on-signal, so it only persists
- * `enabled`. A concrete effort persists as the global default, EXCEPT when it
- * ranks above the model's effective default effort: `support_efforts` is
- * ordered by strength, and a pick more expensive than the default stays
- * session-only and records just `enabled`, so it never becomes the global
- * default for every new session. The default here is the effective model's,
- * however it arose — declared via the catalog or overrides, or synthesized
- * by the protocol-profile inference (`withAnthropicProfile` resolves Claude
- * models to "high", so an "xhigh" pick stays session-only there). When the
- * effective model carries no default effort at all, its highest declared
- * level stays session-only (the historical rule). When the model's levels
- * are unknown the concrete effort is persisted as-is.
- */
 function thinkingConfig(
-  effort: ThinkingEffort,
-  model?: Pick<ModelAlias, "supportEfforts" | "defaultEffort">,
+  effort: string,
+  model?: { readonly supportEfforts?: readonly string[]; readonly defaultEffort?: string },
 ): { enabled: boolean; effort?: string } {
   if (effort === "off") return { enabled: false };
   if (effort === "on") return { enabled: true };

@@ -3,10 +3,7 @@ import {
   findBuiltInSlashCommand,
   parseSlashInput,
   resolveSlashCommandAvailability,
-  addDirArgumentCompletions,
   sortSlashCommands,
-  swarmArgumentCompletions,
-  towerArgumentCompletions,
   type KimiSlashCommand,
 } from '#/tui/commands/index';
 import { describe, expect, it } from 'vitest';
@@ -36,8 +33,6 @@ describe('built-in slash command registry', () => {
     expect(findBuiltInSlashCommand('q')?.name).toBe('exit');
     expect(findBuiltInSlashCommand('clear')?.name).toBe('new');
     expect(findBuiltInSlashCommand('bug')?.name).toBe('feedback');
-    expect(findBuiltInSlashCommand('btw')?.name).toBe('btw');
-    expect(findBuiltInSlashCommand('mcp')?.name).toBe('mcp');
     expect(findBuiltInSlashCommand('status')?.name).toBe('status');
     expect(findBuiltInSlashCommand('usage')?.aliases).not.toContain('status');
     expect(findBuiltInSlashCommand('unknown')).toBeUndefined();
@@ -49,68 +44,6 @@ describe('built-in slash command registry', () => {
     expect(resolveSlashCommandAvailability(plan!, '')).toBe('always');
     expect(resolveSlashCommandAvailability(plan!, 'on')).toBe('always');
     expect(resolveSlashCommandAvailability(plan!, 'clear')).toBe('idle-only');
-  });
-
-  it('keeps swarm mode changes and swarm tasks idle-only', () => {
-    const swarm = findBuiltInSlashCommand('swarm');
-    expect(swarm).toBeDefined();
-    expect((swarm as KimiSlashCommand).experimentalFlag).toBeUndefined();
-    expect(resolveSlashCommandAvailability(swarm!, 'on')).toBe('idle-only');
-    expect(resolveSlashCommandAvailability(swarm!, 'off')).toBe('idle-only');
-    expect(resolveSlashCommandAvailability(swarm!, 'Ship feature X')).toBe('idle-only');
-  });
-
-  it('offers swarm subcommand argument completions', () => {
-    const values = (prefix: string): string[] | null => {
-      const items = swarmArgumentCompletions(prefix);
-      return items === null ? null : items.map((item) => item.value);
-    };
-
-    expect(values('')).toEqual(['on', 'off']);
-    expect(values('O')).toEqual(['on', 'off']);
-    expect(swarmArgumentCompletions('of')).toEqual([
-      { value: 'off', label: 'off', description: 'Turn swarm mode off' },
-    ]);
-    expect(values('on')).toBeNull();
-    expect(values('off')).toBeNull();
-    expect(values('Ship feature X')).toBeNull();
-  });
-
-  it('offers tower subcommand argument completions', () => {
-    const values = (prefix: string): string[] | null => {
-      const items = towerArgumentCompletions(prefix);
-      return items === null ? null : items.map((item) => item.value);
-    };
-
-    expect(values('')).toEqual(['status', 'teardown', 'on', 'off']);
-    expect(values('T')).toEqual(['teardown']);
-    expect(towerArgumentCompletions('tea')).toEqual([
-      { value: 'teardown', label: 'teardown', description: 'Tear down the tower' },
-    ]);
-    expect(values('status')).toBeNull();
-    expect(values('on')).toBeNull();
-    expect(values('Ship feature X')).toBeNull();
-  });
-
-  it('offers add-dir list and directory argument completions', () => {
-    const values = (prefix: string): string[] | null => {
-      const items = addDirArgumentCompletions(prefix);
-      return items === null ? null : items.map((item) => item.value);
-    };
-
-    expect(values('')).toEqual(['list']);
-    expect(values('L')).toEqual(['list']);
-    expect(values('list')).toBeNull();
-    const directoryCompletions = values('/') ?? [];
-    expect(directoryCompletions.length).toBeGreaterThan(0);
-    expect(directoryCompletions.every((value) => value.startsWith('/') && value.endsWith('/'))).toBe(true);
-    expect(directoryCompletions.some((value) => value.startsWith('/.'))).toBe(false);
-    expect(values('/.')).toBeNull();
-    const homeCompletions = values('~/') ?? [];
-    expect(homeCompletions.length).toBeGreaterThan(0);
-    expect(homeCompletions.every((value) => value.startsWith('~/') && value.endsWith('/'))).toBe(true);
-    expect(homeCompletions.some((value) => value.startsWith('~/.'))).toBe(false);
-    expect(homeCompletions.some((value) => value.startsWith('~/sers/'))).toBe(false);
   });
 
   it('defaults commands without explicit availability to idle-only', () => {
@@ -139,58 +72,28 @@ describe('built-in slash command registry', () => {
     ]);
   });
 
-  it('registers goal with subcommand-aware availability', () => {
-    const goal = findBuiltInSlashCommand('goal');
-    expect(goal).toBeDefined();
-    expect((goal as KimiSlashCommand).experimentalFlag).toBeUndefined();
-    expect(resolveSlashCommandAvailability(goal!, '')).toBe('always');
-    expect(resolveSlashCommandAvailability(goal!, 'status')).toBe('always');
-    expect(resolveSlashCommandAvailability(goal!, 'pause')).toBe('always');
-    expect(resolveSlashCommandAvailability(goal!, 'cancel')).toBe('always');
-    expect(resolveSlashCommandAvailability(goal!, 'next')).toBe('always');
-    expect(resolveSlashCommandAvailability(goal!, 'next Ship feature Y')).toBe('always');
-    expect(resolveSlashCommandAvailability(goal!, 'next manage')).toBe('always');
-    expect(resolveSlashCommandAvailability(goal!, 'status report')).toBe('idle-only');
-    expect(resolveSlashCommandAvailability(goal!, 'pause the rollout')).toBe('idle-only');
-    expect(resolveSlashCommandAvailability(goal!, 'cancel the migration')).toBe('idle-only');
-    // `clear` is no longer a subcommand; it parses as an objective -> idle-only.
-    expect(resolveSlashCommandAvailability(goal!, 'clear')).toBe('idle-only');
-    expect(resolveSlashCommandAvailability(goal!, 'resume')).toBe('idle-only');
-    expect(resolveSlashCommandAvailability(goal!, 'Ship feature X')).toBe('idle-only');
-    expect(resolveSlashCommandAvailability(goal!, 'replace Ship feature Y')).toBe('idle-only');
-  });
-
   it('contains the expected command names once', () => {
     const names = BUILTIN_SLASH_COMMANDS.map((command) => command.name);
 
     expect(new Set(names).size).toBe(names.length);
     expect(names).toEqual(
       expect.arrayContaining([
-        'add-dir',
         'compact',
-        'btw',
         'editor',
         'exit',
-        'export-debug-zip',
-        'fork',
         'help',
-        'init',
         'login',
         'logout',
-        'mcp',
         'model',
         'new',
         'permission',
         'plan',
-        'reload',
         'reload-tui',
-        'secondary-model',
         'sessions',
         'settings',
         'status',
         'theme',
         'title',
-        'tower',
         'undo',
         'usage',
         'version',
@@ -200,45 +103,67 @@ describe('built-in slash command registry', () => {
     );
   });
 
-  it('keeps TUI reload always available and full reload idle-only', () => {
-    const reload = findBuiltInSlashCommand('reload');
+  it('keeps TUI reload always available', () => {
     const reloadTui = findBuiltInSlashCommand('reload-tui');
 
-    expect(reload).toBeDefined();
     expect(reloadTui).toBeDefined();
-    expect(resolveSlashCommandAvailability(reload!, '')).toBe('idle-only');
     expect(resolveSlashCommandAvailability(reloadTui!, '')).toBe('always');
   });
+});
 
-  it('exposes secondary-model unconditionally, always available', () => {
-    const command = findBuiltInSlashCommand('secondary-model');
-    expect(command).toBeDefined();
-    expect((command as KimiSlashCommand).experimentalFlag).toBeUndefined();
-    expect(resolveSlashCommandAvailability(command!, '')).toBe('always');
+describe('dynamic skill and plugin slash commands', () => {
+  it('builds skill commands with bare names for builtin and skill: prefix otherwise', async () => {
+    const { buildSkillSlashCommands } = await import('#/tui/commands/skills');
+
+    const { commands, commandMap } = buildSkillSlashCommands([
+      { name: 'write-goal', description: 'builtin skill', path: '/b', source: 'builtin' },
+      { name: 'deploy', description: 'workspace skill', path: '/w', source: 'project' },
+      { name: 'helper', description: 'sub skill', path: '/s', source: 'project', isSubSkill: true },
+      { name: 'ref', description: 'reference skill', path: '/r', source: 'user', type: 'reference' },
+    ]);
+
+    expect(commandMap.get('write-goal')).toBe('write-goal');
+    expect(commandMap.get('skill:deploy')).toBe('deploy');
+    expect(commandMap.get('helper')).toBe('helper');
+    expect(commandMap.has('ref')).toBe(false);
+    expect(commandMap.has('skill:write-goal')).toBe(false);
+    expect(commands.map((command) => command.name)).toEqual([
+      'write-goal',
+      'skill:deploy',
+      'helper',
+    ]);
   });
 
-  it('gates tower behind the tower experiment', () => {
-    const command = findBuiltInSlashCommand('tower');
-    expect(command).toBeDefined();
-    expect((command as KimiSlashCommand).experimentalFlag).toBe('tower');
+  it('drops bare-named skill commands that collide with builtin command names', async () => {
+    const { buildSkillSlashCommands } = await import('#/tui/commands/skills');
+
+    const { commandMap } = buildSkillSlashCommands([
+      { name: 'goal', description: 'collides with /goal', path: '/g', source: 'builtin' },
+      { name: 'compact', description: 'namespaced form survives', path: '/c', source: 'project' },
+    ]);
+
+    expect(commandMap.has('goal')).toBe(false);
+    expect(commandMap.get('skill:compact')).toBe('compact');
   });
 
-  it('keeps every tower subcommand always available, including objectives', () => {
-    const command = findBuiltInSlashCommand('tower');
-    expect(command).toBeDefined();
-    expect(resolveSlashCommandAvailability(command!, '')).toBe('always');
-    expect(resolveSlashCommandAvailability(command!, 'on')).toBe('always');
-    expect(resolveSlashCommandAvailability(command!, 'off')).toBe('always');
-    expect(resolveSlashCommandAvailability(command!, 'status')).toBe('always');
-    expect(resolveSlashCommandAvailability(command!, 'teardown')).toBe('always');
-    expect(resolveSlashCommandAvailability(command!, 'Ship feature X')).toBe('always');
-  });
+  it('builds plugin commands under the plugin:command namespace', async () => {
+    const { buildPluginSlashCommands, pluginCommandName } = await import(
+      '#/tui/commands/plugin-commands'
+    );
 
-  it('registers remote-control as always available', () => {
-    const command = findBuiltInSlashCommand('remote-control');
-    expect(command).toBeDefined();
-    expect((command as KimiSlashCommand).experimentalFlag).toBeUndefined();
-    expect(resolveSlashCommandAvailability(command!, '')).toBe('always');
-  });
+    expect(pluginCommandName('demo', 'deploy')).toBe('demo:deploy');
+    const { commands, commandMap } = buildPluginSlashCommands([
+      {
+        pluginId: 'demo',
+        name: 'deploy',
+        description: 'deploy it',
+        body: 'Deploy $ARGUMENTS',
+        path: '/p/deploy.md',
+      },
+    ]);
 
+    expect(commandMap.get('demo:deploy')).toBe('Deploy $ARGUMENTS');
+    expect(commands[0]?.name).toBe('demo:deploy');
+    expect(commands[0]?.description).toBe('deploy it');
+  });
 });

@@ -1,7 +1,7 @@
 /**
- * Scenario: persisted Node SDK sessions are reopened and rendered by the VS Code replay adapter.
- * Responsibilities: restored tool displays and child-agent steps through the public resume state.
- * Wiring: Node SDK, core, storage, and HTTP provider adapter are real; only the remote provider is local.
+ * Scenario: persisted v3 sessions are reopened and rendered by the VS Code replay adapter.
+ * Responsibilities: restored tool displays and child-agent steps from the durable history.
+ * Wiring: Node SDK harness, engine, storage, and the fake provider are real; only the remote provider is local.
  * Run: pnpm --filter kimi-code exec vitest run --config vitest.config.ts test/replay-resume.integration.test.ts
  */
 
@@ -10,11 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
+import { MAIN_AGENT_ID, createUserMessage } from "@moonshot-ai/agent-core";
+import { PermissionRef, TokenCountingRef } from "@moonshot-ai/harness-core";
 import {
   createKimiHarness,
-  type Event,
   type KimiHarness,
-  type Session,
+  type KimiSession,
 } from "@moonshot-ai/kimi-code-sdk";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -22,7 +23,11 @@ import {
   createFakeProviderHarness,
   type FakeProviderHarness,
 } from "./fake-provider-harness";
-import { replaySessionToWebviewEvents } from "../src/runtime/replay-adapter";
+import {
+  replaySessionToWebviewEvents,
+  type ReplayAgentSource,
+  type ReplaySessionSource,
+} from "../src/runtime/replay-adapter";
 
 const MODEL_ALIAS = "vscode-replay-test";
 
@@ -45,27 +50,26 @@ async function createReplayRig(): Promise<ReplayRig> {
   const workDir = join(rootDir, "workspace");
   await Promise.all([mkdir(homeDir), mkdir(workDir)]);
   const provider = await createFakeProviderHarness();
-  const harness = createKimiHarness({
-    homeDir,
-    identity: { productName: "kimi-code-vscode", version: "test", platform: "kimi_code_vscode" },
-  });
-  await harness.setConfig({
-    providers: {
-      local: {
-        type: "kimi",
-        baseUrl: `${provider.baseUrl}/v1`,
-        apiKey: "sk-test",
-      },
-    },
-    models: {
-      [MODEL_ALIAS]: {
-        provider: "local",
-        model: "mock-model",
-        maxContextSize: 128_000,
-      },
-    },
-    defaultModel: MODEL_ALIAS,
-  });
+  await writeFile(
+    join(homeDir, "config.toml"),
+    `default_model = "local/mock-model"
+
+[providers.local]
+type = "kimi"
+base_url = "${provider.baseUrl}/v1"
+api_key = "sk-test"
+
+[models."${MODEL_ALIAS}"]
+provider = "local"
+model = "mock-model"
+max_context_size = 128000
+
+[loop_control]
+max_attempts_per_step = 1
+`,
+    "utf8",
+  );
+  const harness = await createKimiHarness({ homeDir, workDir });
   cleanups.push(async () => {
     try {
       await harness.close();
@@ -110,34 +114,38 @@ function completionChunk(
   };
 }
 
-async function runPrompt(session: Session, prompt: string): Promise<void> {
-  const ended = waitForEvent(
-    session,
-    (event) => event.type === "turn.ended" && event.agentId === "main",
-  );
-  await session.prompt(prompt);
-  await ended;
+async function runTurn(session: KimiSession, prompt: string): Promise<void> {
+  const result = await session.main.run(createUserMessage(prompt));
+  if (result.outcome.type !== "done") {
+    throw new Error(`Turn did not complete: ${JSON.stringify(result.outcome)}`);
+  }
 }
 
-function waitForEvent(
-  session: Session,
-  predicate: (event: Event) => boolean,
-): Promise<Event> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      unsubscribe();
-      reject(new Error("Timed out waiting for session event"));
-    }, 5_000);
-    const unsubscribe = session.onEvent((event) => {
-      if (!predicate(event)) return;
-      clearTimeout(timeout);
-      unsubscribe();
-      resolve(event);
-    });
-  });
+async function replaySourceOf(session: KimiSession): Promise<ReplaySessionSource> {
+  const stores = session.handle.stores;
+  const rosterState = stores.session.getState().roster;
+  const agents: Record<string, ReplayAgentSource> = {};
+  const roster: Record<string, { source?: string }> = {};
+  for (const [agentId, entry] of Object.entries(rosterState.agents)) {
+    const store = stores.get(agentId) ?? (await stores.open(agentId));
+    agents[agentId] = { history: store.getState().history };
+    roster[agentId] = { source: entry.source };
+  }
+  let contextTokens = 0;
+  let maxContextTokens = 0;
+  const tokenCounting = session.main.resolve(TokenCountingRef);
+  if (tokenCounting !== undefined) {
+    contextTokens = tokenCounting.status.value;
+    maxContextTokens = session.main.model?.spec.maxContextSize ?? 0;
+  }
+  return {
+    agents,
+    roster,
+    status: { contextTokens, maxContextTokens },
+  };
 }
 
-describe("VS Code replay from a public Node SDK resume state", () => {
+describe("VS Code replay from a resumed v3 session", () => {
   it("restores persisted file and todo displays", async () => {
     const rig = await createReplayRig();
     const filePath = join(rig.workDir, "sample.txt");
@@ -196,22 +204,15 @@ describe("VS Code replay from a public Node SDK resume state", () => {
         completionChunk({}, "stop"),
       ]);
     });
-    const session = await rig.harness.createSession({
-      id: "ses_vscode_replay_displays",
-      workDir: rig.workDir,
-      model: MODEL_ALIAS,
-    });
-    await session.setPermission("yolo");
-    await runPrompt(session, "Update the file and checklist");
+    const session = await rig.harness.createSession();
+    const permission = session.main.resolve(PermissionRef);
+    if (permission === undefined) throw new Error("permission feature is not installed");
+    await permission.setMode("yolo");
+    await runTurn(session, "Update the file and checklist");
     await session.close();
 
-    const resumed = await rig.harness.resumeSession({
-      id: session.id,
-      includeSubagents: true,
-    });
-    const state = resumed.getResumeState();
-    if (state === undefined) throw new Error("Expected public resume state");
-    const events = replaySessionToWebviewEvents(state, resumed.id);
+    const resumed = await rig.harness.resumeSession(session.id);
+    const events = replaySessionToWebviewEvents(await replaySourceOf(resumed), resumed.id);
 
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -221,7 +222,7 @@ describe("VS Code replay from a public Node SDK resume state", () => {
           return_value: expect.objectContaining({
             display: [{
               type: "diff",
-              path: join(rig.workDir, "created.txt"),
+              path: "created.txt",
               old_text: "",
               new_text: "created content\n",
             }],
@@ -235,7 +236,7 @@ describe("VS Code replay from a public Node SDK resume state", () => {
         payload: expect.objectContaining({
           tool_call_id: "edit-call-1",
           return_value: expect.objectContaining({
-            display: [{ type: "diff", path: filePath, old_text: "before", new_text: "after" }],
+            display: [{ type: "diff", path: "sample.txt", old_text: "before", new_text: "after" }],
           }),
         }),
       }),
@@ -296,22 +297,16 @@ describe("VS Code replay from a public Node SDK resume state", () => {
         completionChunk({}, "stop"),
       ]);
     });
-    const session = await rig.harness.createSession({
-      id: "ses_vscode_replay_subagent",
-      workDir: rig.workDir,
-      model: MODEL_ALIAS,
-    });
-    await session.setPermission("yolo");
-    await runPrompt(session, "Delegate this inspection");
+    const session = await rig.harness.createSession();
+    const permission = session.main.resolve(PermissionRef);
+    if (permission === undefined) throw new Error("permission feature is not installed");
+    await permission.setMode("yolo");
+    await runTurn(session, "Delegate this inspection");
     await session.close();
 
-    const resumed = await rig.harness.resumeSession({
-      id: session.id,
-      includeSubagents: true,
-    });
-    const state = resumed.getResumeState();
-    if (state === undefined) throw new Error("Expected public resume state");
-    const events = replaySessionToWebviewEvents(state, resumed.id);
+    const resumed = await rig.harness.resumeSession(session.id);
+    const source = await replaySourceOf(resumed);
+    const events = replaySessionToWebviewEvents(source, resumed.id);
 
     expect(events).toContainEqual(
       expect.objectContaining({
@@ -331,5 +326,6 @@ describe("VS Code replay from a public Node SDK resume state", () => {
         },
       }),
     );
+    expect(Object.keys(source.agents)).toContain(MAIN_AGENT_ID);
   });
 });

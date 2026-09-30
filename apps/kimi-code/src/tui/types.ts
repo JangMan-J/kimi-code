@@ -1,18 +1,37 @@
-import type {
-  GoalChange,
-  GoalSnapshot,
-  ModelAlias,
-  PermissionMode,
-  ProviderConfig,
-  PromptPart,
-  ThinkingEffort,
-  TokenUsage,
-  ToolInputDisplay,
-} from '@moonshot-ai/kimi-code-sdk';
+import type { TokenUsage } from '@moonshot-ai/agent-core';
+import type { PermissionMode } from '@moonshot-ai/harness-core';
+import type { GoalSnapshot } from '@moonshot-ai/harness-core';
 
 import type { NotificationsConfig, StatusLineConfig, UpgradePreferences } from './config';
 import type { PendingApproval, PendingQuestion } from './reverse-rpc/types';
 import type { ColorToken, ThemeName } from './theme';
+
+export type { PermissionMode, TokenUsage };
+
+export type ThinkingEffort = string;
+
+export interface ModelAlias {
+  readonly provider: string;
+  readonly model: string;
+  readonly baseUrl?: string;
+  readonly maxContextSize?: number;
+  readonly maxOutputSize?: number;
+  readonly capabilities?: readonly string[];
+  readonly displayName?: string;
+  readonly reasoningKey?: string;
+  readonly protocol?: string;
+  readonly adaptiveThinking?: boolean;
+  readonly supportEfforts?: readonly string[];
+  readonly defaultEffort?: string;
+  readonly offEffort?: string;
+  readonly alwaysThinking?: boolean;
+}
+
+export interface ProviderConfig {
+  readonly type?: string;
+  readonly baseUrl?: string;
+  readonly oauth?: unknown;
+}
 
 export type BannerDisplay = 'always' | 'once' | 'cooldown';
 
@@ -28,15 +47,9 @@ export interface BannerState {
 export interface AppState {
   model: string;
   workDir: string;
-  additionalDirs: readonly string[];
   sessionId: string;
   permissionMode: PermissionMode;
   planMode: boolean;
-  /** Resolved profile name from --agent/--agent-file, carried to the
-   * lazy-created first session when the TUI starts session-less. */
-  agentProfile?: string;
-  /** Raw --agent-file paths, passed to session creation alongside `agentProfile`. */
-  agentFiles?: readonly string[];
   /** 'bash' when the editor is in `!` shell-command mode. */
   inputMode: 'prompt' | 'bash';
   swarmMode: boolean;
@@ -45,20 +58,6 @@ export interface AppState {
    * mirrors the runtime. The single source of truth for the thinking state in
    * the TUI. */
   thinkingEffort: ThinkingEffort;
-  /**
-   * The current `defaultPlanMode` value from config (false when absent),
-   * refreshed by `hydrateLazyConfigDefaults`. Used to tell a config-driven
-   * plan-mode entry apart from an explicit CLI `--plan` when lazy-creating
-   * the first session (the engine applies the config default itself).
-   */
-  configDefaultPlanMode?: boolean;
-  /**
-   * Session-only thinking effort chosen (e.g. via the model picker's Alt+S)
-   * while no session exists yet on the v2 engine. Applied to the first
-   * lazy-created session and cleared once it exists; the engine's config
-   * default is used instead when unset.
-   */
-  lazySessionThinking?: ThinkingEffort;
   contextUsage: number;
   contextTokens: number;
   maxContextTokens: number;
@@ -67,7 +66,7 @@ export interface AppState {
   isReplaying: boolean;
   streamingPhase: 'idle' | 'waiting' | 'thinking' | 'composing' | 'shell';
   streamingStartTime: number;
-  /** Pending step retry backoff (fed by `turn.step.retrying`); null when no retry is in flight. */
+  /** Pending LLM retry backoff (fed by `llm.retrying`); null when no retry is in flight. */
   stepRetry: StepRetryState | null;
   theme: ThemeName;
   version: string;
@@ -109,8 +108,8 @@ export interface StepRetryState {
   statusCode?: number;
   /**
    * `backoff` while sleeping before the next attempt (label shows the
-   * countdown); `attempt` once the `delayMs` backoff has elapsed and the next
-   * attempt is running — the countdown has expired by then and is dropped.
+   * countdown); `attempt` once the next request has been sent — the countdown
+   * has expired by then and is dropped.
    */
   phase: 'backoff' | 'attempt';
 }
@@ -120,7 +119,6 @@ export interface ToolCallBlockData {
   name: string;
   args: Record<string, unknown>;
   description?: string;
-  display?: ToolInputDisplay;
   streamingArguments?: string;
   streamingStartedAtMs?: number;
   result?: ToolResultBlockData;
@@ -155,25 +153,6 @@ export interface SubagentReplayBlockData {
   toolCalls?: readonly SubagentReplayToolCallData[];
 }
 
-export interface BackgroundAgentMetadata {
-  readonly agentId: string;
-  readonly parentToolCallId: string;
-  readonly agentName?: string;
-  readonly description?: string;
-  /** Display name of the model the agent is bound to (resolved at spawn). */
-  readonly model?: string;
-  /** Thinking effort, set only for concrete levels (boolean on/off hidden). */
-  readonly effort?: string;
-}
-
-export type BackgroundAgentStatusPhase = 'started' | 'completed' | 'failed' | 'killed';
-
-export interface BackgroundAgentStatusData {
-  readonly phase: BackgroundAgentStatusPhase;
-  readonly headline: string;
-  readonly detail?: string;
-}
-
 export interface CompactionTranscriptData {
   readonly result?: 'cancelled';
   readonly summary?: string;
@@ -191,10 +170,6 @@ export interface CronTranscriptData {
   readonly missedCount?: number;
 }
 
-export type GoalTranscriptData =
-  | { readonly kind: 'created' }
-  | { readonly kind: 'lifecycle'; readonly change: GoalChange };
-
 export type TranscriptEntryKind =
   | 'welcome'
   | 'user'
@@ -203,19 +178,9 @@ export type TranscriptEntryKind =
   | 'thinking'
   | 'status'
   | 'skill_activation'
-  | 'plugin_command'
-  | 'cron'
-  | 'goal';
+  | 'cron';
 
 export type SkillActivationTrigger = 'user-slash' | 'model-tool' | 'nested-skill';
-
-export interface PluginCommandTranscriptData {
-  readonly activationId: string;
-  readonly pluginId: string;
-  readonly commandName: string;
-  readonly args?: string;
-  readonly trigger: 'user-slash';
-}
 
 export interface TranscriptEntry {
   id: string;
@@ -235,20 +200,15 @@ export interface TranscriptEntry {
   /** Optional override for the leading bullet of a 'user' message entry. An empty string suppresses the bullet entirely (used by shell-command echoes so `$` replaces the sparkles marker). */
   bullet?: string;
   toolCallData?: ToolCallBlockData;
-  backgroundAgentStatus?: BackgroundAgentStatusData;
   compactionData?: CompactionTranscriptData;
   cronData?: CronTranscriptData;
-  goalData?: GoalTranscriptData;
   imageAttachmentIds?: readonly number[];
   skillActivationId?: string;
   skillName?: string;
   skillArgs?: string;
   skillTrigger?: SkillActivationTrigger;
-  /** Card belongs to the following prompt's bundled submission: undo removes them together. */
-  bundledWithPrompt?: boolean;
   /** Entry renders a UserPromptSubmit hook result (sits inside its prompt's group window). */
   hookResult?: boolean;
-  pluginCommandData?: PluginCommandTranscriptData;
 }
 
 export type LivePaneMode =
@@ -264,6 +224,12 @@ export interface LivePaneState {
   pendingQuestion: PendingQuestion | null;
 }
 
+export interface QueuePaneItem {
+  readonly id: string;
+  readonly text: string;
+  readonly kind: 'prompt' | 'bash';
+}
+
 export interface InlineSkillActivation {
   readonly skillName: string;
   /**
@@ -271,38 +237,6 @@ export interface InlineSkillActivation {
    * is combined with further inline skills; inline tokens carry no args.
    */
   readonly args?: string;
-}
-
-export interface QueuedMessage {
-  readonly text: string;
-  readonly agentId?: string;
-  readonly parts?: readonly PromptPart[];
-  readonly imageAttachmentIds?: readonly number[];
-  readonly videoAttachmentIds?: readonly number[];
-  /** `bash` for a `!` shell command queued while another command is running;
-   *  `skill` for a slash-skill activation queued while the session is busy;
-   *  undefined (=`prompt`) for a normal message. */
-  readonly mode?: 'prompt' | 'bash' | 'skill';
-  /** Set when mode === 'skill': the skill to activate when the item drains.
-   *  `text` then holds the display/recall string (`/name args`). */
-  readonly skillName?: string;
-  /** Set when mode === 'skill': the raw (media-rewritten) args to activate with. */
-  readonly skillArgs?: string;
-  /** Skills to activate together with this queued message's prompt. */
-  readonly inlineSkillActivations?: readonly InlineSkillActivation[];
-}
-
-/**
- * One unit of Ctrl-S steer input: a queued message or the editor draft,
- * with the media parts extracted at submit/paste time so images and video
- * tags survive the steer path (which accepts full prompt parts, not just
- * text).
- */
-export interface SteerInputItem {
-  readonly text: string;
-  readonly parts?: readonly PromptPart[];
-  readonly imageAttachmentIds?: readonly number[];
-  readonly videoAttachmentIds?: readonly number[];
 }
 
 export const INITIAL_LIVE_PANE: LivePaneState = {
@@ -322,10 +256,6 @@ export interface TUIStartupOptions {
   readonly auto: boolean;
   readonly plan: boolean;
   readonly model?: string;
-  /** Resolved profile name from --agent/--agent-file; bound to the startup session only. */
-  readonly agentProfile?: string;
-  /** Raw --agent-file paths, passed to session creation alongside `agentProfile`. */
-  readonly agentFiles?: readonly string[];
   readonly startupNotice?: string;
 }
 

@@ -19,7 +19,6 @@ import type { SessionRow } from './components/dialogs/session-picker';
 import { CustomEditor } from './components/editor/custom-editor';
 import { DEFAULT_TUI_CONFIG } from './config';
 import { CHROME_GUTTER } from './constant/rendering';
-import type { TasksBrowserState } from './controllers/tasks-browser';
 import { currentTheme, type Theme } from './theme';
 import { setMarkdownRenderLatex } from './utils/markdown-options';
 import { createTerminalState, type TerminalState } from './utils/terminal-state';
@@ -28,7 +27,6 @@ import {
   type AppState,
   type KimiTUIOptions,
   type LivePaneState,
-  type QueuedMessage,
   type TranscriptEntry,
   type TUIStartupState,
 } from './types';
@@ -69,23 +67,14 @@ export interface TUIState {
   /** A follow-up session page fetch is in flight. */
   sessionsLoadingMore: boolean;
   sessionsScope: 'cwd' | 'all';
-  activeDialog: 'session-picker' | 'help' | 'trust-prompt' | 'cache-hint' | null;
+  activeDialog: 'session-picker' | 'help' | 'trust-prompt' | null;
   /**
    * True while an editor-replacement panel (help, trust prompt, goal queue
    * manager, …) is mounted in place of the editor. Delayed input restores
    * must not run in that state — they would displace the newer panel.
    */
   editorReplacementMounted: boolean;
-  tasksBrowser: TasksBrowserState | undefined;
   externalEditorRunning: boolean;
-  queuedMessages: QueuedMessage[];
-  /**
-   * True while a queued user message has been shifted out of
-   * {@link queuedMessages} but its deferred send has not run yet. The queue
-   * looks empty during this window, so queued-goal promotion must also check
-   * this flag to avoid starting a goal ahead of the user's earlier message.
-   */
-  queuedMessageDispatchPending: boolean;
   swarmModeEntry: 'manual' | 'task' | undefined;
 }
 
@@ -198,10 +187,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     sessionsScope: 'cwd',
     activeDialog: null,
     editorReplacementMounted: false,
-    tasksBrowser: undefined,
     externalEditorRunning: false,
-    queuedMessages: [],
-    queuedMessageDispatchPending: false,
     swarmModeEntry: undefined,
   };
 }

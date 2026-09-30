@@ -6,7 +6,6 @@ import {
   flushDiagnosticLogsSync,
   log,
   type KimiHarness,
-  type KimiHarnessOptions,
   type TelemetryClient,
 } from '@moonshot-ai/kimi-code-sdk';
 import {
@@ -17,7 +16,7 @@ import {
   withTelemetryContext,
 } from '@moonshot-ai/kimi-telemetry';
 
-import { CLI_SHUTDOWN_TIMEOUT_MS, CLI_UI_MODE, TUI_HOST_UI_CAPABILITIES } from '#/constant/app';
+import { CLI_SHUTDOWN_TIMEOUT_MS, CLI_UI_MODE, CLI_USER_AGENT_PRODUCT } from '#/constant/app';
 import { detectPendingMigration, resolveLegacySourceHome, sameLegacyPath } from '#/migration/index';
 import type { TuiConfig } from '#/tui/config';
 import { loadTuiConfig, TuiConfigParseError } from '#/tui/config';
@@ -30,9 +29,8 @@ import { restoreTerminalModes } from '#/utils/terminal-restore';
 import { resolveCommandPath } from '#/utils/process/resolve-command';
 
 import type { CLIOptions } from './options';
-import { resolveAgentProfileSelection } from './agent-selection';
 import { createCliTelemetryBootstrap, initializeCliTelemetry } from './telemetry';
-import { createKimiCodeHostIdentity } from './version';
+import { createKimiCodeUserAgent } from './version';
 
 export async function runShell(
   opts: CLIOptions,
@@ -62,27 +60,29 @@ export async function runShell(
     withContext: withTelemetryContext,
     setContext: setTelemetryContext,
   };
-  const harnessOptions: KimiHarnessOptions = {
-    homeDir: telemetryBootstrap.homeDir,
-    identity: createKimiCodeHostIdentity(version),
-    skillDirs: opts.skillsDirs,
-    // The TUI renders the mid-turn update panel; declaring it here is what
-    // makes the engine offer NotifyUser to this process and to no other host.
-    uiCapabilities: TUI_HOST_UI_CAPABILITIES,
-    telemetry: telemetryClient,
-    onOAuthRefresh: (outcome) => {
-      if (outcome.success) {
-        track('oauth_refresh', { outcome: 'success' });
-        return;
-      }
-      track('oauth_refresh', {
-        outcome: 'error',
-        reason: outcome.reason,
-      });
-    },
-    sessionStartedProperties: { yolo: opts.yolo, auto: opts.auto, plan: opts.plan, afk: false },
-  };
-  const harness = createKimiHarness(harnessOptions);
+  const createHarness = (): Promise<KimiHarness> =>
+    createKimiHarness({
+      homeDir: telemetryBootstrap.homeDir,
+      identity: CLI_USER_AGENT_PRODUCT,
+      uiMode: 'interactive',
+      workDir,
+      version,
+      userAgent: createKimiCodeUserAgent(),
+      skillDirs: opts.skillsDirs,
+      additionalDirs: opts.addDirs,
+      telemetry: telemetryClient,
+      onOAuthRefresh: (outcome) => {
+        if (outcome.success) {
+          track('oauth_refresh', { outcome: 'success' });
+          return;
+        }
+        track('oauth_refresh', {
+          outcome: 'error',
+          reason: outcome.reason,
+        });
+      },
+    });
+  const harness = await createHarness();
   startupTrace('harness:created');
   log.info('kimi-code starting', {
     version,
@@ -115,19 +115,17 @@ export async function runShell(
     await harness.close();
     return;
   }
-  const config = await harness.getConfig();
+  const config = {
+    defaultModel: harness.config.get<string | undefined>('defaultModel'),
+    telemetry: harness.config.get<boolean | undefined>('telemetry'),
+  };
   startupTrace('config:loaded');
   // Config diagnostics (deprecated keys, invalid sections, ...) are surfaced
   // by the TUI itself at `finishStartup` via `showConfigWarningsIfAny` —
   // folded into the dim startup notice they were too easy to miss.
   const configMs = Date.now() - configStartedAt;
-  // Resolve --agent/--agent-file once for the startup session; validateOptions
-  // has already rejected them alongside --session/--continue.
-  const agentProfile = await resolveAgentProfileSelection(opts, workDir);
   const tui = new KimiTUI(harness, {
     cliOptions: opts,
-    agentProfile,
-    additionalDirs: opts.addDirs?.length ? opts.addDirs : undefined,
     tuiConfig,
     version,
     workDir,
@@ -135,6 +133,7 @@ export async function runShell(
     migrationPlan,
     migrateOnly: runOptions.migrateOnly,
     telemetryDisabled: config.telemetry === false,
+    harnessFactory: createHarness,
   });
 
   initializeCliTelemetry({
@@ -282,7 +281,7 @@ export async function runShell(
     setCrashPhase('shutdown');
     trackLifecycle('exit', { duration_ms: Date.now() - startedAt, tui_mode: tui.state.ui.mode });
     await shutdownTelemetry({ timeoutMs: CLI_SHUTDOWN_TIMEOUT_MS });
-    await harness.close();
+    await tui.harness.close();
     throw error;
   }
 }

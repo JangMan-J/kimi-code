@@ -186,12 +186,12 @@ describe('event adapter (projects SDK events into the legacy Webview contract)',
       toolCallId: 'tool-1',
       name: 'Edit',
       args: { path: 'src/index.ts' },
-      display: {
-        kind: 'diff',
+      display: [{
+        type: 'diff',
         path: 'src/index.ts',
-        before: 'old',
-        after: 'new',
-      },
+        old_text: 'old',
+        new_text: 'new',
+      }],
     });
     const finished = adaptSdkEvent(started.state, {
       type: 'tool.result',
@@ -226,10 +226,10 @@ describe('event adapter (projects SDK events into the legacy Webview contract)',
       toolCallId: 'todo-1',
       name: 'TodoList',
       args: {},
-      display: {
-        kind: 'todo_list',
+      display: [{
+        type: 'todo',
         items: [{ title: 'Ship it', status: 'done' }],
-      },
+      }],
     });
     const unrelated = adaptSdkEvent(started.state, {
       type: 'tool.result',

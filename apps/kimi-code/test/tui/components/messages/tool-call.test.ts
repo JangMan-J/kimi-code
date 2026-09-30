@@ -1,11 +1,9 @@
 import { visibleWidth, type TUI } from '@moonshot-ai/pi-tui';
-import chalk from 'chalk';
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { setExperimentalFeatures } from '#/tui/commands/experimental-flags';
 import { ToolCallComponent } from '#/tui/components/messages/tool-call';
 import { STATUS_BULLET } from '#/tui/constant/symbols';
-import { darkColors } from '#/tui/theme/colors';
 
 import { captureProcessWrite } from '../../../helpers/process';
 
@@ -323,31 +321,7 @@ describe('ToolCallComponent', () => {
   });
 
   describe('NotifyUser card', () => {
-    beforeEach(() => {
-      setExperimentalFeatures([{ id: 'notify_user', enabled: true }]);
-    });
     const message = 'Login module is clean.\n\nThe bug must be in **session expiry**.';
-
-    it('collapses to a header with the first line and expands to the full message', () => {
-      const component = new ToolCallComponent(
-        { id: 'call_notify', name: 'NotifyUser', args: { message } },
-        { tool_call_id: 'call_notify', output: 'Update shown to the user.', is_error: false },
-      );
-
-      const collapsed = component.render(100).map(strip).filter((line) => line.trim().length > 0);
-      expect(collapsed).toHaveLength(1);
-      expect(collapsed[0]).toContain('Sent you an update');
-      expect(collapsed[0]).toContain('Login module is clean.');
-      expect(collapsed[0]).not.toContain('session expiry');
-      expect(collapsed[0]).not.toContain('Update shown');
-      expect(component.hasHiddenContent()).toBe(true);
-
-      component.setExpanded(true);
-      const expanded = strip(component.render(100).join('\n'));
-      expect(expanded).toContain('session expiry');
-      expect(expanded).not.toContain('Update shown');
-      expect(component.hasHiddenContent()).toBe(true);
-    });
 
     it('renders historical calls as ordinary tool records when disabled', () => {
       setExperimentalFeatures([]);
@@ -361,31 +335,6 @@ describe('ToolCallComponent', () => {
       expect(output).toContain('Update shown to the user.');
     });
 
-    it('labels the in-flight call as sending', () => {
-      const component = new ToolCallComponent(
-        { id: 'call_notify_live', name: 'NotifyUser', args: {}, streamingArguments: '{"mess' },
-        undefined,
-      );
-      expect(strip(component.render(100).join('\n'))).toContain('Sending you an update');
-      expect(component.hasHiddenContent()).toBe(false);
-    });
-
-    it.each([true, false])('preserves a suppressed result when rendering history, enabled: %s', (enabled) => {
-      setExperimentalFeatures([{ id: 'notify_user', enabled }]);
-      const output = 'Notifications are disabled; the update was not displayed.';
-      const component = new ToolCallComponent(
-        { id: 'suppressed', name: 'NotifyUser', args: { message } },
-        { tool_call_id: 'suppressed', output, is_error: false },
-      );
-      for (const expanded of [false, true]) {
-        component.setExpanded(expanded);
-        const rendered = strip(component.render(150).join('\n'));
-        expect(rendered).not.toContain('Sent you an update');
-        expect(rendered).toContain(output);
-        if (enabled) expect(rendered).toContain('Update not displayed');
-      }
-    });
-
     it('does not claim an unknown successful result was displayed', () => {
       const component = new ToolCallComponent(
         { id: 'unknown-result', name: 'NotifyUser', args: { message } },
@@ -394,24 +343,6 @@ describe('ToolCallComponent', () => {
       const rendered = strip(component.render(150).join('\n'));
       expect(rendered).not.toContain('Sent you an update');
       expect(rendered).toContain('An unrecognized result.');
-    });
-
-    it('marks a call whose arguments were cut off by max_tokens', () => {
-      const component = new ToolCallComponent(
-        {
-          id: 'call_notify_cut',
-          name: 'NotifyUser',
-          args: {},
-          streamingArguments: '{"message": "half an upd',
-          truncated: true,
-        },
-        undefined,
-      );
-      const out = strip(component.render(100).join('\n'));
-      expect(out).toContain('Update cut off');
-      expect(out).not.toContain('Sending you an update');
-      expect(out).toContain('call never executed');
-      expect(component.hasHiddenContent()).toBe(false);
     });
   });
 
@@ -430,23 +361,6 @@ describe('ToolCallComponent', () => {
         expect(rows[0]).toContain('Ran a command');
         expect(rows[0]).toContain('…');
       }
-    });
-
-    it('truncates a long NotifyUser preview the same way', () => {
-      setExperimentalFeatures([{ id: 'notify_user', enabled: true }]);
-      const component = new ToolCallComponent(
-        {
-          id: 'call_notify_narrow',
-          name: 'NotifyUser',
-          args: { message: `Plan: ${'inspect the parser, '.repeat(8)}then run the suite.` },
-        },
-        { tool_call_id: 'call_notify_narrow', output: 'Update shown to the user.', is_error: false },
-      );
-      const rows = component.render(50).map(strip).filter((line) => line.trim().length > 0);
-      expect(rows).toHaveLength(1);
-      expect(visibleWidth(rows[0]!)).toBeLessThanOrEqual(50);
-      expect(rows[0]).toContain('Sent you an update');
-      expect(component.hasHiddenContent()).toBe(true);
     });
 
     it('hands back the same header array while the header is unchanged', () => {
@@ -573,59 +487,6 @@ describe('ToolCallComponent', () => {
     const out = strip(component.render(100).join('\n'));
     expect(out).toContain('<system>literal text from a user file</system>');
     expect(out).toContain('second line');
-  });
-
-  it('renders AgentSwarm results as a one-line summary without raw XML', () => {
-    const output = [
-      '<agent_swarm_result>',
-      '<summary>completed: 1, failed: 1, aborted: 1</summary>',
-      '<subagent index="1" outcome="completed">Reviewed src/a.ts.</subagent>',
-      '<subagent index="2" outcome="failed">Agent timed out.</subagent>',
-      '<subagent index="3" outcome="aborted">User aborted.</subagent>',
-      '</agent_swarm_result>',
-    ].join('\n');
-    const component = new ToolCallComponent(
-      {
-        id: 'call_swarm',
-        name: 'AgentSwarm',
-        args: {
-          description: 'Review changed files',
-          items: ['src/a.ts', 'src/b.ts', 'src/c.ts'],
-        },
-      },
-      {
-        tool_call_id: 'call_swarm',
-        output,
-        is_error: false,
-      },
-    );
-
-    const out = strip(component.render(120).join('\n'));
-
-    expect(out).toContain('Agent swarm: ✓ 1 completed · ✗ 1 failed · ⊘ 1 aborted');
-    expect(out).not.toContain('<agent_swarm_result>');
-    expect(out).not.toContain('Reviewed src/a.ts.');
-    expect(out).not.toContain('Agent timed out.');
-  });
-
-  it('renders an AgentSwarm fallback summary when the result is not structured', () => {
-    const component = new ToolCallComponent(
-      {
-        id: 'call_swarm_failed',
-        name: 'AgentSwarm',
-        args: { description: 'Review changed files' },
-      },
-      {
-        tool_call_id: 'call_swarm_failed',
-        output: 'provider request failed',
-        is_error: true,
-      },
-    );
-
-    const out = strip(component.render(120).join('\n'));
-
-    expect(out).toContain('Agent swarm: ✗ Failed.');
-    expect(out).not.toContain('provider request failed');
   });
 
   it('still renders tool output when the body merely contains <system later on', () => {
@@ -967,147 +828,6 @@ describe('ToolCallComponent', () => {
     component.setExpanded(true);
     const expanded = strip(component.render(100).join('\n'));
     expect(expanded).toContain('question-aaaaaaaa');
-  });
-
-  it('renders GetGoal as a goal check without raw JSON', () => {
-    const component = new ToolCallComponent(
-      {
-        id: 'call_get_goal',
-        name: 'GetGoal',
-        args: {},
-      },
-      {
-        tool_call_id: 'call_get_goal',
-        output: JSON.stringify({
-          goal: {
-            goalId: 'g1',
-            objective: 'Ship feature X',
-            status: 'active',
-            createdAt: '2026-01-01T00:00:00.000Z',
-            updatedAt: '2026-01-01T00:00:00.000Z',
-            startedBy: 'model',
-            updatedBy: 'model',
-            turnsUsed: 1,
-            tokensUsed: 800,
-            wallClockMs: 5000,
-            budget: {
-              tokenBudget: null,
-              turnBudget: null,
-              wallClockBudgetMs: null,
-              remainingTokens: null,
-              remainingTurns: null,
-              remainingWallClockMs: null,
-              tokenBudgetReached: false,
-              turnBudgetReached: false,
-              wallClockBudgetReached: false,
-              overBudget: false,
-            },
-          },
-        }),
-        is_error: false,
-      },
-    );
-
-    const out = strip(component.render(100).join('\n'));
-    expect(out).toContain('Checked goal');
-    expect(out).toContain('Goal active: Ship feature X');
-    expect(out).not.toContain('Used GetGoal');
-    expect(out).not.toContain('"objective"');
-  });
-
-  it('renders SetGoalBudget with a readable budget argument', () => {
-    const component = new ToolCallComponent(
-      {
-        id: 'call_goal_budget',
-        name: 'SetGoalBudget',
-        args: { value: 10, unit: 'turns' },
-      },
-      {
-        tool_call_id: 'call_goal_budget',
-        output: 'Goal budget set: 10 turns.',
-        is_error: false,
-      },
-    );
-
-    const out = strip(component.render(100).join('\n'));
-    expect(out).toContain('Set goal budget (10 turns)');
-    expect(out).not.toContain('Set goal budget (10 turns) · 10 turns');
-    expect(out).not.toContain('Used SetGoalBudget (turns)');
-    expect(out).not.toContain('Goal budget set: 10 turns.');
-  });
-
-  it('renders successful SetGoalBudget headers with the primary goal marker', () => {
-    const previousLevel = chalk.level;
-    chalk.level = 3;
-    try {
-      const component = new ToolCallComponent(
-        {
-          id: 'call_goal_budget',
-          name: 'SetGoalBudget',
-          args: { value: 10, unit: 'turns' },
-        },
-        {
-          tool_call_id: 'call_goal_budget',
-          output: 'Goal budget set: 10 turns.',
-          is_error: false,
-        },
-      );
-
-      const out = component.render(100).join('\n');
-      expect(out).toContain(chalk.hex(darkColors.primary)(STATUS_BULLET));
-      expect(out).not.toContain(chalk.hex(darkColors.success)(STATUS_BULLET));
-    } finally {
-      chalk.level = previousLevel;
-    }
-  });
-
-  it('renders UpdateGoal as a model-reported status, not a user lifecycle marker', () => {
-    const component = new ToolCallComponent(
-      {
-        id: 'call_update_goal',
-        name: 'UpdateGoal',
-        args: { status: 'blocked' },
-      },
-      {
-        tool_call_id: 'call_update_goal',
-        output: 'Goal marked blocked.',
-        is_error: false,
-      },
-    );
-
-    const out = strip(component.render(100).join('\n'));
-    expect(out).toContain('Reported goal blocked');
-    expect(out).not.toContain('Updated goal (blocked)');
-    expect(out).not.toContain('· blocked');
-    expect(out).not.toContain('Goal marked blocked.');
-    expect(out).not.toContain('● Goal blocked');
-  });
-
-  it('renders successful UpdateGoal report headers entirely in the primary goal color', () => {
-    const previousLevel = chalk.level;
-    chalk.level = 3;
-    try {
-      for (const status of ['complete', 'blocked']) {
-        const component = new ToolCallComponent(
-          {
-            id: `call_update_goal_${status}`,
-            name: 'UpdateGoal',
-            args: { status },
-          },
-          {
-            tool_call_id: `call_update_goal_${status}`,
-            output: `Goal marked ${status}.`,
-            is_error: false,
-          },
-        );
-
-        const out = component.render(100).join('\n');
-        expect(out).toContain(chalk.hex(darkColors.primary)(STATUS_BULLET));
-        expect(out).not.toContain(chalk.hex(darkColors.success)(STATUS_BULLET));
-      }
-    } finally {
-      chalk.level = previousLevel;
-    }
   });
 
   it('appends a chip to the header once a result arrives', () => {
@@ -2585,40 +2305,6 @@ describe('ToolCallComponent hasHiddenContent for a call truncated by max_tokens'
   });
 });
 
-describe('ToolCallComponent hasHiddenContent for goal cards', () => {
-  it('reports nothing to expand for a parsed goal snapshot or a bodiless goal update', () => {
-    // The tool wraps the snapshot in a `goal` envelope (null when there is no goal).
-    const snapshot = JSON.stringify(
-      {
-        goal: {
-        goalId: 'g1',
-        objective: 'Ship the feature',
-        status: 'active',
-        turnsUsed: 3,
-        tokensUsed: 100,
-        wallClockMs: 1000,
-        budget: { tokenBudget: null, turnBudget: null, wallClockBudgetMs: null },
-        },
-      },
-      null,
-      2,
-    );
-    const getGoal = new ToolCallComponent(
-      { id: 'call_get_goal', name: 'GetGoal', args: {} },
-      { tool_call_id: 'call_get_goal', output: snapshot, is_error: false },
-    );
-    expect(getGoal.hasHiddenContent()).toBe(false);
-    getGoal.dispose();
-
-    const update = new ToolCallComponent(
-      { id: 'call_update_goal', name: 'UpdateGoal', args: { status: 'paused' } },
-      { tool_call_id: 'call_update_goal', output: snapshot, is_error: false },
-    );
-    expect(update.hasHiddenContent()).toBe(false);
-    update.dispose();
-  });
-});
-
 describe('ToolCallComponent hasHiddenContent at the Edit preview cap', () => {
   function editCard(lineCount: number): ToolCallComponent {
     const oldStr = Array.from({ length: lineCount }, (_, i) => `old ${String(i + 1)}`).join('\n');
@@ -2652,7 +2338,7 @@ describe('ToolCallComponent hasHiddenContent for ReadMediaFile', () => {
   it('is true for a media envelope and follows the line-count rule for anything else', () => {
     const envelope = JSON.stringify([
       { type: 'text', text: '<image path="/tmp/a.png">' },
-      { type: 'image_url', imageUrl: { url: 'data:image/png;base64,iVBORw0KGgo=' } },
+      { type: 'image_url', source: { kind: 'inline', mimeType: 'image/png', data: 'iVBORw0KGgo=' } },
       { type: 'text', text: '</image>' },
     ]);
     const media = mediaCard(envelope);

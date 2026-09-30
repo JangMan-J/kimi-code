@@ -1,20 +1,67 @@
 import type {
   ContentPart,
-  ContextMessage,
-  PromptOrigin,
+  HistoryMessage,
   ToolCall,
-} from "@moonshot-ai/kimi-code-sdk";
+} from "@moonshot-ai/agent-core";
 
-const INTERNAL_ORIGINS = new Set<PromptOrigin["kind"]>([
+export interface ContextMessage {
+  readonly role: "system" | "user" | "assistant" | "tool";
+  readonly content: readonly ContentPart[];
+  readonly toolCalls: readonly ToolCall[];
+  readonly toolCallId?: string;
+  readonly origin?: { readonly kind: string };
+  readonly source?: string;
+}
+
+const INTERNAL_SOURCES = new Set(["reminder", "notify", "async-tool", "compaction"]);
+
+const INTERNAL_ORIGINS = new Set([
   "injection",
   "system_trigger",
   "compaction_summary",
   "hook_result",
   "cron_job",
   "cron_missed",
+  "retry",
+  "subagent",
 ]);
 
 const TOOL_HINT_KEYS = ["path", "file_path", "command", "query", "url", "name", "pattern"];
+
+export function contextMessageFromHistory(entry: HistoryMessage): ContextMessage {
+  const message = entry.message;
+  const meta = entry.meta as
+    | { readonly origin?: { readonly kind: string }; readonly source?: string }
+    | undefined;
+  const origin = meta?.origin;
+  const source = meta?.source;
+  if (message.role === "assistant") {
+    return {
+      role: "assistant",
+      content: message.content,
+      toolCalls: message.toolCalls,
+      origin,
+      source,
+    };
+  }
+  if (message.role === "tool") {
+    return {
+      role: "tool",
+      content: message.content,
+      toolCalls: [],
+      toolCallId: message.toolCallId,
+      origin,
+      source,
+    };
+  }
+  return {
+    role: message.role,
+    content: message.content,
+    toolCalls: [],
+    origin,
+    source,
+  };
+}
 
 export function buildExportMarkdown(input: {
   readonly sessionId: string;
@@ -87,7 +134,9 @@ export function isSensitiveFile(fileName: string): boolean {
 }
 
 function isInternalMessage(message: ContextMessage): boolean {
-  return message.origin !== undefined && INTERNAL_ORIGINS.has(message.origin.kind);
+  if (message.source !== undefined && INTERNAL_SOURCES.has(message.source)) return true;
+  if (message.origin !== undefined && INTERNAL_ORIGINS.has(message.origin.kind)) return true;
+  return false;
 }
 
 function groupIntoTurns(history: readonly ContextMessage[]): ContextMessage[][] {
@@ -152,7 +201,6 @@ function formatToolCallMarkdown(call: ToolCall, hint: string): string {
   try {
     args = JSON.stringify(JSON.parse(args), null, 2);
   } catch {
-    // Preserve malformed arguments exactly as recorded.
   }
   const suffix = hint ? ` (\`${hint}\`)` : "";
   return `#### Tool Call: ${call.name}${suffix}\n<!-- call_id: ${call.id} -->\n\`\`\`json\n${args}\n\`\`\``;
@@ -178,7 +226,6 @@ function stringifyToolCall(call: ToolCall): string {
   try {
     args = JSON.stringify(JSON.parse(args));
   } catch {
-    // Preserve malformed arguments exactly as recorded.
   }
   return `Tool Call: ${call.name}(${args})`;
 }
@@ -190,9 +237,9 @@ function formatPartsMarkdown(parts: readonly ContentPart[]): string {
 function formatPartMarkdown(part: ContentPart): string {
   switch (part.type) {
     case "text": return part.text;
-    case "think": return part.think.trim()
-      ? `<details><summary>Thinking</summary>\n\n${part.think}\n\n</details>`
-      : "";
+    case "think": return part.hidden === true || !part.think.trim()
+      ? ""
+      : `<details><summary>Thinking</summary>\n\n${part.think}\n\n</details>`;
     case "image_url": return "[image]";
     case "audio_url": return "[audio]";
     case "video_url": return "[video]";
@@ -202,7 +249,7 @@ function formatPartMarkdown(part: ContentPart): string {
 function stringifyParts(parts: readonly ContentPart[]): string {
   return parts.map((part) => {
     if (part.type === "text") return part.text;
-    if (part.type === "think") return part.think.trim() ? `<thinking>\n${part.think}\n</thinking>` : "";
+    if (part.type === "think") return part.hidden === true || !part.think.trim() ? "" : `<thinking>\n${part.think}\n</thinking>`;
     if (part.type === "image_url") return "[image]";
     if (part.type === "audio_url") return "[audio]";
     return "[video]";

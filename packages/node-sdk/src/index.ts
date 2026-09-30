@@ -1,123 +1,32 @@
-export { KimiHarness } from '#/kimi-harness';
-export type { KimiHarnessRuntimeOptions } from '#/kimi-harness';
-export { Session } from '#/session';
-export { KimiAuthFacade } from '#/auth';
 export {
+  KimiHarness,
   createKimiHarness,
-  SDKRpcClientV2,
-  type SDKRpcClientV2Options,
-} from '#/sdk-rpc-client-v2';
+  type KimiConfigFacade,
+  type KimiHarnessOptions,
+} from '#/kimi-harness';
+export { KimiSession } from '#/session';
 export {
-  createKimiConfigRpc,
-  KimiConfigRpcClient,
-  type KimiConfigRpc,
-  type KimiConfigValidationIssue,
-  type KimiConfigValidationPathSegment,
-  type ResolveKimiConfigPathInput,
-  type ValidateKimiConfigTomlInput,
-} from '#/config-rpc';
-export { SDKRpcClientBase } from '#/rpc';
-export { KimiForCodingProvider } from '#/kimi-code-model-provider';
-export type { KimiForCodingProviderOptions } from '#/kimi-code-model-provider';
-export { removeProviderFromConfig } from '#/v2/config-mapper';
-
+  createWorkspaceTrustStore,
+  type WorkspaceTrustStore,
+} from '#/trust';
+export { createTomlConfigPersist } from '#/config-persist';
 export {
-  applyCatalogProvider,
-  catalogBaseUrl,
-  catalogModelToAlias,
-  catalogProviderModels,
-  CatalogFetchError,
-  DEFAULT_CATALOG_URL,
-  fetchCatalog,
-  inferWireType,
-  loadBuiltInCatalog,
-  resolveCatalogImport,
-} from '#/catalog';
-export type {
-  ApplyCatalogProviderOptions,
-  Catalog,
-  CatalogImportInvalidReason,
-  CatalogImportResolution,
-  CatalogModel,
-  CatalogProviderEntry,
-  FetchCatalogOptions,
-} from '#/catalog';
-
+  createKimiAuthConfigAccessor,
+  createKimiConfigStore,
+  createStandaloneKimiAuthConfigAccessor,
+  ensureConfigFile,
+  readKimiConfigSnapshot,
+  type KimiAuthConfig,
+  type KimiAuthConfigAccessor,
+  type KimiAuthConfigStoreView,
+  type KimiConfigSnapshot,
+} from '#/config-accessor';
 export {
-  ErrorCodes,
-  KimiError,
-  type KimiErrorCode,
-  type KimiErrorInfo,
-  type KimiErrorOptions,
-  type KimiErrorPayload,
-  KIMI_ERROR_INFO,
-  fromKimiErrorPayload,
-  isKimiError,
-  toKimiErrorPayload,
-} from '#/errors';
-
-export {
-  flushDiagnosticLogs,
-  flushDiagnosticLogsSync,
-  log,
-  redact,
-  resolveGlobalLogPath,
-} from '#/logging/index';
-export { resolveKimiHome } from '@moonshot-ai/agent-core-v2';
-export type { LogContext, LogLevel, LogPayload, Logger } from '#/logging/index';
-
-export { effectiveModelAlias, loadRuntimeConfigSafe } from '#/config/index';
-export { resolveConfigPath } from '@moonshot-ai/agent-core-v2';
-export { limitAgentReplayByTurns } from '#/replay';
-export { parseAgentFileText, resolveAgentPath } from '@moonshot-ai/agent-core-v2';
-export { SECONDARY_DERIVED_MODEL_ALIAS } from '#/config/index';
-export { PRIMARY_SUBAGENT_MODEL_CHOICE } from '@moonshot-ai/agent-core-v2/session/subagent/configSection';
-
-export { installGlobalProxyDispatcher } from '#/proxy';
-
-export {
-  buildImageCompressionCaption,
-  buildUnsupportedImageNotice,
-  gateImageFormatParts,
-  isModelAcceptedImageMime,
-  normalizeImageMime,
-  parseImageDataUrl,
-  persistOriginalImage,
-  sessionMediaOriginalsDir,
-  IMAGE_BYTE_BUDGET,
-  MAX_IMAGE_EDGE_PX,
-} from '@moonshot-ai/agent-core-v2';
-export { compressBase64ForModel, compressImageForModel, ImageLimits } from '#/image';
-export type {
-  CompressImageOptions,
-  CompressImageResult,
-  CompressBase64Result,
-  ImageCompressionCaptionInput,
-  ImageCompressionTelemetry,
-} from '#/image';
-
-export type {
-  ExperimentalFeatureState,
-  ExperimentalFlagMap,
-  ExperimentalFlagSource,
-  FlagDefinition,
-  FlagDefinitionInput,
-  FlagId,
-  FlagSurface,
-} from '#/flag';
-
-export {
-  buildDaemonFileUrl,
-  buildMediaPathTag,
-  isDaemonFileUrl,
-  matchSingleMediaPathTag,
-  parseDaemonFileUrl,
-} from '@moonshot-ai/agent-core-v2/agent/media/mediaRef';
-export type {
-  DaemonFileRef,
-  MediaKind,
-} from '@moonshot-ai/agent-core-v2/agent/media/mediaRef';
-
+  resolveConfigPath,
+  resolveKimiHome,
+  sanitizeWorkDirKey,
+} from '#/paths';
+export { KimiAuthFacade } from '#/auth';
 export type {
   KimiAuthCompleteFeedbackUploadInput,
   KimiAuthCompleteFeedbackUploadPart,
@@ -125,10 +34,48 @@ export type {
   KimiAuthCreateFeedbackUploadUrlOk,
   KimiAuthCreateFeedbackUploadUrlResult,
   KimiAuthFeedbackUploadPart,
+  KimiAuthLoginOptions,
   KimiAuthLoginResult,
   KimiAuthLogoutResult,
   KimiAuthSubmitFeedbackInput,
+  OAuthRef,
 } from '#/auth';
-
-export * from '#/events';
-export type * from '#/types';
+export { mapOAuthTokenError } from '#/oauth-error';
+export {
+  ErrorCodes,
+  KIMI_ERROR_INFO,
+  KimiError,
+  isKimiError,
+  isKimiErrorCode,
+  type KimiErrorCode,
+  type KimiErrorInfo,
+  type KimiErrorOptions,
+} from '#/errors';
+export {
+  flushDiagnosticLogs,
+  flushDiagnosticLogsSync,
+  log,
+  redact,
+  resolveGlobalLogPath,
+} from '#/logging/index';
+export type { LogContext, LogLevel, LogPayload, Logger } from '#/logging/index';
+export {
+  noopTelemetryClient,
+  withTelemetryContext,
+  type TelemetryClient,
+  type TelemetryContextPatch,
+  type TelemetryProperties,
+  type TelemetryPropertyValue,
+} from '#/telemetry';
+export { installGlobalProxyDispatcher } from '#/proxy';
+export {
+  ImageLimits,
+  compressBase64ForModel,
+  compressImageForModel,
+} from '#/image';
+export type {
+  CompressBase64Result,
+  CompressImageOptions,
+  CompressImageResult,
+  ImageCompressionCaptionInput,
+} from '#/image';

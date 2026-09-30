@@ -2,16 +2,15 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import type { Session } from '@moonshot-ai/kimi-code-sdk';
+import { MAIN_AGENT_ID } from '@moonshot-ai/agent-core';
+import { SessionInitRef } from '@moonshot-ai/harness-core';
 
 import { detectInstallSource } from '#/cli/update/source';
-import { copyTextToClipboard } from '#/utils/clipboard/clipboard-text';
 import { detectShellEnvironment } from '#/utils/process/shell-env';
-import { quoteShellArg } from '#/utils/shell-quote';
 import { toTerminalHyperlink } from '#/utils/terminal-hyperlink';
+
 import { LLM_NOT_SET_MESSAGE, NO_ACTIVE_SESSION_MESSAGE } from '../constant/kimi-tui';
-import { isAbortError } from '../utils/errors';
-import { formatErrorMessage } from '../utils/event-payload';
+import { formatErrorMessage, isAbortError } from '../utils/errors';
 import { buildExportMarkdown } from '../utils/export-markdown';
 import type { SlashCommandHost } from './dispatch';
 
@@ -31,17 +30,16 @@ export async function handleTitleCommand(host: SlashCommandHost, args: string): 
     return;
   }
 
-  let session = host.session;
+  const session = host.session;
   if (session === undefined) {
-    // Setting a title needs a live session; lazy-create it on first use (the
-    // bare read-only form above works session-less).
-    session = await host.ensureSession();
-    if (session === undefined) return;
+    host.showError('No active session. Send a message to start one.');
+    return;
   }
 
   const newTitle = title.slice(0, 200);
   try {
-    await host.harness.renameSession({ id: session.id, title: newTitle });
+    await host.harness.renameSession(session.id, newTitle);
+    host.setAppState({ sessionTitle: newTitle });
   } catch (error) {
     const msg = formatErrorMessage(error);
     host.showError(`Failed to set title: ${msg}`);
@@ -58,66 +56,13 @@ export async function handleForkCommand(host: SlashCommandHost, args: string): P
     return;
   }
 
-  const sourceTitle = forkSourceTitle(host, session);
   try {
-    const forked = await host.harness.forkSession({
-      id: session.id,
-      title: `Fork: ${sourceTitle}`,
-    });
-    const forkId = forked.id;
-    try {
-      await forked.close();
-    } catch (error) {
-      const msg = formatErrorMessage(error);
-      host.showError(`Session forked (${forkId}), but failed to release its runtime: ${msg}`);
-      return;
-    }
-    // Stay in the source session: switching to the fork would close the
-    // source, killing its in-flight turn and background tasks. The fork is
-    // an independent copy the user can switch to explicitly via /sessions,
-    // or enter from a new CLI process with the printed resume command.
-    const command = forkResumeCommand(host.state.appState.workDir, forkId);
-    let clipboardNote: string;
-    try {
-      const method = await copyTextToClipboard(command);
-      // OSC 52 delivery is fire-and-forget: terminals without OSC 52 support
-      // silently drop the sequence, so only native delivery may claim success
-      // (same wording convention as /copy).
-      clipboardNote =
-        method === 'native'
-          ? 'Command copied to clipboard'
-          : 'Command copied via terminal escape sequence (unverified)';
-    } catch {
-      clipboardNote = 'Failed to copy command to clipboard';
-    }
-    host.showStatus(
-      `Session forked (${forkId}). Still in the original session; switch to the fork via /sessions.\n` +
-        `  To enter the fork in a new process, run: ${command}\n` +
-        `  ${clipboardNote}`,
-    );
+    const forked = await host.harness.forkSession(session.id);
+    await host.switchToSession(forked, `Forked session (${forked.id}).`);
   } catch (error) {
     const msg = formatErrorMessage(error);
     host.showError(`Failed to fork session: ${msg}`);
   }
-}
-
-function forkResumeCommand(workDir: string, forkId: string): string {
-  const dir = quoteShellArg(workDir);
-  // cmd.exe's `cd` only updates the given drive's remembered directory — a
-  // terminal on a different drive stays put, and the resume then runs in the
-  // wrong working directory. `pushd` switches drive + directory in both
-  // cmd.exe and PowerShell (`cd /d` would break PowerShell).
-  const changeDir = process.platform === 'win32' ? `pushd ${dir}` : `cd ${dir}`;
-  return `${changeDir} && kimi --resume ${quoteShellArg(forkId)}`;
-}
-
-function forkSourceTitle(host: SlashCommandHost, session: Session): string {
-  const currentTitle = host.state.appState.sessionTitle?.trim();
-  if (currentTitle !== undefined && currentTitle.length > 0) return currentTitle;
-
-  const summaryTitle =
-    typeof session.summary?.title === 'string' ? session.summary.title.trim() : '';
-  return summaryTitle.length > 0 ? summaryTitle : session.id;
 }
 
 export async function handleExportMdCommand(host: SlashCommandHost, args: string): Promise<void> {
@@ -129,8 +74,8 @@ export async function handleExportMdCommand(host: SlashCommandHost, args: string
 
   host.showStatus('Exporting session as Markdown…');
   try {
-    const context = await session.getContext();
-    if (context.history.length === 0) {
+    const history = session.handle.stores.get(MAIN_AGENT_ID)?.getState().history ?? [];
+    if (history.length === 0) {
       host.showError('No messages to export.');
       return;
     }
@@ -148,8 +93,8 @@ export async function handleExportMdCommand(host: SlashCommandHost, args: string
     const md = buildExportMarkdown({
       sessionId: session.id,
       workDir: host.state.appState.workDir,
-      history: context.history,
-      tokenCount: context.tokenCount,
+      history,
+      tokenCount: host.state.appState.contextTokens,
       now,
     });
 
@@ -157,7 +102,7 @@ export async function handleExportMdCommand(host: SlashCommandHost, args: string
     await writeFile(outputPath, md, 'utf-8');
 
     const linked = toTerminalHyperlink(outputPath, pathToFileURL(outputPath).href);
-    host.showNotice(`Exported ${String(context.history.length)} messages`, linked);
+    host.showNotice(`Exported ${String(history.length)} messages`, linked);
   } catch (error) {
     const msg = formatErrorMessage(error);
     host.showError(`Failed to export session: ${msg}`);
@@ -175,9 +120,7 @@ export async function handleExportDebugZipCommand(host: SlashCommandHost): Promi
   try {
     const installSource = await detectInstallSource();
     const shellEnv = detectShellEnvironment();
-    const result = await host.harness.exportSession({
-      id: session.id,
-      version: host.state.appState.version,
+    const result = await host.harness.exportSession(session.id, {
       installSource,
       shellEnv,
       includeGlobalLog: true,
@@ -191,29 +134,35 @@ export async function handleExportDebugZipCommand(host: SlashCommandHost): Promi
 }
 
 export async function handleInitCommand(host: SlashCommandHost): Promise<void> {
-  const session = host.session;
-  if (host.state.appState.model.trim().length === 0 || session === undefined) {
+  if (host.state.appState.model.trim().length === 0) {
     host.showError(LLM_NOT_SET_MESSAGE);
     return;
   }
+  const session = await host.ensureSession();
+  if (session === undefined) return;
 
-  host.deferUserMessages = true;
-  host.beginSessionRequest();
+  const init = session.handle.resolve(SessionInitRef);
+  if (init === undefined) {
+    host.showError('Session init is not available in this session.');
+    return;
+  }
+
+  const spinner = host.showProgressSpinner('Generating AGENTS.md…');
+  const cancel = (): void => {
+    init.cancelInit();
+  };
+  host.cancelInFlight = cancel;
   try {
-    await session.init();
+    await init.generateAgentsMd();
     host.track('init_complete');
-    host.streamingUI.finalizeTurn((item) => {
-      host.sendQueuedMessage(session, item);
-    });
+    spinner.stop({ ok: true, label: 'AGENTS.md generated.' });
   } catch (error) {
     if (isAbortError(error)) {
-      host.setAppState({ streamingPhase: 'idle' });
-      host.resetLivePane();
+      spinner.stop({ ok: false, label: 'Init cancelled.' });
       return;
     }
-    const msg = error instanceof Error ? error.message : String(error);
-    host.failSessionRequest(`Init failed: ${msg}`);
+    spinner.stop({ ok: false, label: `Init failed: ${formatErrorMessage(error)}` });
   } finally {
-    host.deferUserMessages = false;
+    if (host.cancelInFlight === cancel) host.cancelInFlight = undefined;
   }
 }

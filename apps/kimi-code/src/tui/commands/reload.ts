@@ -1,10 +1,10 @@
-import type { KimiConfig } from '@moonshot-ai/kimi-code-sdk';
+import { McpRef, ProfileCatalogRef, SkillCatalogRef } from '@moonshot-ai/harness-core';
+import { PluginRef } from '@moonshot-ai/harness-core/features/plugin/index';
 
 import { currentTheme, lightColors } from '#/tui/theme';
 import { loadTuiConfig, type TuiConfig } from '../config';
 import { setMarkdownRenderLatex } from '../utils/markdown-options';
 import type { SlashCommandHost } from './dispatch';
-import { setExperimentalFeatures } from './experimental-flags';
 
 export async function handleReloadTuiCommand(host: SlashCommandHost): Promise<void> {
   const tuiConfig = await loadTuiConfig(undefined, (message) =>
@@ -15,41 +15,53 @@ export async function handleReloadTuiCommand(host: SlashCommandHost): Promise<vo
 }
 
 export async function handleReloadCommand(host: SlashCommandHost): Promise<void> {
+  const reloaded: string[] = [];
+
+  await host.harness.config.reload();
+  reloaded.push('config');
+
+  const skillCatalog = host.harness.app.resolve(SkillCatalogRef);
+  if (skillCatalog !== undefined) {
+    try {
+      await skillCatalog.reload();
+      reloaded.push('skills');
+    } catch {}
+  }
+
+  const profileCatalog = host.harness.app.resolve(ProfileCatalogRef);
+  if (profileCatalog !== undefined) {
+    try {
+      await profileCatalog.reload();
+      reloaded.push('profiles');
+    } catch {}
+  }
+
+  const plugin = host.harness.app.resolve(PluginRef);
+  if (plugin !== undefined) {
+    try {
+      await plugin.reloadPlugins();
+      reloaded.push('plugins');
+    } catch {}
+  }
+
+  const mcp = host.harness.app.resolve(McpRef);
+  if (mcp !== undefined) {
+    try {
+      await mcp.reload();
+      reloaded.push('mcp');
+    } catch {}
+  }
+
+  host.refreshAvailableModels();
+  host.hydrateLazyConfigDefaults();
+  await host.refreshDynamicCommands();
+
   const tuiConfig = await loadTuiConfig(undefined, (message) =>
     host.showStatus(message, 'warning'),
   );
-  const session = host.session;
-
-  if (session !== undefined) {
-    const reloadedSession = await host.harness.reloadSession({
-      id: session.id,
-      forcePluginSessionStartReminder: true,
-    });
-    await host.reloadCurrentSessionView(reloadedSession, 'Session reloaded.');
-  }
-
-  const config = await host.harness.getConfig({ reload: true });
-  setExperimentalFeatures(await host.harness.getExperimentalFeatures());
-  if (session === undefined) {
-    // Session-less v2: rebuild the workspace-level dynamic commands too, so
-    // skill/plugin changes apply before the first session exists.
-    await host.refreshSkillCommands();
-    await host.refreshPluginCommands();
-  }
-  host.refreshSlashCommandAutocomplete();
-  applyRuntimeConfig(host, config);
   await applyReloadedTuiConfig(host, tuiConfig);
 
-  if (session === undefined) {
-    // Still session-less on the v2 engine: refresh the lazy defaults too, so
-    // defaults edited externally (config.toml, a newly added default model)
-    // reach the first lazy-created session instead of staying stale.
-    await host.hydrateLazyConfigDefaults();
-    host.showStatus(
-      'Runtime and TUI config reloaded; no active session.',
-      'success',
-    );
-  }
+  host.showStatus(`Reloaded: ${reloaded.join(', ')}.`, 'success');
 }
 
 export async function applyReloadedTuiConfig(
@@ -76,11 +88,4 @@ export async function applyReloadedTuiConfig(
     statusLine: config.statusLine,
   });
   host.state.editor.setDisablePasteBurst(config.disablePasteBurst);
-}
-
-function applyRuntimeConfig(host: SlashCommandHost, config: KimiConfig): void {
-  host.setAppState({
-    availableModels: config.models ?? {},
-    availableProviders: config.providers ?? {},
-  });
 }
