@@ -79,14 +79,16 @@ describe('NotifyUserTool', () => {
     ]);
   });
 
-  it('is on by default, can still be turned off, and the default profile allows it', () => {
+  it('is off by default, can be turned on, and the default profile allows it', () => {
     expect(ctx.get(IAgentToolPolicyService).isToolActive(NOTIFY_USER_TOOL_NAME)).toBe(true);
     expect(notifyUserFlag.id).toBe(NOTIFY_USER_FLAG_ID);
     expect(notifyUserFlag.env).toBe(NOTIFY_USER_FLAG_ENV);
-    expect(notifyUserFlag.default).toBe(true);
+    expect(notifyUserFlag.default).toBe(false);
 
     const flags = ctx.get(IFlagService);
     flags.setConfigOverrides({});
+    expect(flags.enabled(NOTIFY_USER_FLAG_ID)).toBe(false);
+    flags.setConfigOverrides({ notify_user: true });
     expect(flags.enabled(NOTIFY_USER_FLAG_ID)).toBe(true);
     flags.setConfigOverrides({ notify_user: false });
     expect(flags.enabled(NOTIFY_USER_FLAG_ID)).toBe(false);
