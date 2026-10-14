@@ -56,13 +56,24 @@ const TILDE_PREFIX = /^~[a-zA-Z0-9._-]*/;
 
 function execServerShellCommand(remoteBin: string): string {
   const tilde = TILDE_PREFIX.exec(remoteBin);
-  let quotedBin = shQuote(remoteBin);
-  if (tilde !== null && remoteBin.length === tilde[0].length) {
-    quotedBin = tilde[0];
-  } else if (tilde !== null && remoteBin.startsWith('/', tilde[0].length)) {
-    quotedBin = `${tilde[0]}${shQuote(remoteBin.slice(tilde[0].length))}`;
+  if (tilde === null) {
+    return [shQuote(remoteBin), ...EXEC_SERVER_ARGV.map(shQuote)].join(' ');
   }
-  return [quotedBin, ...EXEC_SERVER_ARGV.map(shQuote)].join(' ');
+  const prefix = tilde[0];
+  const rest = remoteBin.slice(prefix.length);
+  let bin: string;
+  if (prefix === '~') {
+    bin = rest.length === 0 ? '"$HOME"' : `"$HOME"${shQuote(rest)}`;
+  } else if (rest.length === 0) {
+    bin = prefix;
+  } else if (rest === '/') {
+    bin = `${prefix}/`;
+  } else if (rest.startsWith('/')) {
+    bin = `${prefix}/${shQuote(rest.slice(1))}`;
+  } else {
+    bin = shQuote(remoteBin);
+  }
+  return [bin, ...EXEC_SERVER_ARGV.map(shQuote)].join(' ');
 }
 
 const COMMAND_LAUNCHER_ENV_KEYS: ReadonlySet<string> = new Set([
