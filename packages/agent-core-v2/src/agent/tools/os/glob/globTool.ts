@@ -80,69 +80,74 @@ export class GlobTool implements IGlobTool {
     return { workspaceDir: view.workDir, additionalDirs: view.additionalDirs };
   }
 
-  resolveExecution(args: GlobInput): ToolExecution {
-    const inspected = this.environment.inspect();
-    const expectedGeneration = pinnedGeneration(inspected);
-    const view = new EnvironmentWorkspaceView(inspected, {
-      workDir: this.workspaceCtx.workDir,
-      additionalDirs: [
-        ...this.workspaceCtx.additionalDirs,
-        ...(this.skillCatalog?.catalog.getSkillRoots() ?? []),
-      ],
-    });
-    const env = { _serviceBrand: undefined, ...view.host, ready: Promise.resolve() };
-    const workspace = this.workspaceConfig(view);
-    let path: string | undefined;
-    if (args.path !== undefined) {
-      path = resolvePathAccessPath(args.path, {
-        env,
-        workspace,
-        operation: 'search',
-        policy: { guardMode: 'absolute-outside-allowed', checkSensitive: false },
+  async resolveExecution(args: GlobInput): Promise<ToolExecution> {
+    const resolutionLease = await acquireOrWhenReady(this.environment, ['fs']);
+    try {
+      const inspected = resolutionLease.environment;
+      const expectedGeneration = pinnedGeneration(inspected);
+      const view = new EnvironmentWorkspaceView(inspected, {
+        workDir: this.workspaceCtx.workDir,
+        additionalDirs: [
+          ...this.workspaceCtx.additionalDirs,
+          ...(this.skillCatalog?.catalog.getSkillRoots() ?? []),
+        ],
       });
-    }
-    const searchRoots = [path ?? workspace.workspaceDir];
+      const env = { _serviceBrand: undefined, ...view.host, ready: Promise.resolve() };
+      const workspace = this.workspaceConfig(view);
+      let path: string | undefined;
+      if (args.path !== undefined) {
+        path = resolvePathAccessPath(args.path, {
+          env,
+          workspace,
+          operation: 'search',
+          policy: { guardMode: 'absolute-outside-allowed', checkSensitive: false },
+        });
+      }
+      const searchRoots = [path ?? workspace.workspaceDir];
 
-    const detailParts: string[] = [`pattern: ${args.pattern}`];
-    if (args.path !== undefined) {
-      detailParts.push(`path: ${args.path}`);
-    }
-    if (args.include_ignored === true) {
-      detailParts.push('include_ignored: true');
-    }
+      const detailParts: string[] = [`pattern: ${args.pattern}`];
+      if (args.path !== undefined) {
+        detailParts.push(`path: ${args.path}`);
+      }
+      if (args.include_ignored === true) {
+        detailParts.push('include_ignored: true');
+      }
 
-    return {
-      accesses: ToolAccesses.searchTree(searchRoots[0]!),
-      description: `Searching ${args.pattern}`,
-      display: {
-        kind: 'file_io',
-        operation: 'glob',
-        path: searchRoots[0]!,
-        detail: detailParts.join(', '),
-      },
-      approvalRule: literalRulePattern(this.name, args.pattern),
-      matchesRule: (ruleArgs) => matchesGlobRuleSubject(ruleArgs, args.pattern),
-      execute: async ({ signal }) => {
-        const lease = await acquireOrWhenReady(this.environment, ['fs', 'process']);
-        try {
-          if (expectedGeneration !== undefined && lease.environment.identity.generation !== expectedGeneration) {
-            return { isError: true, output: 'Environment changed before execution. Retry the tool call.' };
+      return {
+        accesses: ToolAccesses.searchTree(searchRoots[0]!),
+        description: `Searching ${args.pattern}`,
+        display: {
+          kind: 'file_io',
+          operation: 'glob',
+          path: searchRoots[0]!,
+          detail: detailParts.join(', '),
+        },
+        approvalRule: literalRulePattern(this.name, args.pattern),
+        matchesRule: (ruleArgs) => matchesGlobRuleSubject(ruleArgs, args.pattern),
+        execute: async ({ signal }) => {
+          const lease = await acquireOrWhenReady(this.environment, ['fs', 'process']);
+          try {
+            if (expectedGeneration !== undefined && lease.environment.identity.generation !== expectedGeneration) {
+              return { isError: true, output: 'Environment changed before execution. Retry the tool call.' };
+            }
+            return await this.execution(
+              lease.environment,
+              lease.environment.fs!,
+              lease.environment.process!,
+              env,
+              workspace,
+              args,
+              signal,
+              searchRoots,
+            );
+          } finally {
+            lease.dispose();
           }
-          return await this.execution(
-            lease.environment,
-            lease.environment.fs!,
-            lease.environment.process!,
-            env,
-            workspace,
-            args,
-            signal,
-            searchRoots,
-          );
-        } finally {
-          lease.dispose();
-        }
-      },
-    };
+        },
+      };
+    } finally {
+      resolutionLease.dispose();
+    }
   }
 
   private async execution(

@@ -84,9 +84,9 @@ const TOOLS: readonly {
 }[] = [
   {
     name: 'GlobTool',
-    execute: (backend) =>
+    execute: async (backend) =>
       finish(
-        new GlobTool(
+        await new GlobTool(
           stubAgentEnvironment(backend),
           stubWorkspaceContext('/workspace'),
           noopTelemetryService,
@@ -95,9 +95,9 @@ const TOOLS: readonly {
   },
   {
     name: 'GrepTool',
-    execute: (backend) =>
+    execute: async (backend) =>
       finish(
-        new GrepTool(
+        await new GrepTool(
           stubAgentEnvironment(backend),
           stubWorkspaceContext('/workspace'),
           noopTelemetryService,

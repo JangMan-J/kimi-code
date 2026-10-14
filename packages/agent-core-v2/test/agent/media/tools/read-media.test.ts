@@ -243,7 +243,7 @@ function noteText(result: ExecutableToolResult): string {
 }
 
 describe('ReadMediaFileTool', () => {
-  it('has name, parameters, and a path-scoped read access', () => {
+  it('has name, parameters, and a path-scoped read access', async () => {
     const tool = makeTool({ '/workspace/sample.png': { data: pngBuffer() } });
 
     expect(tool.name).toBe('ReadMediaFile');
@@ -277,7 +277,7 @@ describe('ReadMediaFileTool', () => {
       properties: { path: { type: 'string' } },
     });
 
-    const execution = tool.resolveExecution({ path: '/workspace/sample.png' }) as Extract<
+    const execution = (await tool.resolveExecution({ path: '/workspace/sample.png' })) as Extract<
       ToolExecution,
       { execute: unknown }
     >;

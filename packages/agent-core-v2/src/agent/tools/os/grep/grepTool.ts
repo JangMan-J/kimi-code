@@ -79,47 +79,52 @@ export class GrepTool implements IGrepTool {
     return { workspaceDir: view.workDir, additionalDirs: view.additionalDirs };
   }
 
-  resolveExecution(args: GrepInput): ToolExecution {
-    const inspected = this.environment.inspect();
-    const expectedGeneration = pinnedGeneration(inspected);
-    const view = new EnvironmentWorkspaceView(inspected, {
-      workDir: this.workspaceCtx.workDir,
-      additionalDirs: [
-        ...this.workspaceCtx.additionalDirs,
-        ...(this.skillCatalog?.catalog.getSkillRoots() ?? []),
-      ],
-    });
-    const env = { _serviceBrand: undefined, ...view.host, ready: Promise.resolve() };
-    const workspace = this.workspace(view);
-    let path: string | undefined;
-    if (args.path !== undefined) {
-      path = resolvePathAccessPath(args.path, {
-        env,
-        workspace,
-        operation: 'search',
-        policy: { guardMode: 'absolute-outside-allowed', checkSensitive: false },
+  async resolveExecution(args: GrepInput): Promise<ToolExecution> {
+    const resolutionLease = await acquireOrWhenReady(this.environment, ['fs']);
+    try {
+      const inspected = resolutionLease.environment;
+      const expectedGeneration = pinnedGeneration(inspected);
+      const view = new EnvironmentWorkspaceView(inspected, {
+        workDir: this.workspaceCtx.workDir,
+        additionalDirs: [
+          ...this.workspaceCtx.additionalDirs,
+          ...(this.skillCatalog?.catalog.getSkillRoots() ?? []),
+        ],
       });
-    }
-    const searchPaths = [path ?? workspace.workspaceDir];
-    const searchPath = args.path ?? workspace.workspaceDir;
-    return {
-      accesses: ToolAccesses.searchTree(searchPaths[0]!),
-      description: `Searching for '${args.pattern}' in ${searchPath}`,
-      display: { kind: 'file_io', operation: 'grep', path: searchPaths[0]! },
-      approvalRule: literalRulePattern(this.name, args.pattern),
-      matchesRule: (ruleArgs) => matchesGlobRuleSubject(ruleArgs, args.pattern),
-      execute: async ({ signal }) => {
-        const lease = await acquireOrWhenReady(this.environment, ['fs', 'process']);
-        try {
-          if (expectedGeneration !== undefined && lease.environment.identity.generation !== expectedGeneration) {
-            return { isError: true, output: 'Environment changed before execution. Retry the tool call.' };
+      const env = { _serviceBrand: undefined, ...view.host, ready: Promise.resolve() };
+      const workspace = this.workspace(view);
+      let path: string | undefined;
+      if (args.path !== undefined) {
+        path = resolvePathAccessPath(args.path, {
+          env,
+          workspace,
+          operation: 'search',
+          policy: { guardMode: 'absolute-outside-allowed', checkSensitive: false },
+        });
+      }
+      const searchPaths = [path ?? workspace.workspaceDir];
+      const searchPath = args.path ?? workspace.workspaceDir;
+      return {
+        accesses: ToolAccesses.searchTree(searchPaths[0]!),
+        description: `Searching for '${args.pattern}' in ${searchPath}`,
+        display: { kind: 'file_io', operation: 'grep', path: searchPaths[0]! },
+        approvalRule: literalRulePattern(this.name, args.pattern),
+        matchesRule: (ruleArgs) => matchesGlobRuleSubject(ruleArgs, args.pattern),
+        execute: async ({ signal }) => {
+          const lease = await acquireOrWhenReady(this.environment, ['fs', 'process']);
+          try {
+            if (expectedGeneration !== undefined && lease.environment.identity.generation !== expectedGeneration) {
+              return { isError: true, output: 'Environment changed before execution. Retry the tool call.' };
+            }
+            return await this.execution(lease.environment, lease.environment.process!, lease.environment.fs!, env, workspace, args, signal, searchPaths);
+          } finally {
+            lease.dispose();
           }
-          return await this.execution(lease.environment, lease.environment.process!, lease.environment.fs!, env, workspace, args, signal, searchPaths);
-        } finally {
-          lease.dispose();
-        }
-      },
-    };
+        },
+      };
+    } finally {
+      resolutionLease.dispose();
+    }
   }
 
   private async execution(

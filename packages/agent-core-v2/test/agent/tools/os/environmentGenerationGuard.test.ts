@@ -17,7 +17,7 @@ import type { IAgentProfileService } from '#/agent/profile/profile';
 import type { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
 import type { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
 import type { WorkspaceConfig } from '#/tool/path-access';
-import type { ExecutableToolContext, ExecutableToolResult, ToolExecution } from '#/tool/toolContract';
+import { ToolAccesses, type ExecutableToolContext, type ExecutableToolResult, type ToolExecution } from '#/tool/toolContract';
 import { ensureRgPath } from '#/os/backends/node-local/tools/rgLocator';
 import { EditTool } from '#/agent/tools/edit/editTool';
 import { GlobTool } from '#/agent/tools/os/glob/globTool';
@@ -314,4 +314,66 @@ describe('tool environment generation guard', () => {
       tool.expectOutcome(result);
     });
   }
+});
+
+describe('tilde resolution against the reconnected host', () => {
+  function pendingThenReadyHarness(host: Partial<NonNullable<Environment['host']>>) {
+    const registry = new EnvironmentRegistry();
+    const calls: string[] = [];
+    const ready = Object.assign(
+      new FakeEnvironment(
+        { ...BINDING, generation: 'remote-ready' },
+        { status: 'ready', capabilities: ['fs', 'process'], host },
+      ),
+      { fs: createFakeHostFs(), process: {} },
+    );
+    let registration: EnvironmentRegistrationHandle;
+    const pending = Object.assign(
+      new FakeEnvironment(
+        { ...BINDING, generation: 'remote-pending' },
+        { status: 'pending', capabilities: [] },
+      ),
+      {
+        host: undefined,
+        connect: async () => {
+          calls.push('connect');
+          await registration.remove();
+          registry.register(ready);
+        },
+      },
+    );
+    registration = registry.register(pending);
+    return { registry, service: registryBackedService(registry), calls };
+  }
+
+  it('resolves ~ against the reconnected host home instead of /', async () => {
+    const { service, calls } = pendingThenReadyHarness({ homeDir: '/home/me' });
+    const tool = new GlobTool(service, stubWorkspaceContext('/workspace'), noopTelemetryService);
+    const execution = await tool.resolveExecution({ pattern: '**/*.ts', path: '~/projects' });
+    expect(calls).toEqual(['connect']);
+    expect((execution as Extract<ToolExecution, { execute: unknown }>).accesses).toEqual(
+      ToolAccesses.searchTree('/home/me/projects'),
+    );
+  });
+
+  it('fails the tool call instead of resolving ~ against / when reconnect fails', async () => {
+    const registry = new EnvironmentRegistry();
+    const pending = Object.assign(
+      new FakeEnvironment(
+        { ...BINDING, generation: 'remote-pending' },
+        { status: 'pending', capabilities: [] },
+      ),
+      {
+        host: undefined,
+        connect: async () => {
+          throw new Error('connection refused');
+        },
+      },
+    );
+    registry.register(pending);
+    const tool = new GlobTool(registryBackedService(registry), stubWorkspaceContext('/workspace'), noopTelemetryService);
+    await expect(tool.resolveExecution({ pattern: '**/*.ts', path: '~/projects' })).rejects.toThrow(
+      'connection refused',
+    );
+  });
 });
