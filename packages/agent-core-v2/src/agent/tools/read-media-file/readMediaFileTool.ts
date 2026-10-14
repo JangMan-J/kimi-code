@@ -209,15 +209,18 @@ export class ReadMediaFileTool implements AgentTool<ReadMediaFileInput> {
     data: Buffer,
     mimeType: string,
     safePath: string,
+    signal?: AbortSignal,
   ): Promise<ContentPart> {
+    signal?.throwIfAborted();
     if (this.videoUploader !== undefined) {
       try {
         return await this.videoUploader({
           data,
           mimeType,
           filename: safePath.split(/[\\/]/).at(-1),
-        });
+        }, { signal });
       } catch (error) {
+        if (signal?.aborted) throw error;
         if (shouldSurfaceVideoUploadError(error, this.inlineVideoSupported)) throw error;
       }
     }
@@ -255,13 +258,13 @@ export class ReadMediaFileTool implements AgentTool<ReadMediaFileInput> {
           pathClass: env.pathClass,
           homeDir: env.homeDir,
         }),
-      execute: async () => {
+      execute: async ({ signal }) => {
         const lease = await acquireOrWhenReady(this.environment, ['fs']);
         try {
           if (expectedGeneration !== undefined && lease.environment.identity.generation !== expectedGeneration) {
             return { isError: true, output: 'Environment changed before execution. Retry the tool call.' };
           }
-          return await this.execution(args, environmentFileSource(lease.environment.fs!, path), env);
+          return await this.execution(args, environmentFileSource(lease.environment.fs!, path), env, signal);
         } finally {
           lease.dispose();
         }
@@ -277,8 +280,8 @@ export class ReadMediaFileTool implements AgentTool<ReadMediaFileInput> {
       display: { kind: 'file_io', operation: 'read', path: source.localPath ?? args.path },
       approvalRule: literalRulePattern(this.name, args.path),
       matchesRule: (ruleArgs) => matchesGlobRuleSubject(ruleArgs, args.path),
-      execute: async () => withAttachmentLocation(
-        await this.execution(args, source, { osKind: 'unknown' }), source,
+      execute: async ({ signal }) => withAttachmentLocation(
+        await this.execution(args, source, { osKind: 'unknown' }, signal), source,
       ),
     };
   }
@@ -287,12 +290,14 @@ export class ReadMediaFileTool implements AgentTool<ReadMediaFileInput> {
     args: ReadMediaFileInput,
     source: FileReadSource,
     env: Pick<HostEnvironmentInfo, 'osKind'>,
+    signal?: AbortSignal,
   ): Promise<ExecutableToolResult> {
     if (!args.path) {
       return { isError: true, output: 'File path cannot be empty.' };
     }
 
     try {
+      signal?.throwIfAborted();
       const safePath = source.name;
       const header = await source.readBytes(MEDIA_SNIFF_BYTES);
       const fileType = detectFileType(safePath, header, 'media');
@@ -506,7 +511,7 @@ export class ReadMediaFileTool implements AgentTool<ReadMediaFileInput> {
           }
         }
       } else {
-        mediaPart = await this.videoContentPart(data, fileType.mimeType, safePath);
+        mediaPart = await this.videoContentPart(data, fileType.mimeType, safePath, signal);
       }
 
       const tag = fileType.kind === 'image' ? 'image' : 'video';
@@ -528,8 +533,10 @@ export class ReadMediaFileTool implements AgentTool<ReadMediaFileInput> {
         { type: 'text', text: closeText },
       ];
 
+      signal?.throwIfAborted();
       return { output, note, isError: false };
     } catch (error) {
+      if (signal?.aborted) throw error;
       return {
         isError: true,
         output: `Failed to read ${args.path}: ${error instanceof Error ? error.message : String(error)}`,

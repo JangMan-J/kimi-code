@@ -5,7 +5,6 @@ import type {
 } from '@moonshot-ai/agent-core-v2/app/sessionExport/sessionExport';
 import type { EnvironmentStatus as SessionEnvironmentStatus } from '@moonshot-ai/agent-core-v2/environment/environment';
 import type { RemoteEnvironmentEntry } from '@moonshot-ai/agent-core-v2/environment/remoteEnvironmentDeclaration';
-import type { Kaos } from '@moonshot-ai/kaos';
 import type { KimiHostIdentity, OAuthRefreshOutcome } from '@moonshot-ai/kimi-code-oauth';
 import type { ContentPart } from '@moonshot-ai/kosong';
 
@@ -22,6 +21,10 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { readonly [key: string]: 
 export type JsonObject = { readonly [key: string]: JsonValue };
 
 export type { ImportCustomRegistryOptions, ImportCustomRegistryResult } from '@moonshot-ai/klient';
+export type {
+  RefreshProviderModelsOptions,
+  RefreshProviderModelsResponse,
+} from '@moonshot-ai/klient';
 
 export type Unsubscribe = () => void;
 
@@ -276,8 +279,6 @@ export interface CreateSessionOptions {
   readonly permission?: PermissionMode | undefined;
   readonly planMode?: boolean;
   readonly metadata?: JsonObject | undefined;
-  readonly kaos?: Kaos | undefined;
-  readonly persistenceKaos?: Kaos | undefined;
   readonly additionalDirs?: readonly string[];
   /**
    * Main-agent profile name (`--agent`): a builtin profile or one defined by
@@ -329,8 +330,6 @@ export interface GenerateSessionTitleInput {
 
 export interface ResumeSessionInput {
   readonly id: string;
-  readonly kaos?: Kaos | undefined;
-  readonly persistenceKaos?: Kaos | undefined;
   readonly additionalDirs?: readonly string[];
   /** Re-select the session's already-bound main profile; a different name fails. */
   readonly agentProfile?: string;

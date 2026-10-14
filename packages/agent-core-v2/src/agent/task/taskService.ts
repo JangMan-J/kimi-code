@@ -30,7 +30,12 @@ import { IAgentLoopService, type LoopNotifyHandle } from '#/agent/loop/loop';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IAgentStateService } from '#/agent/state/agentState';
 import { environmentTempTarget, IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
+import { IAgentToolPolicyService } from '#/agent/toolPolicy/toolPolicy';
+import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
+import { WAIT_FOR_FLAG_ID } from '#/agent/tools/task/task-wait/flag';
+import { IFlagService } from '#/app/flag/flag';
 import { ITaskService, type ITaskHandle, TERMINAL_TASK_STATES } from '#/app/task/task';
+import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
 import {
   TERMINAL_STATUSES,
   type AgentTaskInfoBase,
@@ -172,6 +177,9 @@ const ACTIVE_BACKGROUND_TASK_GUIDANCE = [
   'Do not start duplicates. Use TaskList to list them, TaskOutput for a non-blocking status/output snapshot, and TaskStop to cancel one — completion arrives via automatic notification.',
 ].join(' ');
 
+export const SUBAGENT_BACKGROUND_TASK_NOTICE =
+  'You are running as a subagent: ending your turn is your final hand-off to the parent agent, and completion notifications that arrive after it reach no one. Do not end your turn while a background task whose result you need is still running. Keep waiting for it with WaitFor, calling it again after a timeout if needed, or run the command in the foreground with a suitable timeout instead. Still use the waiting time for other useful work on your task when you can.';
+
 export function isAgentTaskTerminal(status: AgentTaskStatus): boolean {
   return TERMINAL_STATUSES.has(status);
 }
@@ -232,6 +240,9 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
     @ILogService private readonly log: ILogService,
     @IAgentStateService private readonly states: IAgentStateService,
     @IAgentEnvironmentService private readonly environment: IAgentEnvironmentService,
+    @IFlagService flags: IFlagService,
+    @IAgentToolRegistryService tools: IAgentToolRegistryService,
+    @IAgentToolPolicyService policy: IAgentToolPolicyService,
   ) {
     super();
     this.states.contributeState(taskKey);
@@ -284,6 +295,19 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
         this.activeBackgroundTaskReminder(),
       ),
     );
+    if (this.scopeContext.agentId !== MAIN_AGENT_ID) {
+      this._register(
+        this.reminder.register('subagent_background_task', ({ lastInjectedAt }) => {
+          if (
+            lastInjectedAt !== null ||
+            !flags.enabled(WAIT_FOR_FLAG_ID) ||
+            tools.resolve('WaitFor') === undefined ||
+            !policy.isToolActive('WaitFor')
+          ) return undefined;
+          return SUBAGENT_BACKGROUND_TASK_NOTICE;
+        }),
+      );
+    }
   }
 
   private get ghosts(): Map<string, AgentTaskInfo> {

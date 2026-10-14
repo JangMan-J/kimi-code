@@ -34,6 +34,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     ],
     [
       "DELETE",
+      "/api/v1/remote-control/devices/{id}",
+    ],
+    [
+      "DELETE",
       "/api/v1/workspaces/{workspace_id}",
     ],
     [
@@ -175,6 +179,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     [
       "GET",
       "/api/v1/remote-control",
+    ],
+    [
+      "GET",
+      "/api/v1/remote-control/devices",
     ],
     [
       "GET",
@@ -334,6 +342,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     ],
     [
       "PATCH",
+      "/api/v1/remote-control/devices/{id}",
+    ],
+    [
+      "PATCH",
       "/api/v1/workspaces/{workspace_id}",
     ],
     [
@@ -419,6 +431,10 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     [
       "POST",
       "/api/v1/remote-control",
+    ],
+    [
+      "POST",
+      "/api/v1/remote-control/devices/{id}/deactivate",
     ],
     [
       "POST",
