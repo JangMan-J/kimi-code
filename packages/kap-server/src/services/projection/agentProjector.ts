@@ -1379,7 +1379,7 @@ export class AgentMessageProjector {
   }
 
   private onPromptSubmitted(event: {
-    clientMetadata?: Record<string, unknown>[];
+    clientMetadata?: readonly Readonly<Record<string, unknown>>[];
     promptId: string;
     userMessageId: string;
     status: 'running' | 'queued';
@@ -1393,13 +1393,13 @@ export class AgentMessageProjector {
       content: event.content,
       status: event.status,
       createdAt: prev?.createdAt ?? event.createdAt,
-      clientMetadata: event.clientMetadata,
+      clientMetadata: clientMetadataOf(event),
     });
     return [];
   }
 
   private onPromptQueued(event: {
-    clientMetadata?: Record<string, unknown>[];
+    clientMetadata?: readonly Readonly<Record<string, unknown>>[];
     promptId: string;
     content: readonly ContentPart[];
   }): ServerMessage[] {
@@ -1411,7 +1411,7 @@ export class AgentMessageProjector {
         content: event.content,
         status: 'queued',
         createdAt: nowIso(),
-        clientMetadata: event.clientMetadata,
+        clientMetadata: clientMetadataOf(event),
       };
       this.prompts.set(event.promptId, prev);
     }
@@ -1419,7 +1419,7 @@ export class AgentMessageProjector {
     const user: UserRecord = {
       messageId: prev.userMessageId,
       text: wireContentParts(prev.content),
-      clientMetadata: event.clientMetadata ?? prev.clientMetadata,
+      clientMetadata: clientMetadataOf(event) ?? prev.clientMetadata,
       status: 'unread',
     };
     this.users.set(user.messageId, user);
