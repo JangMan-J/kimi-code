@@ -18,6 +18,8 @@ import type {
   ForkSessionInput,
   GenerateSessionTitleInput,
   GetConfigOptions,
+  ImportCustomRegistryOptions,
+  ImportCustomRegistryResult,
   GlobalMcpServerAuthStatus,
   KimiConfig,
   KimiConfigPatch,
@@ -35,6 +37,8 @@ import type {
   RenameSessionInput,
   ResumeSessionInput,
   ReloadSessionInput,
+  RefreshProviderModelsOptions,
+  RefreshProviderModelsResponse,
   SessionSummary,
   SessionSummaryPage,
   SkillSummary,
@@ -123,12 +127,20 @@ export class KimiHarness {
     this.telemetry.track(event, properties);
   }
 
+  trackWithContext(
+    event: string,
+    properties: TelemetryProperties | undefined,
+    context: TelemetryContextPatch,
+  ): void {
+    withTelemetryContext(this.telemetry, context).track(event, properties);
+  }
+
   setTelemetryContext(patch: TelemetryContextPatch): void {
     this.telemetry.setContext?.(patch);
   }
 
   async createSession(options: CreateSessionOptions): Promise<Session> {
-    const { planMode, sessionStartedProperties, ...coreOptions } = options;
+    const { planMode, sessionStartedProperties, ...coreOptions } = stripLegacyKaosOptions(options);
     const summary = await this.rpc.createSession(coreOptions);
     const session = new Session({
       id: summary.id,
@@ -156,7 +168,7 @@ export class KimiHarness {
     const {
       sessionStartedProperties: _sessionStartedProperties,
       ...resumeInput
-    } = input;
+    } = stripLegacyKaosOptions(input);
     // A session whose close is in flight (`isClosed` but not yet unmapped)
     // is not a valid resume target — fall through and re-resume fresh, which
     // the engine serializes behind that close.
@@ -186,7 +198,7 @@ export class KimiHarness {
   }
 
   private async doResumeSession(input: ResumeSessionInput, id: string): Promise<Session> {
-    const { sessionStartedProperties, ...resumeInput } = input;
+    const { sessionStartedProperties, ...resumeInput } = stripLegacyKaosOptions(input);
     const summary = await this.rpc.resumeSession({ ...resumeInput, id });
     const session = new Session({
       id: summary.id,
@@ -450,22 +462,16 @@ export class KimiHarness {
     return this.rpc.removeProvider(providerId);
   }
 
-  /**
-   * Whether several config sections can be persisted as ONE atomic write
-   * (see {@link replaceConfigSections}). False on the v1 harness.
-   */
-  supportsAtomicSectionReplace(): boolean {
-    return this.rpc.supportsAtomicSectionReplace();
+  async importCustomRegistry(
+    options: ImportCustomRegistryOptions,
+  ): Promise<ImportCustomRegistryResult> {
+    return this.rpc.importCustomRegistry(options);
   }
 
-  /**
-   * Replace several top-level config sections in ONE atomic write: a section
-   * mapped to `undefined` is cleared, absent sections are left untouched.
-   * Replace semantics (unlike {@link setConfig}'s deep-merge), so staged
-   * removals are expressed by the written record itself.
-   */
-  async replaceConfigSections(sections: Record<string, unknown>): Promise<void> {
-    return this.rpc.replaceConfigSections(sections);
+  async refreshProviderModels(
+    options?: RefreshProviderModelsOptions,
+  ): Promise<RefreshProviderModelsResponse> {
+    return this.rpc.refreshProviderModels(options);
   }
 
   /**
@@ -643,7 +649,20 @@ export class KimiHarness {
 const DEFAULT_SESSION_STARTED_UI_MODE = 'shell';
 
 function resumeCoalesceKey(id: string, input: ResumeSessionInput): string {
-  return JSON.stringify({ ...input, id });
+  return JSON.stringify({ ...stripLegacyKaosOptions(input), id });
+}
+
+function stripLegacyKaosOptions<T extends object>(input: T): T {
+  // JavaScript hosts may still pass the removed kaos options; keep them out of
+  // forwarded RPC inputs and serialized keys — custom implementations can hold
+  // circular runtime handles.
+  const { kaos, persistenceKaos, ...rest } = input as T & {
+    kaos?: unknown;
+    persistenceKaos?: unknown;
+  };
+  void kaos;
+  void persistenceKaos;
+  return rest as T;
 }
 
 function normalizeSessionId(value: string): string {

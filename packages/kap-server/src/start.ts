@@ -1,3 +1,4 @@
+import { registerWsV3, WS_PATH_V3 } from './transport/ws/v3/registerWsV3';
 import {
   bootstrap,
   drainQueryStoreDisposals,
@@ -17,6 +18,7 @@ import {
   ICapabilityService,
   IPluginService,
   IWorkspaceService,
+  NOTIFY_USER_UI_CAPABILITY,
   PluginChanged,
   logSeed,
   resolveConfigPath,
@@ -28,6 +30,7 @@ import {
 } from '@moonshot-ai/agent-core-v2';
 import {
   createKimiDefaultHeaders,
+  KIMI_CODE_PROVIDER_NAME,
   kimiRegionProfile,
   type KimiHostIdentity,
 } from '@moonshot-ai/kimi-code-oauth';
@@ -57,7 +60,6 @@ import {
 } from './transport/ws/connectionRegistry';
 import { extractWsBearerToken } from './transport/ws/bearerProtocol';
 import { registerWsDebug, WS_DEBUG_PATH } from './transport/ws/debug/registerWsDebug';
-import { registerWsV3, WS_PATH_V3 } from './transport/ws/v3/registerWsV3';
 import { getServerVersion } from './version';
 import { classify } from './security/bindClassify';
 import {
@@ -78,7 +80,10 @@ import { ProjectionService } from './services/projection';
 import { ModelCatalogRefreshScheduler } from './services/modelCatalog/modelCatalogRefreshScheduler';
 import { startConfigChangedPublisher } from './services/config/configChangedPublisher';
 import { createAuthFailureLimiter } from './middleware/rateLimit';
-import { createRemoteControlManager } from '@moonshot-ai/remote-control';
+import {
+  createRemoteControlManager,
+  RemoteControlDeviceClient,
+} from '@moonshot-ai/remote-control';
 
 import { createAuthTokenService, type IAuthTokenService } from './services/auth/authTokenService';
 import { createCredentialValidator } from './services/auth/credentials';
@@ -192,18 +197,6 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
   const logging = resolveLoggingConfig({ homeDir, env: process.env });
   let boundPort = port;
   const localOriginHost = host.includes(':') ? `[${host}]` : host;
-  const remoteControlManager = createRemoteControlManager({
-    homeDir,
-    localOrigin: () => `http://${localOriginHost}:${boundPort}`,
-    localServerToken: () => authTokenService.getToken(),
-    clientVersion: `kimi-code/${serverVersion}`,
-    stderr: {
-      write: (text) => {
-        logger.warn(String(text).trimEnd());
-        return true;
-      },
-    },
-  });
   const { app: core } = bootstrap(
     {
       homeDir,
@@ -215,10 +208,37 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
         skillDirs: opts.skillDirs,
         displayName: opts.hostIdentity.displayName,
         replyStyleGuide: opts.hostIdentity.replyStyleGuide,
+        uiCapabilities: [NOTIFY_USER_UI_CAPABILITY],
       },
     },
     [...logSeed(logging), ...(opts.seeds ?? [])],
   );
+
+  const readManagedOAuth = (): { key?: string; oauthHost?: string } | undefined =>
+    core.accessor
+      .get(IConfigService)
+      .inspect<Record<string, { oauth?: { key: string; oauthHost?: string } }>>('providers')
+      .userValue?.[KIMI_CODE_PROVIDER_NAME]?.oauth;
+  const remoteControlManager = createRemoteControlManager({
+    homeDir,
+    localOrigin: () => `http://${localOriginHost}:${boundPort}`,
+    localServerToken: () => authTokenService.getToken(),
+    clientVersion: `${opts.hostIdentity.productName}/${opts.hostIdentity.version}`,
+    urlSource: opts.hostIdentity.platform,
+    configuredOAuthKey: () => readManagedOAuth()?.key,
+    configuredOAuthHost: () => readManagedOAuth()?.oauthHost,
+    stderr: {
+      write: (text) => {
+        logger.warn(String(text).trimEnd());
+        return true;
+      },
+    },
+  });
+  const remoteControlDevices = new RemoteControlDeviceClient({
+    homeDir,
+    configuredOAuthKey: () => readManagedOAuth()?.key,
+    configuredOAuthHost: () => readManagedOAuth()?.oauthHost,
+  });
 
   let telemetry: ServerTelemetry = {};
   if (opts.telemetry === true) {
@@ -444,11 +464,13 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
         process.env['KIMI_CODE_PLUGIN_MARKETPLACE_FROM_DEV_SERVER'] === '1'),
     remoteControl: {
       service: remoteControlManager,
+      devices: remoteControlDevices,
+      homeDir,
       staticEnableError:
         exposureClass !== 'loopback' ? 'Remote Control requires a loopback host.' : undefined,
     },
     onShutdown: () => {
-      void close().catch((err: unknown) => logger.error({ err }, 'server close failed'));
+      void close().catch((error: unknown) => logger.error({ err: error }, 'server close failed'));
     },
     connectionRegistry,
     homeDir,

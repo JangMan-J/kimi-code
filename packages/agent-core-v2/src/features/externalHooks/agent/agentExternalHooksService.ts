@@ -372,19 +372,16 @@ export class AgentExternalHooksService extends Service implements IAgentExternal
 
     const append = renderUserPromptHookResult(results);
     if (append !== undefined) {
-      this.context.append({
-        role: 'user',
-        content: [...createHistoryMessageBuilder().xml(append.text).parts()],
-        toolCalls: [],
-        origin: { kind: 'hook_result', event: append.event },
-      });
-      void this.dispatcher.dispatch(
-        new HookResult({
-          agentId: this.scopeContext.agentId,
-          hookEvent: append.event,
-          content: append.message,
-        }),
-      );
+      ctx.hookParts.push(...append.parts);
+      for (const message of append.messages) {
+        void this.dispatcher.dispatch(
+          new HookResult({
+            agentId: this.scopeContext.agentId,
+            hookEvent: append.event,
+            content: message,
+          }),
+        );
+      }
     }
     return false;
   }

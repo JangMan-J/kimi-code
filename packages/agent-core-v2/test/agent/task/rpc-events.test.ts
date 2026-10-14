@@ -659,6 +659,7 @@ describe('AgentTaskService — notification delivery', () => {
     const text = message.content[0]!.text;
     expect(text).toContain('Background process completed');
     expect(text).toContain('shell task completed.');
+    expect(text).toMatch(/Wall time: \d+\.\d{3} seconds/);
   });
 
   it('enqueues stopped process task notifications into the turn flow', async () => {
@@ -1166,7 +1167,7 @@ describe('AgentTaskService — notification delivery', () => {
         sink: 'context',
         notificationType: 'task.completed',
         title: 'Background agent completed',
-        body: 'inspect repository completed.',
+        body: expect.stringMatching(/^Wall time: \d+\.\d{3} seconds\ninspect repository completed\.$/),
         severity: 'info',
         sourceKind: 'background_task',
         sourceId: taskId,
@@ -1220,7 +1221,7 @@ describe('AgentTaskService — notification delivery', () => {
         sink: 'context',
         notificationType: 'task.completed',
         title: 'Background process completed',
-        body: 'done completed.',
+        body: expect.stringMatching(/^Wall time: \d+\.\d{3} seconds\ndone completed\.$/),
         severity: 'info',
         sourceKind: 'background_task',
         sourceId: taskId,

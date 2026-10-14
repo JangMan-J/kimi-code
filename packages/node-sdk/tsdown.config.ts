@@ -20,6 +20,9 @@ export default defineConfig({
     ].join('\n'),
   },
   alias: {
+    '@moonshot-ai/kimi-code-oauth/provider-credential': fileURLToPath(
+      new URL('../oauth/src/provider-credential.ts', import.meta.url),
+    ),
     '@moonshot-ai/kimi-code-oauth': fileURLToPath(new URL('../oauth/src/index.ts', import.meta.url)),
   },
   deps: {

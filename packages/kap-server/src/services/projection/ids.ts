@@ -60,6 +60,7 @@ export function isCompactionSystemId(id: string): boolean {
 }
 
 export function isUndoAnchorOrigin(origin: unknown): boolean {
+  if (origin !== null && typeof origin === 'object' && 'inTurn' in origin && origin.inTurn === true) return false;
   const kind = (origin as { kind?: unknown } | null | undefined)?.kind;
   if (kind === undefined || kind === 'user') return true;
   const trigger = (origin as { trigger?: unknown } | null | undefined)?.trigger;

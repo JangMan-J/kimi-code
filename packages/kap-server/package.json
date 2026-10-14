@@ -2,7 +2,7 @@
   "name": "@moonshot-ai/kap-server",
   "version": "0.2.3",
   "private": true,
-  "description": "Kimi Code server backed by the DI × Scope agent engine (agent-core-v2)",
+  "description": "Kimi Code server backed by the DI \u00d7 Scope agent engine (agent-core-v2)",
   "type": "module",
   "exports": {
     ".": {
@@ -13,10 +13,6 @@
       "types": "./src/contract.ts",
       "default": "./src/contract.ts"
     },
-    "./protocol": {
-      "types": "./src/protocol/messages/index.ts",
-      "default": "./src/protocol/messages/index.ts"
-    },
     "./search-worker-runtime": {
       "types": "./src/search/worker/runtime.ts",
       "default": "./src/search/worker/runtime.ts"
@@ -24,6 +20,10 @@
     "./protocol/*": {
       "types": "./src/protocol/*.ts",
       "default": "./src/protocol/*.ts"
+    },
+    "./protocol": {
+      "types": "./src/protocol/messages/index.ts",
+      "default": "./src/protocol/messages/index.ts"
     }
   },
   "scripts": {

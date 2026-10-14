@@ -119,7 +119,8 @@
  *   `ISessionBtwService`; `setSwarmMode` / `swarm` → the agent scope's
  *   `IAgentSwarmService` (the v2 port of v1's `SwarmMode`), with `swarm()`
  *   recomposed over the `setSwarmMode` + `prompt` overrides; `setTowerMode` →
- *   the agent scope's `IAgentTowerService` (v2-only — the base class throws
+ *   the agent scope's `IAgentTowerService`; `getTowerStatus` → the shared
+ *   tower status summary reader (v2-only — the base class throws
  *   `not_implemented`).
  *   `toolCall` keeps the base class's "not supported" answer, which the
  *   interaction bridge already relies on.
@@ -129,14 +130,11 @@ import { join } from 'node:path';
 
 import { encodeWorkDirKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
 import { McpConnectionManager } from '@moonshot-ai/agent-core-v2/mcpCore/connection-manager';
-import {
-  loadMcpServers,
-  loadMcpServersDetailed,
-  resolveMcpJsonPaths,
-} from '@moonshot-ai/agent-core-v2/app/mcpConfig/configLoader';
+import { ITowerRateLimitService } from '@moonshot-ai/agent-core-v2/features/tower/towerRateLimit';
+import { readTowerStatusSummary } from '@moonshot-ai/agent-core-v2/features/tower/tools/status/statusReader';
+import { loadMcpServers } from '@moonshot-ai/agent-core-v2/app/mcpConfig/configLoader';
 import { fsSuggestRequestSchema } from '@moonshot-ai/agent-core-v2/workspace/workspaceFs/fs';
 import { IAppendLogStore } from '@moonshot-ai/agent-core-v2/persistence/interface/appendLogStore';
-import type { McpServerConfig as WorkspaceMcpServerConfig } from '@moonshot-ai/agent-core-v2/mcpCore/config-schema';
 import {
   bootstrap,
   DEFAULT_AGENT_PROFILE_NAME,
@@ -225,7 +223,16 @@ import {
   type ServicesAccessor,
   type SessionSummary as V2SessionSummary,
 } from '@moonshot-ai/agent-core-v2';
-import type { AgentHandle, Klient } from '@moonshot-ai/klient';
+import {
+  RPCError,
+  type AgentHandle,
+  type Klient,
+  type ImportCustomRegistryOptions,
+  type ImportCustomRegistryResult,
+  type RefreshProviderModelsOptions,
+  type RefreshProviderModelsResponse,
+} from '@moonshot-ai/klient';
+import { RegistryImportError } from '#/catalog';
 import { createKlient } from '@moonshot-ai/klient/memory';
 import { assertKimiHostIdentity, createKimiDefaultHeaders } from '@moonshot-ai/kimi-code-oauth';
 
@@ -236,7 +243,6 @@ import { ErrorCodes, isKimiErrorCode, KimiError, type KimiErrorCode } from '#/er
 import type { ExperimentalFeatureState } from '#/flag';
 import { KimiHarness } from '#/kimi-harness';
 import type { BeginGlobalMcpServerAuthResult } from '#/mcp';
-import { limitAgentReplayByTurns } from '#/replay';
 import { noopTelemetryClient } from '#/telemetry';
 import {
   SDKRpcClientBase,
@@ -312,6 +318,7 @@ import type {
   TelemetryClient,
   UploadFileOptions,
   WorkspaceTrustInfo,
+  WorkspaceTrustInstructionSources,
 } from '#/types';
 import {
   diagnosticsToConfigDiagnostics,
@@ -320,7 +327,7 @@ import {
 } from '#/v2/config-mapper';
 import { translateGlobalEvent } from '#/v2/event-mapper';
 import { assertImportFits, buildImportContextMessage } from '#/v2/import-context';
-import { foldAgentWireReplay } from '#/v2/resume-replay';
+import { foldAgentWireReplay, type FoldedAgentReplay } from '#/v2/resume-replay';
 import {
   mcpConfigWithoutName,
   normalizeServerName,
@@ -675,39 +682,33 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
   /**
    * klient has no workspace-trust facade; composed directly from the engine
    * via {@link engineAccessor} — the same `handlerFor({ root })` path
-   * `createSession` takes (materializing the workspace handler is a no-op
-   * cost here: session creation does it anyway). The gated-server list is
-   * the final merged config entries whose origins are project files (the
-   * workspaceTrust gate inside the engine's `workspaceMcpConfig`),
-   * computed best-effort: an unreadable/invalid project file degrades to an
-   * empty list rather than failing the caller.
+   * `createSession` takes. The disclosure of what trusting would activate is
+   * computed inside the engine by `WorkspaceTrustDisclosureService`.
    */
   override async getWorkspaceTrustInfo(workDir: string): Promise<WorkspaceTrustInfo> {
     const handler = await this.engineAccessor
       .get(IWorkspaceInstanceManager)
       .getOrCreate({ root: workDir });
     const trusted = await handler.program.trust.get();
-    if (trusted) return { trusted: true, gatedMcpServers: [] };
-    try {
-      const fs = this.engineAccessor.get(IHostFileSystem);
-      const [paths, loaded] = await Promise.all([
-        resolveMcpJsonPaths({ fs, cwd: workDir, homeDir: this.homeDir }),
-        loadMcpServersDetailed({
-          fs,
-          cwd: workDir,
-          homeDir: this.homeDir,
-          includeProject: true,
-        }),
-      ]);
-      const projectPaths = new Set([paths.projectRoot, paths.project]);
-      const gatedMcpServers = Object.entries(loaded.servers)
-        .filter(([name]) => projectPaths.has(loaded.origins[name] ?? ''))
-        .map(([name, config]) => describeWorkspaceMcpServer(name, config))
-        .toSorted((a, b) => a.name.localeCompare(b.name));
-      return { trusted: false, gatedMcpServers };
-    } catch {
-      return { trusted: false, gatedMcpServers: [] };
+    if (trusted) {
+      return {
+        trusted: true,
+        gatedMcpServers: [],
+        gatedAdditionalDirs: [],
+        additionalDirSources: [],
+        warnings: [],
+        instructionSources: EMPTY_INSTRUCTION_SOURCES,
+      };
     }
+    const activation = await handler.program.trustDisclosure.describeGatedActivation();
+    return {
+      trusted: false,
+      gatedMcpServers: activation.mcpServers,
+      gatedAdditionalDirs: activation.additionalDirs,
+      additionalDirSources: activation.additionalDirSources,
+      warnings: activation.warnings,
+      instructionSources: activation.instructionSources,
+    };
   }
 
   /**
@@ -801,13 +802,29 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     return this.getConfig();
   }
 
-  override supportsAtomicSectionReplace(): boolean {
-    return true;
+  override async importCustomRegistry(
+    options: ImportCustomRegistryOptions,
+  ): Promise<ImportCustomRegistryResult> {
+    await this.configReady;
+    try {
+      return await this.klient.global.kosong.importCustomRegistry(options);
+    } catch (error) {
+      if (!(error instanceof RPCError)) throw error;
+      const details = error.details as Record<string, unknown> | undefined;
+      const phase = details?.['phase'];
+      throw new RegistryImportError(
+        error.message,
+        phase === 'fetch' || phase === 'empty' ? phase : 'apply',
+        typeof details?.['status'] === 'number' ? details['status'] : undefined,
+      );
+    }
   }
 
-  override async replaceConfigSections(sections: Record<string, unknown>): Promise<void> {
+  override async refreshProviderModels(
+    options?: RefreshProviderModelsOptions,
+  ): Promise<RefreshProviderModelsResponse> {
     await this.configReady;
-    await this.klient.global.config.replaceSections({ sections });
+    return this.klient.global.kosong.refreshProviders(options);
   }
 
   override async listPlugins(): Promise<readonly PluginSummary[]> {
@@ -1067,12 +1084,18 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
    * agent scope (profile / permission / swarm services and the klient agent
    * facade for context / plan / usage / background tasks), while `replay` and
    * `toolStore` are folded from the agent's `wire.jsonl` by
-   * {@link foldAgentWireReplay} over the engine's `foldWireRecords`.
+   * {@link foldAgentWireReplay} over the engine's `foldWireRecords`. The main
+   * agent's fold may arrive already in flight via `mainWireFold` (started by
+   * `resumeSession` ahead of the restore; subagents always fold lazily here).
    * `warning` stays undefined — v2's resume has no migration-warning channel.
    */
   private async resumedSessionSummary(
     handle: ISessionScopeHandle,
-    replay?: { readonly includeSubagents?: boolean; readonly replayTurnLimit?: number },
+    replay?: {
+      readonly includeSubagents?: boolean;
+      readonly replayTurnLimit?: number;
+      readonly mainWireFold?: Promise<FoldedAgentReplay | undefined>;
+    },
   ): Promise<ResumedSessionSummary> {
     const meta = await handle.accessor.get(ISessionMetadata).read();
     const agents: Record<string, ResumedAgentState> = {};
@@ -1084,6 +1107,7 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
       main,
       'main',
       replay?.replayTurnLimit,
+      replay?.mainWireFold,
     );
     if (replay?.includeSubagents === true) {
       const agentsDir = join(handle.accessor.get(ISessionContext).sessionDir, 'agents');
@@ -1127,22 +1151,28 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
    * deliberate gap: `config.provider` is always undefined — v1 resolves the
    * full runtime `ProviderConfig` into the snapshot, agent-core-v2 has no
    * equivalent read, and the TUI only falls back to `provider?.model` when
-   * `modelAlias` is unset (pinned in the parity KNOWN_DIFFS).
+   * `modelAlias` is unset (pinned in the parity KNOWN_DIFFS). `earlyWireFold`
+   * is the main agent's fold started before the engine restore finished; an
+   * `undefined` outcome (path unknown ahead of time) falls back to folding
+   * from the live handle here.
    */
   private async resumedAgentState(
     session: ISessionScopeHandle,
     agent: IAgentScopeHandle,
     type: 'main' | 'sub',
     replayTurnLimit?: number,
+    earlyWireFold?: Promise<FoldedAgentReplay | undefined>,
   ): Promise<ResumedAgentState> {
     const facade = this.klient.session(session.id).agent(agent.id);
     const ctx = session.accessor.get(ISessionContext);
+    const foldWire = () =>
+      foldAgentWireReplay(join(ctx.sessionDir, 'agents', agent.id, 'wire.jsonl'), replayTurnLimit);
     const [context, plan, usage, background, folded] = await Promise.all([
       facade.getContext(),
       facade.getPlan(),
       facade.getUsage(),
       facade.getTasks({ activeOnly: false }),
-      foldAgentWireReplay(join(ctx.sessionDir, 'agents', agent.id, 'wire.jsonl')),
+      earlyWireFold?.then((early) => early ?? foldWire()) ?? foldWire(),
     ]);
     const profile = agent.accessor.get(IAgentProfileService).data();
     const toolPolicy = agent.accessor.get(IAgentToolPolicyService);
@@ -1164,7 +1194,8 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
         systemPrompt: profile.systemPrompt,
       },
       context: context as AgentContextData,
-      replay: limitAgentReplayByTurns(folded.replay, replayTurnLimit),
+      replay: folded.replay,
+      userTurnCount: type === 'main' ? folded.userTurnCount : undefined,
       permission: {
         mode: agent.accessor.get(IAgentPermissionModeService).mode,
         rules: [...agent.accessor.get(IAgentPermissionRulesService).rules],
@@ -1477,6 +1508,10 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     // engine has no caller `mcpServers` channel on create/resume (caller
     // servers are an ACP-side concern to be designed separately).
     return this.runSessionAccess(input.id, async () => {
+      // The main agent's fold depends only on the persisted wire, never on
+      // the restore outcome, so it starts as soon as the wire path is known
+      // and overlaps the engine's materialization.
+      const mainWireFold = this.startMainWireFold(input.id, input.replayTurnLimit);
       const handle = await resumeSessionById(this.engineAccessor, input.id, {
         additionalDirs: input.additionalDirs,
       });
@@ -1485,8 +1520,49 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
       return this.resumedSessionSummary(handle, {
         includeSubagents: input.includeSubagents,
         replayTurnLimit: input.replayTurnLimit,
+        mainWireFold,
       });
     });
+  }
+
+  /**
+   * Starts the main agent's wire fold as soon as its path is known — a live
+   * session's own context, or the bucket computed from the index summary —
+   * so the read-only fold overlaps the engine's restore instead of waiting
+   * for it. The returned promise never rejects: the fold swallows its own
+   * failures into an empty fold, and the path lookup degrades to `undefined`,
+   * which makes {@link resumedAgentState} fold from the materialized handle
+   * exactly as it would without the early start.
+   */
+  private startMainWireFold(
+    sessionId: string,
+    replayTurnLimit?: number,
+  ): Promise<FoldedAgentReplay | undefined> {
+    const live = this.liveSession(sessionId);
+    if (live !== undefined) {
+      const sessionDir = live.accessor.get(ISessionContext).sessionDir;
+      return foldAgentWireReplay(
+        join(sessionDir, 'agents', MAIN_AGENT_ID, 'wire.jsonl'),
+        replayTurnLimit,
+      );
+    }
+    const bootstrap = this.engineAccessor.get(IBootstrapService);
+    return this.engineAccessor
+      .get(ISessionIndex)
+      .get(sessionId)
+      .then((summary) => {
+        if (summary === undefined) return undefined;
+        const sessionDir = sessionDirOf(
+          bootstrap.homeDir,
+          workspacePersistenceScope(bootstrap.scope('sessions'), summary.workspaceId),
+          sessionId,
+        );
+        return foldAgentWireReplay(
+          join(sessionDir, 'agents', MAIN_AGENT_ID, 'wire.jsonl'),
+          replayTurnLimit,
+        );
+      })
+      .catch(() => undefined);
   }
 
   /**
@@ -1952,13 +2028,13 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
    * the engine renders every skill activation into the prompt's own user
    * message, so the bundle launches as one turn and undoes as a single
    * anchor. v2-only: the base class rejects this method on the v1 engine.
-   * The launch result is dropped like `prompt` (v1's RPC shape returns void).
    */
   override async promptWithSkills(input: SessionPromptWithSkillsRpcInput): Promise<void> {
     const agent = await this.agentFacade(input.sessionId);
     await agent.promptWithSkills({
       input: input.input,
       skills: input.skills,
+      steerIfActive: input.steerIfActive,
     });
   }
 
@@ -2144,6 +2220,18 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
       await tower.exit();
     }
     await agent.accessor.get(IAgentReminderService).reconcileWhenIdle('tower_mode');
+  }
+
+  /** Reads the shared tower status summary; the main agent's tower service is authoritative. */
+  override async getTowerStatus(input: SessionIdRpcInput): Promise<string> {
+    const agent = await this.materializeMainAgent(this.requireLiveSession(input.sessionId));
+    return readTowerStatusSummary({
+      active: agent.accessor.get(IAgentTowerService).isActive,
+      cwd: agent.accessor.get(ISessionContext).cwd,
+      agentId: MAIN_AGENT_ID,
+      tasks: agent.accessor.get(IAgentTaskService),
+      concurrency: () => agent.accessor.get(ITowerRateLimitService).snapshot(),
+    });
   }
 
   // -----------------------------------------------------------------------
@@ -2764,18 +2852,10 @@ function toManagedServerInfo(server: McpManagedServer): McpManagedServerInfo {
   } as McpManagedServerInfo;
 }
 
-function describeWorkspaceMcpServer(
-  name: string,
-  config: WorkspaceMcpServerConfig,
-): WorkspaceTrustInfo['gatedMcpServers'][number] {
-  if (config.transport === 'stdio') {
-    return {
-      name,
-      transport: config.transport,
-      command: config.command,
-      args: config.args,
-      cwd: config.cwd,
-    };
-  }
-  return { name, transport: config.transport, url: config.url };
-}
+const EMPTY_INSTRUCTION_SOURCES: WorkspaceTrustInstructionSources = {
+  agentsMdPaths: [],
+  skills: [],
+  agentProfiles: [],
+  paths: [],
+};
+

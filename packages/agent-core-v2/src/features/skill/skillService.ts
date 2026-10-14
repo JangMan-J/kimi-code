@@ -14,6 +14,7 @@ import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { ErrorCodes, Error2 } from '#/errors';
 import type { ContentPart } from '#human/llm/message';
 import { createHistoryMessageBuilder } from '#human/agent/historyBuilder';
+import { skillActivationPart } from '#human/agent/origin';
 import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
@@ -96,6 +97,7 @@ export class AgentSkillService implements IAgentSkillService {
         skillSource: skill.source,
         skillArgs: input.args,
         attachments: input.attachments,
+        clientMetadata: input.clientMetadata,
       },
       content,
     );
@@ -142,29 +144,37 @@ export class AgentSkillService implements IAgentSkillService {
           eventService: this.eventService,
           sessionId: this.sessionContext.sessionId,
         },
-        promptMetadataTextFromContentParts(input.input),
+        promptMetadataTextFromContentParts(input.input, input.clientMetadata),
       );
     }
     for (const activation of prepared) {
       void this.recordActivation(activation.origin);
     }
     const status = this.loop.snapshot();
-    const { id } = this.loop.submit({
-      message: {
-        role: 'user',
-        content: [...prepared.map((activation) => activation.part), ...input.input],
+    const steerable =
+      input.steerIfActive === true &&
+      status.state === 'running' &&
+      status.activePromptId !== undefined;
+    const { id } = this.loop.submit(
+      {
+        message: {
+          role: 'user',
+          content: [...prepared.map((activation) => activation.part), ...input.input],
+        },
+        meta: {
+          origin: {
+            kind: 'user',
+            skillActivations: prepared.map((activation) => activation.entry),
+            clientMetadata: input.clientMetadata,
+            attachments: input.attachments,
+          } as PromptOrigin,
+          tracked: true,
+        },
       },
-      meta: {
-        origin: {
-          kind: 'user',
-          skillActivations: prepared.map((activation) => activation.entry),
-          attachments: input.attachments,
-        } as PromptOrigin,
-        tracked: true,
-      },
-    });
+      { steerIfActive: input.steerIfActive },
+    );
     const handle = this.loop.promptHandle(id)!;
-    if (status.state === 'running' || status.paused || status.queue.length > 0) {
+    if (!steerable && (status.state === 'running' || status.paused || status.queue.length > 0)) {
       return { prompt_id: id, created_at: handle.createdAt, state: 'queued' };
     }
     await Promise.race([handle.launched, handle.completion]);
@@ -204,9 +214,10 @@ export class AgentSkillService implements IAgentSkillService {
 
     const skillArgs = input.args ?? '';
     const skillContent = this.renderSkillPrompt(skill, skillArgs);
+    const activationId = randomUUID();
     const origin: SkillActivationOrigin = {
       kind: 'skill_activation',
-      activationId: randomUUID(),
+      activationId,
       skillName: skill.name,
       trigger: 'user-slash',
       skillType: skill.metadata.type,
@@ -216,17 +227,16 @@ export class AgentSkillService implements IAgentSkillService {
     };
     return {
       origin,
-      part: createHistoryMessageBuilder()
-        .xml(
-          renderUserSlashSkillPrompt({
-            skillName: skill.name,
-            skillArgs,
-            skillContent,
-            skillSource: skill.source,
-            skillDir: skill.dir,
-          }),
-        )
-        .parts()[0]!,
+      part: skillActivationPart(
+        renderUserSlashSkillPrompt({
+          skillName: skill.name,
+          skillArgs,
+          skillContent,
+          skillSource: skill.source,
+          skillDir: skill.dir,
+        }),
+        activationId,
+      ),
       entry: {
         activationId: origin.activationId,
         skillName: origin.skillName,

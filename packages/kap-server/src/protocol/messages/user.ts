@@ -30,6 +30,7 @@ export const userMessageSchema = z.object({
   attachment_ids: z.array(z.string().min(1)).optional(),
   skill_activations: z.array(skillActivationSchema).optional(),
   origin: userMessageOriginSchema.optional(),
+  client_metadata: z.array(z.record(z.string(), z.unknown())).optional(),
 });
 
 export type UserMessage = z.infer<typeof userMessageSchema>;

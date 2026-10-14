@@ -7,6 +7,7 @@ const textPartSchema = z.object({
   type: z.literal('text'),
   text: z.string(),
   contentType: z.string().optional(),
+  meta: z.record(z.string(), z.unknown()).optional(),
 });
 const thinkPartSchema = z.object({
   type: z.literal('think'),
@@ -14,6 +15,7 @@ const thinkPartSchema = z.object({
   encrypted: z.string().optional(),
   detailsIndex: z.number().optional(),
   hidden: z.boolean().optional(),
+  reasoningKey: z.string().optional(),
 });
 const imageUrlPartSchema = z.object({
   type: z.literal('image_url'),

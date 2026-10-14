@@ -7,10 +7,18 @@ export interface ToolDescription {
 
 export type Role = 'system' | 'user' | 'assistant' | 'tool';
 
+export type TextPartMeta = {
+  source?: string;
+  contentType?: string;
+  activationId?: string;
+  [key: string]: unknown;
+};
+
 export interface TextPart {
   type: 'text';
   text: string;
   contentType?: string;
+  meta?: TextPartMeta;
 }
 
 export interface ThinkPart {
@@ -19,6 +27,7 @@ export interface ThinkPart {
   encrypted?: string;
   detailsIndex?: number;
   hidden?: boolean;
+  reasoningKey?: string;
 }
 
 export interface ImageURLPart {
@@ -110,6 +119,9 @@ export function mergeInPlace(target: StreamedMessagePart, source: StreamedMessag
       return false;
     }
     if (target.hidden !== source.hidden) {
+      return false;
+    }
+    if (target.reasoningKey !== source.reasoningKey) {
       return false;
     }
     target.think += source.think;

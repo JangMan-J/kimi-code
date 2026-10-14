@@ -1,3 +1,4 @@
+import { isUserPromptSubmitHookPart } from '@moonshot-ai/agent-core-v2/agent/contextMemory/hookParts';
 import {
   daemonFileRefFromPart,
   parseDaemonFileUrl,
@@ -18,6 +19,7 @@ import type {
   UserMessageOrigin,
 } from '../../protocol/messages';
 import {
+  clientMetadataOf,
   mapInteractionEndStatus,
   notificationTextOf,
   parseToolArgs,
@@ -127,6 +129,7 @@ interface UserDraft {
   readonly text: WireContentPart[];
   readonly timestamp?: number;
   origin?: UserMessageOrigin;
+  clientMetadata?: Record<string, unknown>[];
   attachmentIds?: string[];
   skillActivations?: { skill_name: string; skill_args?: string }[];
 }
@@ -171,6 +174,7 @@ interface TaskDraft {
 interface SteerInput {
   readonly input: readonly ContentPart[];
   readonly origin: UserMessageOrigin | undefined;
+  readonly clientMetadata?: Record<string, unknown>[];
   readonly skillActivations: { skill_name: string; skill_args?: string }[] | undefined;
   readonly skipBlocks: number;
   readonly at: number;
@@ -488,9 +492,10 @@ export function foldWireHistory(
       text:
         steer.text !== undefined
           ? textPartsOf(steer.text)
-          : wireContentParts(steer.input.slice(steer.skipBlocks)),
+          : wireContentParts(steer.input.filter((part) => !isUserPromptSubmitHookPart(part)).slice(steer.skipBlocks)),
       timestamp: steer.at,
       origin: steer.origin,
+      clientMetadata: steer.clientMetadata,
       attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
       skillActivations: steer.skillActivations,
     };
@@ -619,7 +624,8 @@ export function foldWireHistory(
             notification !== undefined
               ? taskUserOriginOf(taskOrigin?.task_id, notification)
               : (taskOrigin ?? userOriginOf(origin)),
-          skillActivations: skillActivationsOf(origin),
+          clientMetadata: clientMetadataOf(origin),
+        skillActivations: skillActivationsOf(origin),
           skipBlocks,
           at: recordAtMs,
           messageId:
@@ -663,13 +669,14 @@ export function foldWireHistory(
         text:
           notification !== undefined
             ? textPartsOf(notificationTextOf(notification))
-            : wireContentParts(input.slice(skipBlocks)),
+            : wireContentParts(input.filter((part) => !isUserPromptSubmitHookPart(part)).slice(skipBlocks)),
         timestamp: recordAtMs,
         origin:
           notification !== undefined
             ? taskUserOriginOf(taskOrigin?.task_id, notification)
             : (taskOrigin ?? userOriginOf(origin)),
         attachmentIds,
+        clientMetadata: clientMetadataOf(origin),
         skillActivations: skillActivationsOf(origin),
       };
       users.set(user.messageId, user);
@@ -696,7 +703,8 @@ export function foldWireHistory(
         emitSteer(rawId, {
           input,
           origin: userOriginOf(origin),
-          skillActivations: skillActivationsOf(origin),
+          clientMetadata: clientMetadataOf(origin),
+        skillActivations: skillActivationsOf(origin),
           skipBlocks,
           at: recordAtMs,
           messageId: matchedId,
@@ -721,6 +729,7 @@ export function foldWireHistory(
     emitSteer(rawId, {
       input,
       origin: userOriginOf(origin),
+      clientMetadata: clientMetadataOf(origin),
       skillActivations: skillActivationsOf(origin),
       skipBlocks,
       at: atMs(record),
@@ -1007,9 +1016,10 @@ export function foldWireHistory(
         const draft: UserDraft = {
           messageId,
           turnId: seedTurnId,
-          text: wireContentParts(content.slice(skipBlocks)),
+          text: wireContentParts(content.filter((part) => !isUserPromptSubmitHookPart(part)).slice(skipBlocks)),
           timestamp: recordAtMs,
           origin: userOriginOf(message.origin),
+          clientMetadata: clientMetadataOf(message.origin),
           attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
           skillActivations: skillActivationsOf(message.origin),
         };
@@ -1767,6 +1777,7 @@ export function foldWireHistory(
           attachment_ids: draft.attachmentIds,
           skill_activations: draft.skillActivations,
           origin: draft.origin,
+          client_metadata: draft.clientMetadata,
         });
         break;
       }

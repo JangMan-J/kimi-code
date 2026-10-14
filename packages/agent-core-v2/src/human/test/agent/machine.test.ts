@@ -1208,6 +1208,12 @@ describe('agent machine input.steer', () => {
       expect(actor.getSnapshot().context.notifications).toHaveLength(1);
     });
     expect(steered).toEqual([['p1']]);
+    expect(actor.getSnapshot().context.notifications[0]?.meta).toMatchObject({
+      source: 'input',
+      promptId: 'p1',
+      userMessageId: 'p1',
+      origin: { kind: 'user', inTurn: true },
+    });
 
     actor.send({
       type: 'input.submit',
@@ -1234,7 +1240,7 @@ describe('agent machine input.steer', () => {
     });
     expect(steered).toEqual([['p1'], ['p2', 'p3']]);
     expect(actor.getSnapshot().context.notifications[1]?.message.content).toEqual([
-      { type: 'text', text: 'SKILLBLOCK' },
+      { type: 'text', text: 'SKILLBLOCK', meta: { source: 'skill activation', activationId: 'a1' } },
       { type: 'text', text: 'p2 body' },
       { type: 'text', text: 'third' },
     ]);

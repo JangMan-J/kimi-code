@@ -5,6 +5,8 @@ import type { IFileSystemStorageService } from '#/persistence/interface/storage'
 
 import type { AgentTaskInfo } from './types';
 
+const TASK_READ_CONCURRENCY = 16;
+
 const TASKS_SCOPE = 'tasks';
 const OUTPUT_LOG_KEY = 'output.log';
 const JSON_SUFFIX = '.json';
@@ -25,7 +27,7 @@ export function taskStorageKey(taskId: string): string {
   }
   let encoded = '';
   for (let index = 0; index < taskId.length; index++) {
-    const code = taskId.charCodeAt(index);
+    const code = taskId.codePointAt(index);
     const ch = taskId[index]!;
     encoded +=
       code < 0x80 && STORAGE_KEY_SAFE_CHAR.test(ch)
@@ -44,7 +46,7 @@ export function taskStorageKey(taskId: string): string {
 function storageKeyDigest(taskId: string): string {
   let hash = 0xcbf29ce484222325n;
   for (let index = 0; index < taskId.length; index++) {
-    hash ^= BigInt(taskId.charCodeAt(index));
+    hash ^= BigInt(taskId.codePointAt(index));
     hash = BigInt.asUintN(64, hash * 0x100000001b3n);
   }
   return hash.toString(16).padStart(16, '0');
@@ -187,21 +189,40 @@ export class AgentTaskPersistence {
   }> {
     const keys = (await this.docs.list(this.tasksScope(root))).toSorted();
     const reservedIds = new Set<string>();
-    const tasks: ListedTask[] = [];
+    const candidates: { readonly keyId: string; readonly key: string }[] = [];
     for (const key of keys) {
       if (!key.endsWith(JSON_SUFFIX)) continue;
       const id = key.slice(0, -JSON_SUFFIX.length);
       reservedIds.add(id);
-      let task: PersistedTask | undefined;
-      try {
-        task = await this.docs.get<PersistedTask>(this.tasksScope(root), key);
-      } catch {
-        continue;
-      }
+      candidates.push({ keyId: id, key });
+    }
+    const fetched = Array.from<PersistedTask | undefined>({ length: candidates.length });
+    let next = 0;
+    const workers = Array.from(
+      { length: Math.min(TASK_READ_CONCURRENCY, candidates.length) },
+      async () => {
+        while (next < candidates.length) {
+          const index = next++;
+          const candidate = candidates[index]!;
+          try {
+            fetched[index] = await this.docs.get<PersistedTask>(
+              this.tasksScope(root),
+              candidate.key,
+            );
+          } catch {
+            fetched[index] = undefined;
+          }
+        }
+      },
+    );
+    await Promise.all(workers);
+    const tasks: ListedTask[] = [];
+    for (let index = 0; index < candidates.length; index++) {
+      const task = fetched[index];
       if (task === undefined || !isReadablePersistedTask(task)) continue;
       const normalized = normalizePersistedTask(task);
       reservedIds.add(normalized.taskId);
-      tasks.push({ keyId: id, task: normalized });
+      tasks.push({ keyId: candidates[index]!.keyId, task: normalized });
     }
     return { reservedIds, tasks };
   }

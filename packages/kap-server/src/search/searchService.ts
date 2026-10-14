@@ -5,6 +5,7 @@ import { stat } from 'node:fs/promises';
 import {
   createDecorator,
   databaseSearchEnabled,
+  databaseSearchSyncTuning,
   IBootstrapService,
   IConfigService,
   ILogService,
@@ -169,12 +170,13 @@ export interface SearchBackend {
 export class InlineSearchBackend implements SearchBackend {
   readonly core: SearchIndexCore;
 
-  constructor(options: { indexDir: string; log: ILogService }) {
+  constructor(options: { indexDir: string; log: ILogService; syncSessionCap?: number }) {
     this.core = new SearchIndexCore({
       ...options,
       bootSalt: randomUUID(),
       onLockToken: noteLiveLockToken,
     });
+    if (options.syncSessionCap !== undefined) this.core.syncSessionCap = options.syncSessionCap;
   }
 
   beginClose(): void {
@@ -267,9 +269,15 @@ export class GlobalSearchService implements IGlobalSearchService {
     if (this.backend !== null) return Promise.resolve(this.backend);
     this.backendPromise ??= this.config.ready.then(() => {
       if (this.backend === null) {
+        const tuning = databaseSearchSyncTuning(this.config);
+        if (tuning.debounceMs !== undefined) this.syncDebounceMs = tuning.debounceMs;
         this.backend = databaseSearchEnabled(this.config)
-          ? new SearchWorkerHost({ dir: this.indexDir, log: this.log })
-          : new InlineSearchBackend({ indexDir: this.indexDir, log: this.log });
+          ? new SearchWorkerHost({ dir: this.indexDir, log: this.log, syncSessionCap: tuning.sessionCap })
+          : new InlineSearchBackend({
+              indexDir: this.indexDir,
+              log: this.log,
+              syncSessionCap: tuning.sessionCap,
+            });
         if (this.disposed) this.backend.beginClose();
       }
       return this.backend;
@@ -452,7 +460,7 @@ export class GlobalSearchService implements IGlobalSearchService {
       items: pageRows.map((row) => this.projectHit(q, row)),
       hasMore,
       pageToken: hasMore
-        ? encodePageToken(q, 'live', boundaryOf(q, pageRows[pageRows.length - 1]!), undefined)
+        ? encodePageToken(q, 'live', boundaryOf(q, pageRows.at(-1)!), undefined)
         : undefined,
       incomplete: matched.incomplete,
       indexState: {
@@ -587,7 +595,7 @@ export class GlobalSearchService implements IGlobalSearchService {
         ? encodePageToken(
             q,
             'index',
-            boundaryOf(q, result.rows[result.rows.length - 1]!),
+            boundaryOf(q, result.rows.at(-1)!),
             result.generation,
           )
         : undefined,

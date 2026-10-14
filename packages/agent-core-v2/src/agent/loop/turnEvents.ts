@@ -1,7 +1,9 @@
+import { isUserPromptSubmitHookPart } from '#/agent/contextMemory/hookParts';
 /* oxlint-disable typescript-eslint/no-unsafe-declaration-merging, eslint-plugin-import/namespace -- Event2 class+payload-interface declaration merging is the sanctioned event-declaration idiom. */
 import { z } from 'zod';
 
 import type { PromptOrigin } from '#/agent/contextMemory/types';
+import { annotateBundledSkillParts, isSkillActivationPart } from '#human/agent/origin';
 import { parseDaemonFileUrl } from '#/agent/media/mediaRef';
 import { AgentEvent2, registerEvent2Class } from '#/app/event/event2';
 import type { FinishReason } from '#human/llm/finish-reason';
@@ -59,10 +61,10 @@ export function turnPromptText(
   input: readonly ContentPart[],
   origin?: PromptOrigin,
 ): string | undefined {
-  const bundledBlocks = origin?.kind === 'user' ? (origin.skillActivations?.length ?? 0) : 0;
-  const text = input
-    .filter((part): part is TextPart => part.type === 'text')
-    .slice(bundledBlocks)
+  const bundledActivations =
+    origin?.kind === 'user' ? (origin.skillActivations ?? []) : [];
+  const text = annotateBundledSkillParts(input.filter((part) => !isUserPromptSubmitHookPart(part)), bundledActivations)
+    .filter((part): part is TextPart => part.type === 'text' && !isSkillActivationPart(part))
     .map((part) => part.text)
     .join('');
   return text.length > 0 ? text : undefined;

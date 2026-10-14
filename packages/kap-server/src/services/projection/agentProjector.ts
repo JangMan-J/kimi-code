@@ -1,3 +1,4 @@
+import { isUserPromptSubmitHookPart } from '@moonshot-ai/agent-core-v2/agent/contextMemory/hookParts';
 import {
   daemonFileRefFromPart,
   readTodoItems,
@@ -161,6 +162,7 @@ interface UserRecord {
   status: 'unread' | 'read';
   timestamp?: number;
   origin?: UserMessageOrigin;
+  clientMetadata?: Record<string, unknown>[];
   attachmentIds?: string[];
   skillActivations?: { skill_name: string; skill_args?: string }[];
 }
@@ -679,10 +681,11 @@ export class AgentMessageProjector {
       const user: UserRecord = {
         messageId: turn.userMessageId,
         turnId,
-        text: wireContentParts(event.input.slice(bundledSkillCount(event.origin))),
+        text: wireContentParts(event.input.filter((part) => !isUserPromptSubmitHookPart(part)).slice(bundledSkillCount(event.origin))),
         status: 'read',
         timestamp: event.time,
         origin: userOriginOf(event.origin),
+        clientMetadata: clientMetadataOf(event.origin),
         attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
         skillActivations: skillActivationsOf(event.origin),
       };
@@ -1485,6 +1488,7 @@ export class AgentMessageProjector {
       ops.push(
         this.steerUserMessage(turn, event.input, {
           origin: userOriginOf(event.origin),
+        clientMetadata: clientMetadataOf(event.origin),
           skillActivations: skillActivationsOf(event.origin),
           skipBlocks,
           at: event.time,
@@ -1503,6 +1507,7 @@ export class AgentMessageProjector {
     ops.push(
       this.steerUserMessage(turn, event.input, {
         origin: userOriginOf(event.origin),
+        clientMetadata: clientMetadataOf(event.origin),
         skillActivations: skillActivationsOf(event.origin),
         skipBlocks,
         at: event.time,
@@ -1562,6 +1567,7 @@ export class AgentMessageProjector {
     input: readonly ContentPart[],
     opts: {
       origin: UserMessageOrigin | undefined;
+      clientMetadata?: Record<string, unknown>[];
       skillActivations: { skill_name: string; skill_args?: string }[] | undefined;
       skipBlocks: number;
       at: number;
@@ -1583,10 +1589,11 @@ export class AgentMessageProjector {
       text:
         opts.text !== undefined
           ? textPartsOf(opts.text)
-          : wireContentParts(input.slice(opts.skipBlocks)),
+          : wireContentParts(input.filter((part) => !isUserPromptSubmitHookPart(part)).slice(opts.skipBlocks)),
       status: 'read',
       timestamp: opts.at,
       origin: opts.origin,
+      clientMetadata: opts.clientMetadata,
       attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined,
       skillActivations: opts.skillActivations,
     };
@@ -1949,6 +1956,7 @@ export class AgentMessageProjector {
       attachment_ids: user.attachmentIds,
       skill_activations: user.skillActivations,
       origin: user.origin,
+      client_metadata: user.clientMetadata,
     };
   }
 
@@ -2486,4 +2494,11 @@ function mapQuestionResponse(request: unknown, response: unknown): unknown {
         ? method
         : undefined,
   };
+}
+
+export function clientMetadataOf(origin: unknown): Record<string, unknown>[] | undefined {
+  if (origin === null || typeof origin !== 'object') return undefined;
+  const value = (origin as { clientMetadata?: unknown }).clientMetadata;
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is Record<string, unknown> => item !== null && typeof item === 'object' && !Array.isArray(item));
 }

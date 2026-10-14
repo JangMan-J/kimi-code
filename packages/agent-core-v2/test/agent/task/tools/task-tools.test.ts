@@ -37,6 +37,8 @@ import { IEventBus } from '#/app/event/eventBus';
 import { executeTool } from '../../../tools/fixtures/execute-tool';
 import { recordingTelemetry, type TelemetryRecord } from '../../../app/telemetry/stubs';
 import { stubFlag } from '../../../app/flag/stubs';
+import { stubGoal } from '../../../features/goal/stubs';
+import { makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { agentService, createTestAgent, telemetryServices } from '../../../harness';
 import { stubLoopWithHooks } from '../../loop/stubs';
 
@@ -48,6 +50,10 @@ function context<Input>(
   executionSignal: AbortSignal = signal,
 ) {
   return { turnId: 0, toolCallId: taskId, args, signal: executionSignal };
+}
+
+function agentScope(agentId = 'main') {
+  return makeAgentScopeContext({ agentId, agentScope: agentId });
 }
 
 function outputString(result: { readonly output: string | readonly unknown[] }): string {
@@ -312,6 +318,8 @@ describe('TaskListTool', () => {
     expect(output).toContain('task_id: bash-running1');
     expect(output).toContain('command: sleep 60');
     expect(output).toContain('description: running list');
+    expect(output).toMatch(/Wall time: \d+\.\d{3} seconds/);
+    expect(output).not.toMatch(/^started_at:/m);
   });
 
   it(
@@ -497,6 +505,10 @@ describe('TaskOutputTool', () => {
     expect(output).toContain('kind: agent');
     expect(output).toContain('agent_id: agent-child');
     expect(output).toContain('subagent_type: coder');
+    expect(output).toContain('Wall time: 1.000 seconds');
+    expect(output.indexOf('Wall time:')).toBeLessThan(output.indexOf('status: completed'));
+    expect(output).not.toMatch(/^started_at:/m);
+    expect(output).not.toMatch(/^ended_at:/m);
     expect(output).toContain('[output]\nSUBAGENT-FINAL-SUMMARY');
     expect(output).not.toMatch(/^pid:/m);
     expect(output).not.toMatch(/^command:/m);
@@ -669,6 +681,7 @@ describe('TaskStopTool', () => {
     const output = outputString(result);
 
     expect(result.isError ?? false).toBe(false);
+    expect(output.split('\n')[0]).toBe('Wall time: 2.000 seconds');
     expect(output).toContain('task_id: bash-stop0001');
     expect(output).toContain('status: killed');
     expect(output).toContain('reason: custom stop reason');
@@ -718,6 +731,7 @@ describe('TaskStopTool', () => {
 
     expect(result.isError ?? false).toBe(false);
     expect(outputString(result).trim().split('\n')).toEqual([
+      'Wall time: 1.000 seconds',
       `task_id: ${taskId}`,
       'status: completed',
       'reason: Task already in terminal state',
@@ -743,7 +757,7 @@ describe('TaskStopTool', () => {
     );
 
     expect(result.isError ?? false).toBe(false);
-    expect(outputString(result).trim().split('\n')[2]).toBe(
+    expect(outputString(result).trim().split('\n')[3]).toBe(
       'reason: Task already in terminal state',
     );
   });
@@ -760,16 +774,16 @@ describe('WaitForTool', () => {
   }
 
   it('has name and accepts the current schema', () => {
-    const tool = new WaitForTool(new FakeTaskService(), recordingTelemetry([]), stubFlag(true));
+    const tool = new WaitForTool(new FakeTaskService(), recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope());
 
     expect(tool.name).toBe('WaitFor');
     expect(WaitForInputSchema.safeParse({ timeout: 60 }).success).toBe(true);
     expect(WaitForInputSchema.safeParse({ timeout: 60, task_id: 'bash-1' }).success).toBe(true);
-    expect(WaitForInputSchema.safeParse({ timeout: 600 }).success).toBe(true);
+    expect(WaitForInputSchema.safeParse({ timeout: 90 }).success).toBe(true);
     expect(WaitForInputSchema.safeParse({}).success).toBe(false);
     expect(WaitForInputSchema.safeParse({ timeout: 0 }).success).toBe(false);
     expect(WaitForInputSchema.safeParse({ timeout: -5 }).success).toBe(false);
-    expect(WaitForInputSchema.safeParse({ timeout: 601 }).success).toBe(false);
+    expect(WaitForInputSchema.safeParse({ timeout: 91 }).success).toBe(false);
     expect(WaitForInputSchema.safeParse({ timeout: 1.5 }).success).toBe(false);
     expect(tool.parameters).toMatchObject({
       type: 'object',
@@ -785,7 +799,7 @@ describe('WaitForTool', () => {
   it('returns error and tracks task_not_found for an unknown task_id', async () => {
     const { records, telemetry } = waitTelemetry();
     const result = await executeTool(
-      new WaitForTool(new FakeTaskService(), telemetry, stubFlag(true)),
+      new WaitForTool(new FakeTaskService(), telemetry, stubFlag(true), stubGoal(), agentScope()),
       context('wait_unknown', { timeout: 10, task_id: 'bash-unknown0' }),
     );
 
@@ -802,14 +816,13 @@ describe('WaitForTool', () => {
   it('returns immediately without waiting when no background tasks are running', async () => {
     const tasks = new FakeTaskService();
     const result = await executeTool(
-      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true)),
+      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope()),
       context('wait_none', { timeout: 10 }),
     );
     const output = outputString(result);
 
     expect(result.isError ?? false).toBe(false);
     expect(output).toContain('wait_status: no_tasks');
-    expect(output).toContain('No background tasks are running');
     expect(tasks.waitCalls).toEqual([]);
     expect(tasks.waitDeliveries).toEqual([]);
   });
@@ -828,7 +841,7 @@ describe('WaitForTool', () => {
 
     const { records, telemetry } = waitTelemetry();
     const result = await executeTool(
-      new WaitForTool(tasks, telemetry, stubFlag(true)),
+      new WaitForTool(tasks, telemetry, stubFlag(true), stubGoal(), agentScope()),
       context('wait_done', { timeout: 10, task_id: taskId }),
     );
     const output = outputString(result);
@@ -846,6 +859,22 @@ describe('WaitForTool', () => {
     });
   });
 
+  it('reports no progress for a wait that returns at once', async () => {
+    const tasks = new FakeTaskService();
+    const taskId = tasks.add(
+      processTask({ taskId: 'bash-done0003', status: 'completed', endedAt: 1_700_000_001_000, exitCode: 0 }),
+      outputSnapshot('DONE\n'),
+    );
+    const onUpdate = vi.fn();
+
+    await executeTool(new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope()), {
+      ...context('wait_done_at_once', { timeout: 10, task_id: taskId }),
+      onUpdate,
+    });
+
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it('reports tasks that finished during the wait and marks all of them delivered', async () => {
     const tasks = new FakeTaskService();
     tasks.add(processTask({ taskId: 'bash-wait001', description: 'main wait' }), outputSnapshot('WAITED-OUT\n'));
@@ -858,7 +887,7 @@ describe('WaitForTool', () => {
 
     const { records, telemetry } = waitTelemetry();
     const result = await executeTool(
-      new WaitForTool(tasks, telemetry, stubFlag(true)),
+      new WaitForTool(tasks, telemetry, stubFlag(true), stubGoal(), agentScope()),
       context('wait_extras', { timeout: 10, task_id: 'bash-wait001' }),
     );
     const output = outputString(result);
@@ -891,7 +920,7 @@ describe('WaitForTool', () => {
 
     const { records, telemetry } = waitTelemetry();
     const result = await executeTool(
-      new WaitForTool(tasks, telemetry, stubFlag(true)),
+      new WaitForTool(tasks, telemetry, stubFlag(true), stubGoal(), agentScope()),
       context('wait_any', { timeout: 10 }),
     );
     const output = outputString(result);
@@ -917,14 +946,13 @@ describe('WaitForTool', () => {
 
     const { records, telemetry } = waitTelemetry();
     const result = await executeTool(
-      new WaitForTool(tasks, telemetry, stubFlag(true)),
+      new WaitForTool(tasks, telemetry, stubFlag(true), stubGoal(), agentScope()),
       context('wait_timeout', { timeout: 10, task_id: 'bash-running9' }),
     );
     const output = outputString(result);
 
     expect(result.isError ?? false).toBe(false);
     expect(output).toContain('wait_status: timed_out');
-    expect(output).toContain('not an error');
     expect(output).toContain('[still_running]');
     expect(output).toContain('bash-running9');
     expect(tasks.waitDeliveries).toEqual([]);
@@ -946,8 +974,8 @@ describe('WaitForTool', () => {
     const { records, telemetry } = waitTelemetry();
     const controller = new AbortController();
     const pending = executeTool(
-      new WaitForTool(tasks, telemetry, stubFlag(true)),
-      context('wait_abort', { timeout: 600, task_id: 'bash-abort01' }, controller.signal),
+      new WaitForTool(tasks, telemetry, stubFlag(true), stubGoal(), agentScope()),
+      context('wait_abort', { timeout: 90, task_id: 'bash-abort01' }, controller.signal),
     );
     controller.abort();
 
@@ -967,8 +995,8 @@ describe('WaitForTool', () => {
 
     const controller = new AbortController();
     const pending = executeTool(
-      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true)),
-      context('wait_abort_any', { timeout: 600 }, controller.signal),
+      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope()),
+      context('wait_abort_any', { timeout: 90 }, controller.signal),
     );
     controller.abort();
 
@@ -992,7 +1020,7 @@ describe('WaitForTool', () => {
 
     await expect(
       executeTool(
-        new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true)),
+        new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope()),
         context('wait_fmt_fail', { timeout: 10, task_id: taskId }),
       ),
     ).rejects.toThrow('snapshot read failed');
@@ -1014,8 +1042,8 @@ describe('WaitForTool', () => {
     };
 
     const result = await executeTool(
-      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true)),
-      context('wait_losers', { timeout: 600 }),
+      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope()),
+      context('wait_losers', { timeout: 90 }),
     );
 
     expect(outputString(result)).toContain('wait_status: completed');
@@ -1027,7 +1055,7 @@ describe('WaitForTool', () => {
     tasks.add(processTask({ taskId: 'bash-flagoff1' }));
 
     const result = await executeTool(
-      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(false)),
+      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(false), stubGoal(), agentScope()),
       context('wait_flag_off', { timeout: 10, task_id: 'bash-flagoff1' }),
     );
 
@@ -1147,7 +1175,7 @@ describe('WaitForTool (harness)', () => {
       const taskId = tasks.registerTask(new ProcessTask(slow.proc, 'sleep 60', 'background work', undefined, undefined, 'call_background_work'));
       ctx.mockNextResponse(
         { type: 'function', id: 'list-before-wait', name: 'TaskList', arguments: '{}' },
-        { type: 'function', id: 'wait-for-task', name: 'WaitFor', arguments: JSON.stringify({ timeout: 600, task_id: target === 'specific' ? taskId : undefined }) },
+        { type: 'function', id: 'wait-for-task', name: 'WaitFor', arguments: JSON.stringify({ timeout: 90, task_id: target === 'specific' ? taskId : undefined }) },
       );
       ctx.mockNextResponse({ type: 'text', text: 'Handling the new request.' });
 
@@ -1198,12 +1226,12 @@ describe('WaitForTool (harness)', () => {
       const tasks = ctx.get(IAgentTaskService);
       const taskId = tasks.registerTask(new ProcessTask(slow.proc, 'sleep 60', 'background work', undefined, undefined, 'call_background_work'));
       ctx.mockNextResponse(
-        { type: 'function', id: 'wait-specific', name: 'WaitFor', arguments: JSON.stringify({ timeout: 600, task_id: taskId }) },
-        { type: 'function', id: 'wait-any', name: 'WaitFor', arguments: '{"timeout":600}' },
+        { type: 'function', id: 'wait-specific', name: 'WaitFor', arguments: JSON.stringify({ timeout: 90, task_id: taskId }) },
+        { type: 'function', id: 'wait-any', name: 'WaitFor', arguments: '{"timeout":90}' },
       );
       ctx.mockNextResponse({
         type: 'function', id: 'wait-again', name: 'WaitFor',
-        arguments: JSON.stringify({ timeout: 600, task_id: taskId }),
+        arguments: JSON.stringify({ timeout: 90, task_id: taskId }),
       });
       ctx.mockNextResponse({ type: 'text', text: 'The background work has finished.' });
       const steer = async () => {
@@ -1261,7 +1289,7 @@ describe('WaitForTool (harness)', () => {
       const taskId = tasks.registerTask(new ProcessTask(slow.proc, 'sleep 60', 'background work', undefined, undefined, 'call_background_work'));
       ctx.mockNextResponse({
         type: 'function', id: 'racing-wait', name: 'WaitFor',
-        arguments: JSON.stringify({ timeout: 600, task_id: taskId }),
+        arguments: JSON.stringify({ timeout: 90, task_id: taskId }),
       });
       ctx.mockNextResponse({ type: 'text', text: 'Handling the new request.' });
       ctx.mockNextResponse({ type: 'text', text: 'The background work has finished.' });
@@ -1309,7 +1337,7 @@ describe('WaitForTool (harness)', () => {
       const cancelled = new AbortController();
       const steered = new AbortController();
       const pending = executeTool(ctx.get(IWaitForTool), {
-        ...context('cancelled-wait', { timeout: 600, task_id: taskId }, cancelled.signal),
+        ...context('cancelled-wait', { timeout: 90, task_id: taskId }, cancelled.signal),
         steerSignal: steered.signal,
       });
       steered.abort();
