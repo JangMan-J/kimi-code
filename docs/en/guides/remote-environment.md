@@ -85,7 +85,7 @@ The environment binding is per session: it records which environment the session
 The hidden `--environment <id>` flag binds a new session to a configured environment, overriding the `[environments]` default for that creation. The hidden `--environment-cwd <path>` flag overrides the selected entry's `defaultCwd` and must be used together with `--environment`:
 
 ```sh
-kimi -p --environment dev-box --environment-cwd /home/me/projects "Run the test suite"
+kimi --environment dev-box --environment-cwd /home/me/projects -p "Run the test suite"
 ```
 
 Both flags are creation-only: they cannot be combined with `--session` or `--continue`, because a resumed session restores its recorded binding automatically. They bind the first session in the process. A later `/new` keeps the live binding instead of applying the flags again; `/new` uses them only when no session exists yet. An unknown id, an entry without `defaultCwd` when no override is given, or an invalid target directory fails startup outright. Creation also connects to the target before the session starts, so a connection failure aborts with the reported reason instead of opening a broken session.

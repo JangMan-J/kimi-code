@@ -85,7 +85,7 @@ defaultCwd = "/work/project"
 隐藏标志 `--environment <id>` 让新会话直接绑定到已配置的环境，相当于对 `[environments]` 默认配置的一次性覆盖。隐藏标志 `--environment-cwd <path>` 覆盖所选条目的 `defaultCwd`，必须与 `--environment` 一起使用：
 
 ```sh
-kimi -p --environment dev-box --environment-cwd /home/me/projects "Run the test suite"
+kimi --environment dev-box --environment-cwd /home/me/projects -p "Run the test suite"
 ```
 
 两个标志都只在创建会话时生效：不能与 `--session`/`--continue` 组合，因为恢复会话时会自动还原其记录的绑定。它们绑定的是本进程的第一个会话。之后的 `/new` 保留当前绑定，不再套用这些标志；只有还没有会话时，`/new` 才会使用它们。id 未声明、未提供覆盖值时条目未设置 `defaultCwd`，或目标目录无效，启动都会直接失败。创建会话会先连接目标环境再启动，连接失败会带着具体原因中止，而不是打开一个无法正常工作的会话。
