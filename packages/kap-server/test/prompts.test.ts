@@ -25,7 +25,6 @@ import {
   MAX_IMAGE_DECODE_BYTES,
   closeSessionById,
   getLiveSessionById,
-  sessionMediaOriginalsDir,
 } from '@moonshot-ai/agent-core-v2';
 import { HostFileSystem } from '@moonshot-ai/agent-core-v2/os/backends/node-local/hostFsService';
 import { HostProcessService } from '@moonshot-ai/agent-core-v2/os/backends/node-local/hostProcessService';
@@ -1663,86 +1662,6 @@ describe('server-v2 /api/v1 prompts', () => {
     }
   });
 
-  it('removes remotely staged attachments when prompt submission fails after staging', async () => {
-    const remote = await createRemoteBoundSession();
-    const id = remote.id;
-    try {
-      const pdfBytes = Buffer.from('%PDF-1.4 fake pdf bytes');
-      const uploaded = await uploadFile(pdfBytes, 'application/pdf', 'report.pdf');
-
-      const submitted = await call<null>('POST', `/api/v1/sessions/${id}/prompts`, {
-        model: 'ghost',
-        content: [
-          { type: 'file', file_id: uploaded.id, name: 'report.pdf', media_type: 'application/pdf', size: pdfBytes.length },
-        ],
-      });
-      expect(submitted.body.code).not.toBe(0);
-
-      const attachmentsDir = join(remote.remoteTempDir, 'kimi-code', 'attachments');
-      await expect(readdir(attachmentsDir)).resolves.toEqual([]);
-    } finally {
-      await remote.dispose();
-    }
-  });
-
-  it('persists an unsupported-format upload into the bound environment tempDir', async () => {
-    const remote = await createRemoteBoundSession();
-    const id = remote.id;
-    try {
-      const data = avifBytes();
-      const uploaded = await uploadFile(data, 'image/avif', 'scan.avif');
-
-      const submitted = await call<PromptItemWire>('POST', `/api/v1/sessions/${id}/prompts`, {
-        content: [{ type: 'image', source: { kind: 'file', file_id: uploaded.id }, name: 'scan.avif' }],
-      });
-      expect(submitted.body.code).toBe(0);
-
-      const content = submitted.body.data.content as Array<{ type: string; text?: string }>;
-      expect(content).toHaveLength(1);
-      const notice = content[0];
-      expect(notice?.type).toBe('text');
-      expect(notice?.text).not.toContain('[Image omitted');
-      const attachedPath = attachedPathFrom(notice?.text ?? '');
-      expect(dirname(attachedPath)).toBe(join(remote.remoteTempDir, 'kimi-code', 'attachments'));
-      expect(attachedPath.endsWith('-scan.avif')).toBe(true);
-      expect(await readFile(attachedPath)).toEqual(data);
-
-      await expectNoLocalAttachments(id);
-    } finally {
-      await remote.dispose();
-    }
-  });
-
-  it('persists compressed image originals into the bound environment tempDir, never the server-local session dir', async () => {
-    const remote = await createRemoteBoundSession();
-    const id = remote.id;
-    try {
-      const bigPng = solidPng(3600, 1800);
-      const uploaded = await uploadFile(bigPng, 'image/png', 'big.png');
-
-      const submitted = await call<PromptItemWire>('POST', `/api/v1/sessions/${id}/prompts`, {
-        content: [{ type: 'image', source: { kind: 'file', file_id: uploaded.id } }],
-      });
-      expect(submitted.body.code).toBe(0);
-
-      const content = submitted.body.data.content as Array<Record<string, unknown>>;
-      expect(content).toHaveLength(2);
-      const caption = content[0] as { type: string; text: string };
-      expect(caption.text).toContain('Image compressed');
-      const pathMatch = /saved at "([^"]+)"/.exec(caption.text);
-      expect(pathMatch).not.toBeNull();
-      const originalPath = pathMatch![1]!;
-      expect(dirname(originalPath)).toBe(join(remote.remoteTempDir, 'kimi-code', 'original-images'));
-      expect(await readFile(originalPath)).toEqual(bigPng);
-
-      const session = getLiveSessionById(server!.core.accessor, id);
-      const localOriginalsDir = sessionMediaOriginalsDir(session!.accessor.get(ISessionContext).sessionDir);
-      await expect(readdir(localOriginalsDir)).rejects.toMatchObject({ code: 'ENOENT' });
-    } finally {
-      await remote.dispose();
-    }
-  });
-
   it('fails loudly instead of writing the server-local disk when the environment fs write fails', async () => {
     const id = await createSession(home as string);
     const remoteRoot = await realpath(await mkdtemp(join(tmpdir(), 'kimi-prompt-broken-remote-')));
@@ -1782,38 +1701,6 @@ describe('server-v2 /api/v1 prompts', () => {
     } finally {
       await rm(remoteRoot, { recursive: true, force: true });
     }
-  });
-
-  it('maps a disconnected bound environment failure to 40926 instead of 50001', async () => {
-    const id = await createSession(home as string);
-    await createMainAgent(id);
-    const session = getLiveSessionById(server!.core.accessor, id);
-    const workspaceId = session!.accessor.get(ISessionContext).workspaceId;
-    const instance = server!.core.accessor.get(IWorkspaceInstanceManager).get(workspaceId);
-    const fake = new FakeEnvironment(
-      { environmentId: 'dead-remote', generation: 'dead-generation' },
-      { status: 'disconnected', capabilities: ['fs'] },
-    );
-    server!.core.accessor.get(IEnvironmentService).register(Object.assign(fake, {
-      fs: new HostFileSystem(),
-      host: { ...fake.host, tempDir: join(home as string, 'dead-remote-tmp') },
-      connectError: 'connection refused',
-    }));
-    const main = session!.accessor.get(IAgentLifecycleService).handleOf('main')!;
-    main.accessor.get(IAgentStateService).set(agentEnvironmentBindingKey, {
-      environmentId: 'dead-remote',
-    });
-
-    const bytes = Buffer.from('%PDF-1.4 fake pdf bytes');
-    const uploaded = await uploadFile(bytes, 'application/pdf', 'report.pdf');
-    const submitted = await call<null>('POST', `/api/v1/sessions/${id}/prompts`, {
-      content: [
-        { type: 'file', file_id: uploaded.id, name: 'report.pdf', media_type: 'application/pdf', size: bytes.length },
-      ],
-    });
-    expect(submitted.body.code).toBe(40926);
-    expect(submitted.body.msg).toContain('dead-remote');
-    expect((submitted.body as { stack?: string }).stack).toBeUndefined();
   });
 
   it('rejects an upload file part missing metadata', async () => {

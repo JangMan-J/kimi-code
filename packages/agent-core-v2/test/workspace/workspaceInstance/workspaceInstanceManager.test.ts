@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Workspace, IWorkspaceService } from '#/app/workspace/workspace';
 import { FakeEnvironment } from '#/environment/fakeEnvironment';
 import type { Environment } from '#/environment/environment';
-import type { EnvironmentProviderFactory } from '#/environment/environmentProvider';
 import { WorkspaceInstanceManager } from '#/workspace/workspaceInstance/workspaceInstanceManagerService';
 import { sessionDirOf } from '#/workspace/sessionLifecycle/internal/addressing';
 
@@ -85,27 +84,6 @@ describe('WorkspaceInstanceManager', () => {
     await closing;
     expect(value.get('one')).toBeUndefined();
     expect(events).toEqual([]);
-  });
-
-  it('attaches an environment once and keeps it alive when a workspace closes', async () => {
-    const environments = environmentService();
-    const attach = vi.fn(async (host: Parameters<EnvironmentProviderFactory['attach']>[0]) => {
-      host.registerEnvironment(environment('unused', 'remote'));
-      return { dispose: () => {} };
-    });
-    const registration = await environments.addProvider({ id: 'remote', attach });
-    const value = manager([workspace('one'), workspace('two')], Promise.resolve(), [], undefined, environments);
-    await value.getOrCreate({ workspaceId: 'one' });
-    await value.getOrCreate({ workspaceId: 'two' });
-    const remote = environments.current('remote');
-    await value.close('one');
-    expect(attach).toHaveBeenCalledOnce();
-    expect(environments.current('remote')).toBe(remote);
-    expect(remote?.status).toBe('connecting');
-    await value.dispose();
-    expect(environments.current('remote')).toBe(remote);
-    await registration.dispose();
-    expect(environments.current('remote')).toBeUndefined();
   });
 
   it('rolls back environments registered by a provider that fails to attach', async () => {

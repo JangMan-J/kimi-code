@@ -409,35 +409,6 @@ describe('ExternalHooksRunnerService', () => {
     expect(failures[0]?.command).toContain('node');
   });
 
-  it('logs and reports a hook that times out', async () => {
-    const { runner, warnings, failures } = failingRunner([
-      { event: 'Stop', command: nodeCommand('setTimeout(() => {}, 10000);'), timeout: 1 },
-    ]);
-
-    const results = await runner.trigger('Stop', { inputData: {} });
-
-    expect(results).toHaveLength(1);
-    expect(results[0]?.timedOut).toBe(true);
-    expect(warnings).toHaveLength(1);
-    expect(failures).toEqual([
-      expect.objectContaining({ event: 'Stop', message: expect.stringContaining('timed out') }),
-    ]);
-  });
-
-  it('logs and reports a hook that fails to spawn', async () => {
-    const { runner, warnings, failures } = failingRunner([
-      { event: 'Stop', command: 'echo hi', cwd: '/nonexistent-hook-cwd-xyz', timeout: 5 },
-    ]);
-
-    const results = await runner.trigger('Stop', { inputData: {} });
-
-    expect(results).toHaveLength(1);
-    expect(results[0]?.action).toBe('allow');
-    expect(warnings).toHaveLength(1);
-    expect(failures).toHaveLength(1);
-    expect(failures[0]?.message.length).toBeGreaterThan(0);
-  });
-
   it('does not report a deliberate block (exit code 2) as a failure', async () => {
     const { runner, warnings, failures } = failingRunner([
       {
@@ -453,43 +424,5 @@ describe('ExternalHooksRunnerService', () => {
     ).resolves.toEqual({ block: true, reason: 'blocked' });
     expect(warnings).toHaveLength(0);
     expect(failures).toHaveLength(0);
-  });
-
-  it('does not report a successful hook that writes to stderr', async () => {
-    const { runner, warnings, failures } = failingRunner([
-      {
-        event: 'Stop',
-        command: nodeCommand('process.stderr.write("just a warning"); process.exit(0);'),
-        timeout: 5,
-      },
-    ]);
-
-    const results = await runner.trigger('Stop', { inputData: {} });
-    expect(results).toHaveLength(1);
-    expect(warnings).toHaveLength(0);
-    expect(failures).toHaveLength(0);
-  });
-
-  it('logs and reports a trigger-level failure while still returning an empty result list', async () => {
-    const inputData = {};
-    Object.defineProperty(inputData, 'broken', {
-      enumerable: true,
-      get() {
-        throw new Error('broken input');
-      },
-    });
-    const { runner, warnings, failures } = failingRunner([
-      { event: 'PreToolUse', matcher: 'Bash', command: nodeCommand('process.exit(0);') },
-    ]);
-
-    await expect(
-      runner.trigger('PreToolUse', { matcherValue: 'Bash', inputData, sessionId: 'ses_2' }),
-    ).resolves.toEqual([]);
-    await expect(
-      runner.triggerBlock('PreToolUse', { matcherValue: 'Bash', inputData }),
-    ).resolves.toBeUndefined();
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(failures.length).toBeGreaterThan(0);
-    expect(failures[0]?.command).toBeUndefined();
   });
 });

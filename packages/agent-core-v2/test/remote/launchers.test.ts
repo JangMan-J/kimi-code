@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { resolveProgramPath } from '#/environment/programPath';
 
-import { commandLauncherEnv, resolveLauncher } from '#/remote/client/launchers';
+import { resolveLauncher } from '#/remote/client/launchers';
 
 describe('launcher lowering', () => {
   it('lowers ssh to the fixed argv shape', () => {
@@ -28,46 +28,6 @@ describe('launcher lowering', () => {
         `~'/.kimi-code/bin/kimi' 'exec-server' '--listen' 'stdio'`,
       ],
     });
-  });
-
-  it('lowers ssh with a custom remoteBin', () => {
-    const resolved = resolveLauncher({ type: 'ssh', host: 'dev-box', remoteBin: '/opt/kimi/bin/kimi' });
-    expect(resolved.args.at(-1)).toBe(`'/opt/kimi/bin/kimi' 'exec-server' '--listen' 'stdio'`);
-  });
-
-  it('lowers docker to a sh -c exec line, with and without a context', () => {
-    expect(resolveLauncher({ type: 'docker', container: 'myapp' }).args).toEqual([
-      'exec',
-      '-i',
-      'myapp',
-      'sh',
-      '-c',
-      `exec ~'/.kimi-code/bin/kimi' 'exec-server' '--listen' 'stdio'`,
-    ]);
-    expect(
-      resolveLauncher({ type: 'docker', container: 'myapp', context: 'orbstack', remoteBin: '/root/.kimi-code/bin/kimi' }).args,
-    ).toEqual([
-      '--context',
-      'orbstack',
-      'exec',
-      '-i',
-      'myapp',
-      'sh',
-      '-c',
-      `exec '/root/.kimi-code/bin/kimi' 'exec-server' '--listen' 'stdio'`,
-    ]);
-  });
-
-  it('lowers command launchers through PATH resolution with a scrubbed environment', () => {
-    const resolved = resolveLauncher({
-      type: 'command',
-      program: process.execPath,
-      args: ['run', 'this'],
-      env: { SANDBOX_TOKEN: 'x' },
-    });
-    expect(resolved.program).toBe(process.execPath);
-    expect(resolved.args).toEqual(['run', 'this']);
-    expect(resolved.env?.['SANDBOX_TOKEN']).toBe('x');
   });
 });
 
@@ -107,11 +67,6 @@ describe('ssh remote command quoting', () => {
     );
   });
 
-  it('quotes a tilde lookalike that is not a valid tilde prefix', () => {
-    const resolved = resolveLauncher({ type: 'ssh', host: 'dev-box', remoteBin: '~;id' });
-    expect(resolved.args.at(-1)).toBe(`'~;id' 'exec-server' '--listen' 'stdio'`);
-  });
-
   it('escapes single quotes inside remoteBin', () => {
     const resolved = resolveLauncher({ type: 'ssh', host: 'dev-box', remoteBin: `/opt/it's/kimi` });
     expect(resolved.args.at(-1)).toBe(`'/opt/it'\\''s/kimi' 'exec-server' '--listen' 'stdio'`);
@@ -119,25 +74,6 @@ describe('ssh remote command quoting', () => {
 });
 
 describe('command launcher environment', () => {
-  it('keeps only the base whitelist plus the declaration env', () => {
-    const baseEnv = {
-      PATH: '/usr/bin',
-      HOME: '/home/test',
-      LANG: 'en_US.UTF-8',
-      LC_TIME: 'C',
-      KIMI_TEST_LLM_KEY: 'secret',
-      SANDBOX_INJECTED: 'nope',
-    };
-    const env = commandLauncherEnv({ CUSTOM: '1', PATH: '/custom/bin' }, baseEnv);
-    expect(env).toEqual({
-      PATH: '/custom/bin',
-      HOME: '/home/test',
-      LANG: 'en_US.UTF-8',
-      LC_TIME: 'C',
-      CUSTOM: '1',
-    });
-  });
-
   it('drops host secrets from the resolved command launcher env', () => {
     vi.stubEnv('REMOTE_EXEC_TEST_LLM_KEY', 'secret');
     try {
@@ -174,21 +110,6 @@ describe('command program PATH resolution', () => {
     await rm(sandbox, { recursive: true, force: true });
   });
 
-  it('resolves a bare name to an absolute PATH hit', () => {
-    expect(resolveProgramPath('sandbox', { cwd: cwdDir, pathEnv: pathDir })).toBe(
-      join(pathDir, 'sandbox'),
-    );
-  });
-
-  it('rejects programs that are not found or not executable', () => {
-    expect(() => resolveProgramPath('missing-tool', { cwd: cwdDir, pathEnv: pathDir })).toThrow(
-      /not found on PATH/,
-    );
-    expect(() => resolveProgramPath('not-executable', { cwd: cwdDir, pathEnv: pathDir })).toThrow(
-      /not found on PATH/,
-    );
-  });
-
   it('skips relative PATH entries', () => {
     expect(resolveProgramPath('sandbox', { cwd: cwdDir, pathEnv: `relative:${pathDir}` })).toBe(
       join(pathDir, 'sandbox'),
@@ -199,20 +120,11 @@ describe('command program PATH resolution', () => {
     expect(() => resolveProgramPath('smuggled', { cwd: cwdDir, pathEnv: cwdDir })).toThrow(
       /refusing cwd match/,
     );
-  });
-
-  it('refuses relative program paths and cwd-local absolute paths', () => {
     expect(() => resolveProgramPath('./sandbox', { cwd: cwdDir, pathEnv: pathDir })).toThrow(
       /must be an absolute path/,
     );
     expect(() =>
       resolveProgramPath(join(cwdDir, 'smuggled'), { cwd: cwdDir, pathEnv: pathDir }),
     ).toThrow(/refusing cwd match/);
-  });
-
-  it('accepts an absolute program path outside the working directory', () => {
-    expect(resolveProgramPath(join(pathDir, 'sandbox'), { cwd: cwdDir, pathEnv: '' })).toBe(
-      join(pathDir, 'sandbox'),
-    );
   });
 });

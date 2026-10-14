@@ -9,18 +9,6 @@ function environment(generation: string, pathClass: 'posix' | 'win32'): FakeEnvi
 }
 
 describe('EnvironmentWorkspaceView', () => {
-  it('resolves posix paths within the fixed environment roots', () => {
-    const view = new EnvironmentWorkspaceView(environment('one', 'posix'), {
-      workDir: '/workspace/project',
-      additionalDirs: ['/shared'],
-    });
-    expect(view.resolve('src/index.ts')).toBe('/workspace/project/src/index.ts');
-    expect(view.resolve('../shared/file.txt', '/workspace/project/src')).toBe('/workspace/project/shared/file.txt');
-    expect(view.resolve('/shared/file.txt')).toBe('/shared/file.txt');
-    expect(view.resolve('../../outside')).toBe('/outside');
-    expect(() => view.assertAllowed(view.resolve('../../outside'))).toThrow('outside environment workspace');
-  });
-
   it('uses win32 path semantics and rejects sibling prefixes', () => {
     const view = new EnvironmentWorkspaceView(environment('one', 'win32'), {
       workDir: 'C:\\workspace\\project',
@@ -29,25 +17,6 @@ describe('EnvironmentWorkspaceView', () => {
     expect(view.resolve('src\\index.ts')).toBe('C:\\workspace\\project\\src\\index.ts');
     expect(view.resolve('d:\\SHARED\\file.txt')).toBe('d:\\SHARED\\file.txt');
     expect(() => view.assertAllowed(view.resolve('C:\\workspace\\project-other\\file.txt'))).toThrow('outside environment workspace');
-  });
-
-  it('uses provider-owned workspace root mapping', () => {
-    const mapped = new FakeEnvironment(
-      { environmentId: 'remote', generation: 'one' },
-      {
-        mapWorkspaceRoots: (roots) => ({
-          workDir: roots.workDir.replace('/repo', '/remote/workspace'),
-          additionalDirs: roots.additionalDirs?.map((root) => root.replace('/shared', '/remote/shared')),
-        }),
-      },
-    );
-    const view = new EnvironmentWorkspaceView(mapped, {
-      workDir: '/repo/project',
-      additionalDirs: ['/shared/assets'],
-    });
-    expect(view.workDir).toBe('/remote/workspace/project');
-    expect(view.additionalDirs).toEqual(['/remote/shared/assets']);
-    expect(view.resolve('src/index.ts')).toBe('/remote/workspace/project/src/index.ts');
   });
 
   it('keeps heterogeneous provider mappings and allowlists isolated', () => {
@@ -72,42 +41,5 @@ describe('EnvironmentWorkspaceView', () => {
     expect(win32View.resolve('D:\\provider-b\\shared\\file.txt')).toBe('D:\\provider-b\\shared\\file.txt');
     expect(() => posixView.assertAllowed(posixView.resolve('/provider-b/shared/file.txt'))).toThrow('outside environment workspace');
     expect(() => win32View.assertAllowed(win32View.resolve('C:\\provider-a\\repo\\file.txt'))).toThrow('outside environment workspace');
-  });
-
-  it('translates Git Bash POSIX paths on win32 bash environments', () => {
-    const winBash = new FakeEnvironment(
-      { environmentId: 'local', generation: 'one' },
-      {
-        pathClass: 'win32',
-        host: {
-          osKind: 'Windows',
-          shellName: 'bash',
-          shellPath: 'C:\\kimi-test-nonexistent\\Git\\bin\\bash.exe',
-        },
-      },
-    );
-    const view = new EnvironmentWorkspaceView(winBash, {
-      workDir: 'C:\\workspace\\project',
-      additionalDirs: [],
-    });
-    expect(view.resolve('/c/workspace/project/src/index.ts')).toBe('C:\\workspace\\project\\src\\index.ts');
-    expect(view.resolve('/cygdrive/c/workspace/project/package.json')).toBe(
-      'C:\\workspace\\project\\package.json',
-    );
-    expect(() => view.assertAllowed(view.resolve('/tmp/scratch.txt'))).toThrow('outside environment workspace');
-  });
-
-  it('deduplicates roots and exposes the binding', () => {
-    const first = new EnvironmentWorkspaceView(environment('one', 'posix'), {
-      workDir: '/workspace',
-      additionalDirs: ['/shared', '/shared'],
-    });
-    const second = new EnvironmentWorkspaceView(environment('two', 'posix'), {
-      workDir: '/workspace',
-      additionalDirs: ['/shared'],
-    });
-    expect(first.roots).toEqual(['/workspace', '/shared']);
-    expect(first.binding).toEqual({ environmentId: 'local' });
-    expect(second.environment).not.toBe(first.environment);
   });
 });

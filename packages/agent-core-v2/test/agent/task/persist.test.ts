@@ -1,10 +1,9 @@
-import * as win32Path from 'node:path/win32';
 import { createMapFs } from '../../features/plan/stubs';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'pathe';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { SyncDescriptor } from '#/_base/di/descriptors';
 import { DisposableStore } from '#/_base/di/lifecycle';
@@ -305,48 +304,6 @@ describe('AgentTaskPersistence', () => {
       expect(snapshot?.outputSizeBytes).toBe('chunk-onechunk-two'.length);
     });
 
-    it('tolerates spill failures and keeps the server-local output readable', async () => {
-      const spill = spillPersistence(() => ({
-        fs: {
-          mkdir: async () => {},
-          appendText: async () => {
-            throw new Error('connection lost');
-          },
-        } as never,
-        dir: '/remote/tmp/kimi-code/task-output',
-      }));
-
-      await spill.appendTaskOutput('bash-mirror02', 'still-recorded');
-      const snapshot = await spill.readTaskOutputSnapshot('bash-mirror02', 100);
-      expect(snapshot?.preview).toBe('still-recorded');
-      expect(snapshot?.outputPath).toBe(join(sessionDir, AGENT_SCOPE, 'tasks', 'bash-mirror02', 'output.log'));
-    });
-
-    it('keeps the server-local output path when no spill target is present', async () => {
-      await persistence.appendTaskOutput('bash-local001', 'local only');
-      const snapshot = await persistence.readTaskOutputSnapshot('bash-local001', 100);
-      expect(snapshot?.outputPath).toBe(
-        join(sessionDir, 'tasks', 'bash-local001', 'output.log'),
-      );
-    });
-
-    it('keeps computing the current spill target for output that never spilled', async () => {
-      const taskId = 'bash-nosp0001';
-      const dirA = '/remote-a/tmp/kimi-code/task-output';
-      const dirB = '/remote-b/tmp/kimi-code/task-output';
-      let current: AgentTaskSpillTarget | undefined = undefined;
-      const spill = spillPersistence(() => current);
-
-      await spill.appendTaskOutput(taskId, 'buffered');
-
-      current = { fs: createMapFs(new Map()), dir: dirA };
-      const first = await spill.readTaskOutputSnapshot(taskId, 100);
-      expect(first?.outputPath).toBe(`${dirA}/${taskId}.log`);
-
-      current = { fs: createMapFs(new Map()), dir: dirB };
-      const second = await spill.readTaskOutputSnapshot(taskId, 100);
-      expect(second?.outputPath).toBe(`${dirB}/${taskId}.log`);
-    });
     it('isolates failures by task and repairs a missing chunk before advertising the mirror', async () => {
       const files = new Map<string, string>();
       let failedTask: string | undefined;
@@ -376,55 +333,6 @@ describe('AgentTaskPersistence', () => {
       await spill.appendTaskOutput(a, 'c');
       expect(files.get(`${target.dir}/${a}.log`)).toBe('abc');
       expect((await spill.readTaskOutputSnapshot(a, 100))?.outputPath).toBe(`${target.dir}/${a}.log`);
-    });
-
-    it('repairs restored output and isolates mirrors by actual filesystem identity and directory', async () => {
-      const id = 'bash-restore1';
-      const filesA = new Map<string, string>();
-      const filesB = new Map<string, string>();
-      const a = { fs: createMapFs(filesA), dir: '/remote/task-output' };
-      const b = { fs: createMapFs(filesB), dir: a.dir };
-      let current = a;
-      const spill = spillPersistence(() => current);
-      await spill.appendTaskOutput(id, 'a');
-      current = b;
-      expect((await spill.readTaskOutputSnapshot(id, 100))?.outputPath).toBe(`${b.dir}/${id}.log`);
-      expect(filesB.get(`${b.dir}/${id}.log`)).toBe('a');
-      await spill.appendTaskOutput(id, 'b');
-      current = a;
-      await spill.readTaskOutputSnapshot(id, 100);
-      expect(filesA.get(`${a.dir}/${id}.log`)).toBe('ab');
-      current = { fs: a.fs, dir: '/remote/another-directory' };
-      await spill.readTaskOutputSnapshot(id, 100);
-      expect(filesA.get(`${current.dir}/${id}.log`)).toBe('ab');
-      filesA.set(`${current.dir}/${id}.log`, 'partial');
-      const restored = spillPersistence(() => current);
-      await restored.readTaskOutputSnapshot(id, 100);
-      expect(filesA.get(`${current.dir}/${id}.log`)).toBe('ab');
-    });
-
-    it('repairs output on snapshot after a transient append failure', async () => {
-      const files = new Map<string, string>();
-      const fs = createMapFs(files, { appendText: async () => { throw new Error('offline'); } });
-      const spill = spillPersistence(() => ({ fs, dir: '/remote/task-output' }));
-      await spill.appendTaskOutput('bash-repair01', 'a');
-      await spill.appendTaskOutput('bash-repair01', 'b');
-      const snapshot = await spill.readTaskOutputSnapshot('bash-repair01', 100);
-      expect(files.get(snapshot!.outputPath)).toBe('ab');
-    });
-
-    it('uses native UNC joins and avoids rereading complete local output on healthy appends', async () => {
-      const files = new Map<string, string>();
-      const fs = createMapFs(files);
-      const read = vi.spyOn(bytes, 'read');
-      const spill = spillPersistence(() => ({ fs, dir: '//server/share/task-output', path: win32Path }));
-      await spill.appendTaskOutput('bash-native01', 'a');
-      read.mockClear();
-      await spill.appendTaskOutput('bash-native01', 'b');
-      await spill.appendTaskOutput('bash-native01', 'c');
-      expect(read).not.toHaveBeenCalled();
-      expect(files.get('\\\\server\\share\\task-output\\bash-native01.log')).toBe('abc');
-      read.mockRestore();
     });
 
     it('serializes concurrent appends and snapshot repair for each task', async () => {

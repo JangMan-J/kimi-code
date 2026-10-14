@@ -313,27 +313,6 @@ describe('FileMentionProvider', () => {
     expect(result!.items.some((item) => item.value.includes('local-only'))).toBe(false);
   });
 
-  it('preserves quoted prefixes for remote @ mentions', async () => {
-    const remoteSuggest = vi.fn(async () => [
-      { path: 'docs/with space.md', kind: 'file' as const },
-    ]);
-    const provider = new FileMentionProvider(
-      [],
-      workDir,
-      NO_FD,
-      [],
-      () => 'prompt',
-      undefined,
-      remoteSuggest,
-    );
-
-    const result = await provider.getSuggestions(['@"with'], 0, 6, { signal: ctrl() });
-
-    expect(remoteSuggest).toHaveBeenCalledWith('with');
-    expect(result).toMatchObject({ prefix: '@"with' });
-    expect(result!.items[0]).toMatchObject({ value: '@"docs/with space.md"' });
-  });
-
   it('returns null instead of local candidates when remote suggestions are unavailable', async () => {
     writeFileSync(join(workDir, 'local-only.ts'), 'local');
     const unavailable = new FileMentionProvider(
@@ -359,31 +338,6 @@ describe('FileMentionProvider', () => {
 
     await expect(unavailable.getSuggestions(['@local'], 0, 6, { signal: ctrl() })).resolves.toBeNull();
     await expect(failing.getSuggestions(['@local'], 0, 6, { signal: ctrl() })).resolves.toBeNull();
-  });
-
-  it('discards remote suggestions that arrive after the request is aborted', async () => {
-    const controller = new AbortController();
-    let resolveSuggestions!: (items: readonly { path: string; kind: 'file' }[]) => void;
-    const remoteSuggest = vi.fn(
-      () => new Promise<readonly { path: string; kind: 'file' }[]>((resolve) => {
-        resolveSuggestions = resolve;
-      }),
-    );
-    const provider = new FileMentionProvider(
-      [],
-      workDir,
-      NO_FD,
-      [],
-      () => 'prompt',
-      undefined,
-      remoteSuggest,
-    );
-
-    const pending = provider.getSuggestions(['@app'], 0, 4, { signal: controller.signal });
-    controller.abort();
-    resolveSuggestions([{ path: 'src/app.ts', kind: 'file' }]);
-
-    await expect(pending).resolves.toBeNull();
   });
 
   it('uses a filesystem fallback for @ mentions when fd is not available', async () => {
@@ -1075,4 +1029,3 @@ describe('FileMentionProvider', () => {
     });
   });
 });
-

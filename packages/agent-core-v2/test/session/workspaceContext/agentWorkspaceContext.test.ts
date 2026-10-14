@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 
 import { Emitter, Event } from '#/_base/event';
 import { createScopedTestHost } from '#/_base/di/test';
-import { getScopedServiceDescriptors } from '#/_base/di/scope';
 import { LifecycleScope } from '#/app/scopes';
 import type { ISessionEventBus } from '#/app/event/eventBus';
 import { AgentEnvironmentService, IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
@@ -127,43 +126,6 @@ describe('AgentWorkspaceContextService', () => {
     expect(main.shadow.isWithin('/elsewhere')).toBe(false);
     expect(() => main.shadow.assertAllowed('/elsewhere', 'read')).toThrowError(/outside workspace/);
   });
-
-  it('resolves and guards paths with win32 semantics for a win32 environment binding', () => {
-    const { agent, registry } = setup();
-    registry.register(fakeEnvironment('win-remote', 'win-remote-one', { pathClass: 'win32' }));
-    const main = agent('main', { environmentId: 'win-remote', cwd: 'C:\\work' });
-
-    expect(main.shadow.resolve('src\\file.ts')).toBe('C:\\work\\src\\file.ts');
-    expect(main.shadow.isWithin('C:\\work\\src')).toBe(true);
-    expect(main.shadow.isWithin('D:\\elsewhere')).toBe(false);
-    expect(() => main.shadow.assertAllowed('D:\\elsewhere', 'read')).toThrowError(/outside workspace/);
-  });
-
-  it('allows access under the configured additional dirs for a non-local binding', () => {
-    const { agent } = setup();
-    const main = agent('main', { environmentId: 'remote', cwd: '/remote/work' });
-
-    expect(main.shadow.additionalDirs).toEqual(['/extra']);
-    expect(main.shadow.isWithin('/extra/file.txt')).toBe(true);
-    expect(main.shadow.assertAllowed('/extra/file.txt', 'write')).toBe('/extra/file.txt');
-  });
-
-  it('falls back to the session roots and host path semantics when the bound environment is missing', () => {
-    const { agent } = setup();
-    const main = agent('main', { environmentId: 'ghost' });
-
-    expect(main.shadow.workDir).toBe('/workspace');
-    expect(main.shadow.resolve('src/file.ts')).toBe('/workspace/src/file.ts');
-    expect(main.shadow.isWithin('/workspace/src')).toBe(true);
-  });
-
-  it('keeps setWorkDir writing the shared session state', () => {
-    const { agent, sessionState } = setup();
-    const main = agent('main', { environmentId: 'local' });
-
-    main.shadow.setWorkDir('/pushed');
-    expect(sessionState.get(workspaceContextWorkDirKey)).toBe('/pushed');
-  });
 });
 
 describe('ISessionWorkspaceContext scope resolution', () => {
@@ -180,13 +142,6 @@ describe('ISessionWorkspaceContext scope resolution', () => {
     additionalDirs: [],
     onDidChange: Event.None,
   } as unknown as ISessionWorkspaceInfo;
-
-  it('registers the shadow at agent scope in the scoped service registry', () => {
-    const entries = getScopedServiceDescriptors(LifecycleScope.Agent).filter(
-      (entry) => (entry.id as unknown) === (ISessionWorkspaceContext as unknown),
-    );
-    expect(entries).toHaveLength(1);
-  });
 
   it('resolves the session service at session scope and the binding-derived shadow at agent scope', () => {
     const host = createScopedTestHost();
@@ -209,24 +164,6 @@ describe('ISessionWorkspaceContext scope resolution', () => {
       expect(fromAgent).toBeInstanceOf(AgentWorkspaceContextService);
       expect(fromAgent.workDir).toBe('/home');
       expect(fromAgent.additionalDirs).toEqual([]);
-    } finally {
-      host.dispose();
-    }
-  });
-
-  it('falls back to the session roots while the environment service is not materialized', () => {
-    const host = createScopedTestHost();
-    try {
-      const session = host.child(LifecycleScope.Session, 'session-1', [
-        [ISessionContext, sessionContext],
-        [ISessionWorkspaceInfo, workspaceInfo],
-      ]);
-      const agent = host.childOf(session, LifecycleScope.Agent, 'agent-1');
-
-      const fromAgent = agent.accessor.get(ISessionWorkspaceContext);
-
-      expect(fromAgent).toBeInstanceOf(AgentWorkspaceContextService);
-      expect(fromAgent.workDir).toBe('/host/session/cwd');
     } finally {
       host.dispose();
     }

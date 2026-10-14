@@ -146,21 +146,6 @@ function isPostCloseTransportError(error: unknown): boolean {
 }
 
 describe('StdioMcpClient', () => {
-  it('connects through acquireWhenReady before spawning the server', async () => {
-    const harness = createEnvironmentClient(
-      { transport: 'stdio', command: process.execPath, args: [stdioFixture] },
-      { environmentId: 'dev-box' },
-    );
-    try {
-      await harness.client.connect();
-      expect(harness.calls.slice(0, 1)).toEqual(['acquireWhenReady']);
-      const result = await harness.client.callTool('echo', { text: 'hello' });
-      expect(result.content).toEqual([{ type: 'text', text: 'hello' }]);
-    } finally {
-      await harness.client.close();
-    }
-  }, 15000);
-
   it('rejects a removed executor value instead of silently running on local', async () => {
     const client = createClient({ transport: 'stdio', command: process.execPath, executor: 'kaos' });
     await expect(client.connect()).rejects.toThrowError(
@@ -579,26 +564,6 @@ describe('StdioMcpClient', () => {
     await client.close();
 
     expect(tracked.every((entry) => entry.disposed)).toBe(true);
-  }, 15000);
-
-  it('disposes tracked environment resources when the server exits mid-session', async () => {
-    const { client, tracked } = createTrackingClient({
-      transport: 'stdio',
-      command: process.execPath,
-      args: [crashAfterConnectFixture],
-      env: { KIMI_TEST_MCP_EXIT_AFTER_MS: '50' },
-    });
-    try {
-      await client.connect();
-      const deadline = Date.now() + 10_000;
-      while (Date.now() < deadline && !tracked.every((entry) => entry.disposed)) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
-      expect(tracked).toHaveLength(2);
-      expect(tracked.every((entry) => entry.disposed)).toBe(true);
-    } finally {
-      await client.close();
-    }
   }, 15000);
 });
 

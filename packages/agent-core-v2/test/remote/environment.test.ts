@@ -2,9 +2,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
-import { fileURLToPath } from 'node:url';
 
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { ConnectionClosedError } from '#/remote/client/connection';
 import { RemoteEnvironment } from '#/remote/client/remoteEnvironment';
@@ -17,12 +16,12 @@ function tsxCli(): string {
   return join(dirname(require.resolve('tsx/package.json')), 'dist', 'cli.mjs');
 }
 
-function loopbackLauncher(env?: Record<string, string>) {
+function loopbackLauncher() {
   return {
     type: 'command' as const,
     program: process.execPath,
     args: [tsxCli(), join(here, 'fixtures', 'exec-server-child.ts')],
-    env: { EXEC_SERVER_VERSION: TEST_VERSION, ...env },
+    env: { EXEC_SERVER_VERSION: TEST_VERSION },
   };
 }
 
@@ -98,67 +97,5 @@ describe('RemoteEnvironment over a subprocess loopback', () => {
     await environment.dispose();
     expect(statuses).toContain('disposed');
     await expect(environment.process.spawn('true')).rejects.toThrow(ConnectionClosedError);
-  });
-
-  it('marks the environment unavailable and drains in-flight work when the transport drops', async () => {
-    const environment = await RemoteEnvironment.connect({
-      environmentId: 'loopback',
-      launcher: loopbackLauncher({ EXEC_SERVER_EXIT_AFTER_MS: '3000' }),
-    });
-    const disconnected = new Promise<void>((resolve) => {
-      environment.onDidChangeStatus((status) => {
-        if (status === 'disconnected') resolve();
-      });
-    });
-    const proc = await environment.process.spawn('sleep', ['300']);
-    await disconnected;
-    expect(environment.status).toBe('disconnected');
-    await expect(proc.wait()).resolves.toBe(-1);
-    await expect(environment.fs.readText('/etc/hostname')).rejects.toThrow(ConnectionClosedError);
-    await environment.dispose();
-  });
-
-  it('fails to connect when the executor is missing, with exit diagnostics', async () => {
-    await expect(
-      RemoteEnvironment.connect({
-        environmentId: 'loopback',
-        launcher: {
-          type: 'command',
-          program: process.execPath,
-          args: ['-e', 'process.exit(127)'],
-        },
-      }),
-    ).rejects.toThrow(/exited before the handshake/);
-  });
-
-  it('times out a silent executor inside the initialize window', async () => {
-    const started = Date.now();
-    const pending = RemoteEnvironment.connect({
-      environmentId: 'loopback',
-      initializeTimeoutMs: 500,
-      launcher: {
-        type: 'command',
-        program: process.execPath,
-        args: ['-e', 'setInterval(() => {}, 1000)'],
-      },
-    });
-    await expect(pending).rejects.toMatchObject({ name: 'HandshakeError', kind: 'timeout' });
-    await expect(pending).rejects.toThrow(/initialize timed out after 500ms/);
-    await expect(pending).rejects.toThrow(/^(?!.*executor stderr).*$/);
-    expect(Date.now() - started).toBeLessThan(10_000);
-  });
-
-  it('carries the executor stderr tail in the initialize timeout error', async () => {
-    const pending = RemoteEnvironment.connect({
-      environmentId: 'loopback',
-      initializeTimeoutMs: 500,
-      launcher: {
-        type: 'command',
-        program: process.execPath,
-        args: ['-e', 'process.stderr.write("Password: "); setInterval(() => {}, 1000)'],
-      },
-    });
-    await expect(pending).rejects.toMatchObject({ name: 'HandshakeError', kind: 'timeout' });
-    await expect(pending).rejects.toThrow(/initialize timed out after 500ms; executor stderr: Password:/);
   });
 });

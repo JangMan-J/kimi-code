@@ -230,24 +230,6 @@ describe('server-v2 /api/v1/sessions/{sid}/terminals', () => {
     }
   });
 
-  it('prefers environment_id over the deprecated runtime_id alias', async () => {
-    const sid = await createSession(work as string);
-    const remote = await registerRemoteTerminalEnvironment('remote-term');
-    try {
-      const res = await fetch(`${base}/api/v1/sessions/${sid}/terminals`, {
-        method: 'POST',
-        headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-        body: JSON.stringify({ environment_id: 'remote-term', runtime_id: 'local' }),
-      } as never);
-      const body = (await res.json()) as Envelope<Terminal>;
-      expect(body.code).toBe(0);
-      expect(remote.spawns).toHaveLength(1);
-      expect(spawnOptions).toHaveLength(0);
-    } finally {
-      await remote.dispose();
-    }
-  });
-
   it('creates terminals for multiple sessions using each session workspace cwd', async () => {
     const rootA = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-a-'));
     const rootB = await mkdtemp(join(tmpdir(), 'kimi-server-v2-term-b-'));

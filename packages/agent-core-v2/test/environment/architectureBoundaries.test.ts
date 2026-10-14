@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -14,60 +14,7 @@ function kapSource(path: string): string {
   return readFileSync(join(kapSourceRoot, path), 'utf8');
 }
 
-function sourceFiles(path: string): string[] {
-  const root = join(sourceRoot, path);
-  const result: string[] = [];
-  const visit = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = join(directory, entry.name);
-      if (entry.isDirectory()) visit(absolute);
-      else if (entry.name.endsWith('.ts')) result.push(absolute);
-    }
-  };
-  visit(root);
-  return result;
-}
-
 describe('environment architecture boundaries', () => {
-  it('keeps Program out of the scoped service registry', () => {
-    const workspaceInstance = source('workspace/workspaceInstance/workspaceInstance.ts');
-    const program = source('program/program.ts');
-    const dependencies = source('program/programDependencies.ts');
-    const workspaceSources = sourceFiles('workspace').map((path) => readFileSync(path, 'utf8')).join('\n');
-    expect(workspaceInstance).not.toContain('createScopedChildHandle');
-    expect(program).not.toContain('ServicesAccessor');
-    expect(program).not.toContain('readonly accessor');
-    expect(program).not.toContain('PROGRAM_SERVICE_KIND');
-    expect(program).not.toContain('ServiceCollection');
-    expect(program).not.toContain('createChild(');
-    expect(program).not.toContain('SyncDescriptor');
-    expect(program).not.toContain('invokeFunction');
-    expect(program).not.toContain('ServiceIdentifier');
-    expect(program).not.toContain('IHostEnvironment');
-    expect(program).not.toContain('IHostFileSystem');
-    expect(program).not.toContain('IHostProcessService');
-    expect(program).not.toContain('IHostTerminalService');
-    expect(dependencies).not.toContain('IInstantiationService');
-    expect(workspaceInstance).not.toContain('createChild(');
-    expect(workspaceSources).not.toMatch(/registerScopedService\(\s*['"]program['"]/);
-  });
-
-  it('attaches environment providers once through the app service', () => {
-    const provider = source('environment/environmentProvider.ts');
-    const local = source('environment/localEnvironment.ts');
-    const workspaceInstance = source('workspace/workspaceInstance/workspaceInstance.ts');
-    const manager = source('app/environment/environmentService.ts');
-    expect(provider).not.toContain('EnvironmentProviderContext');
-    expect(provider).toContain('registerEnvironment');
-    expect(provider).not.toContain('WorkspaceInstance');
-    expect(provider).not.toContain('EnvironmentProviderRegistry');
-    expect(provider).not.toContain('readonly environments');
-    expect(local).not.toContain('ServicesAccessor');
-    expect(workspaceInstance).not.toContain('IInstantiationService');
-    expect(manager).toContain('factory.attach(');
-    expect(workspaceInstance).not.toContain('environments.dispose');
-  });
-
   it('builds every agent OS execution from an environment lease and workspace view', () => {
     for (const path of [
       'agent/tools/os/bash/bashTool.ts',

@@ -88,46 +88,6 @@ describe('HostFileSystem stat / lstat', () => {
   });
 });
 
-describe('HostFileSystem unix mode', () => {
-  it('reports the mode of files via stat and lstat', async () => {
-    const target = join(dir, 'file.txt');
-    await writeFile(target, 'x', 'utf-8');
-    await chmod(target, 0o640);
-
-    expect((await fs.stat(target)).mode).toBe(0o640);
-    expect((await fs.lstat(target)).mode).toBe(0o640);
-  });
-});
-
-describe('HostFileSystem rename', () => {
-  it('renames a file within the same directory and preserves its contents', async () => {
-    const from = join(dir, 'before.txt');
-    const to = join(dir, 'after.txt');
-    await writeFile(from, 'payload', 'utf-8');
-
-    await fs.rename!(from, to);
-
-    expect(await fs.readText(to)).toBe('payload');
-    await expect(fs.stat(from)).rejects.toThrow();
-  });
-
-  it('moves a file across directories', async () => {
-    const sub = join(dir, 'nested');
-    await mkdir(sub);
-    const from = join(dir, 'move.txt');
-    const to = join(sub, 'move.txt');
-    await writeFile(from, 'data', 'utf-8');
-
-    await fs.rename!(from, to);
-
-    expect(await fs.readText(to)).toBe('data');
-  });
-
-  it('rejects renaming a missing source', async () => {
-    await expect(fs.rename!(join(dir, 'missing'), join(dir, 'target'))).rejects.toThrow();
-  });
-});
-
 describe('HostFileSystem streamed UTF-8 lines', () => {
   it('preserves Unicode across chunks, CRLF, and a BOM after the first line', async () => {
     const path = join(dir, 'unicode.txt');

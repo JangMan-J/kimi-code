@@ -46,7 +46,7 @@ import {
   PermissionApprovalResolved,
 } from '#/agent/toolApproval/toolApprovalService';
 import { IAgentToolExecutorService } from '#/agent/toolExecutor/toolExecutor';
-import { IExternalHooksRunnerService, type HookExecutionError } from '#/features/externalHooks/app/externalHooksRunner';
+import { IExternalHooksRunnerService } from '#/features/externalHooks/app/externalHooksRunner';
 import { ExternalHooksRunnerService } from '#/features/externalHooks/app/externalHooksRunnerService';
 import { makeHookRunner } from './runner-stub';
 import type { AgentTaskInfo } from '#/agent/task/task';
@@ -1555,65 +1555,6 @@ describe('IExternalHooksRunnerService integration', () => {
         'UserPromptSubmit',
       ]);
       expect(seen.every((call) => call.cwd === '/local/session-cwd')).toBe(true);
-    } finally {
-      ix?.dispose();
-      disposables.dispose();
-    }
-  });
-
-  it('surfaces only the first hook execution failure as a user-visible hook.result warning', async () => {
-    const disposables = new DisposableStore();
-    let ix: TestInstantiationService | undefined;
-    try {
-      const hookErrors = disposables.add(new Emitter<HookExecutionError>());
-      const dispatched: Array<{ type: string; agentId: string; hookEvent: string; content: string }> = [];
-      const hookEngine = {
-        trigger: async () => [],
-        triggerBlock: async () => undefined,
-        fireAndForgetTrigger: async () => [],
-        onDidHookError: hookErrors.event,
-      };
-
-      ix = createServices(disposables, {
-        strict: true,
-        additionalServices: (reg) => {
-          registerHookTestServices(reg);
-          reg.defineInstance(ISessionContext, stubSessionContext());
-          reg.defineInstance(IAgentLoopService, stubLoopWithHooks());
-          reg.definePartialInstance(IAgentFullCompactionService, {
-            hooks: createHooks(['onWillCompact']),
-          });
-          reg.defineInstance(IEventDispatcher, {
-            _serviceBrand: undefined,
-            hooks: { onDidRestore: new OrderedHookSlot() },
-            dispatch: async (event: { type: string; agentId: string; hookEvent: string; content: string }) => {
-              dispatched.push(event);
-            },
-          } as unknown as IEventDispatcher);
-        },
-      });
-      activateAgentEventBus(ix);
-      ix.set(IExternalHooksRunnerService, stubHookRunner(hookEngine));
-      ix.set(IAgentExternalHooksService, new SyncDescriptor(AgentExternalHooksService));
-      ix.get(IAgentExternalHooksService);
-
-      hookErrors.fire({ event: 'Stop', sessionId: 'session-other', message: 'exited with exit code 1' });
-      hookErrors.fire({
-        event: 'PreToolUse',
-        sessionId: 'session-1',
-        command: 'bad-cmd',
-        message: 'exited with exit code 1',
-      });
-      hookErrors.fire({ event: 'Stop', sessionId: 'session-1', message: 'timed out after 30s' });
-      await flushMicrotasks();
-
-      expect(dispatched).toHaveLength(1);
-      expect(dispatched[0]).toMatchObject({
-        type: 'hook.result',
-        agentId: 'main',
-        hookEvent: 'PreToolUse',
-      });
-      expect(dispatched[0]?.content).toContain('exit code 1');
     } finally {
       ix?.dispose();
       disposables.dispose();

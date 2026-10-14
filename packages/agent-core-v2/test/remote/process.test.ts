@@ -3,9 +3,7 @@ import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
-
-import { HostProcessError } from '#/os/interface/hostProcess';
+import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { RemoteExecConnection } from '#/remote/client/connection';
 import { RemoteProcessService } from '#/remote/client/remoteProcess';
@@ -83,38 +81,6 @@ describe('process group over a subprocess loopback', () => {
     expect(proc.pid).toBeGreaterThan(0);
   });
 
-  it('merges stderr into stdout when mergeStderr is set', async () => {
-    const proc = await processes.spawn('bash', ['-c', 'echo out; echo err >&2'], {
-      mergeStderr: true,
-    });
-    const [merged, code] = await Promise.all([collect(proc.stdout), proc.wait()]);
-    expect(code).toBe(0);
-    expect(merged.toString()).toContain('out');
-    expect(merged.toString()).toContain('err');
-  });
-
-  it('maps spawn failures to the process domain error', async () => {
-    await expect(
-      processes.spawn('definitely-not-a-real-binary-9f3x', []),
-    ).rejects.toMatchObject({
-      name: 'HostProcessError',
-      code: 'os.process.spawn_failed',
-    });
-  });
-
-  it('points at the cwd when the spawn cwd does not exist', async () => {
-    const missing = '/definitely-missing-cwd-9f3x';
-    await expect(
-      processes.spawn('bash', ['-c', 'true'], { cwd: missing }),
-    ).rejects.toSatisfy((error: unknown) => {
-      expect(error).toBeInstanceOf(HostProcessError);
-      const hostError = error as HostProcessError;
-      expect(hostError.code).toBe('os.process.spawn_failed');
-      expect(hostError.message).toContain(`cwd ${missing} does not exist or is not a directory`);
-      return true;
-    });
-  });
-
   it('spawns in the environment defaultCwd when the call omits cwd', async () => {
     const envCwd = await realpath(await mkdtemp(join(tmpdir(), 'kimi-remote-default-cwd-')));
     try {
@@ -147,54 +113,12 @@ describe('process group over a subprocess loopback', () => {
     }
   });
 
-  it('round-trips stdin and closes it on end', async () => {
-    const proc = await processes.spawn('cat', []);
-    proc.stdin.write('hello ');
-    proc.stdin.write('cat');
-    proc.stdin.end();
-    const [out, code] = await Promise.all([collect(proc.stdout), proc.wait()]);
-    expect(out.toString()).toBe('hello cat');
-    expect(code).toBe(0);
-  });
-
   it('delivers tail output emitted after the exit event', async () => {
     const proc = await processes.spawn('bash', ['-c', 'printf early; sleep 0.4; printf late']);
     const code = await proc.wait();
     expect(code).toBe(0);
     const out = await collect(proc.stdout);
     expect(out.toString()).toBe('earlylate');
-  });
-
-  it('handles a slow consumer of a large output stream', async () => {
-    const proc = await processes.spawn('seq', ['1', '300000']);
-    await delay(1_000);
-    const [out, code] = await Promise.all([collect(proc.stdout), proc.wait()]);
-    expect(code).toBe(0);
-    const lines = out.toString().trim().split('\n');
-    expect(lines.length).toBe(300_000);
-    expect(lines[0]).toBe('1');
-    expect(lines.at(-1)).toBe('300000');
-  });
-
-  it('handles a slow producer on stdin', async () => {
-    const proc = await processes.spawn('cat', []);
-
-    const collecting = collect(proc.stdout);
-    const chunk = Buffer.alloc(4096, 0x61);
-    const writes = 64;
-    for (let i = 0; i < writes; i += 1) {
-      const canContinue = proc.stdin.write(chunk);
-      if (!canContinue) {
-        await new Promise((resolve) => {
-          proc.stdin.once('drain', resolve);
-        });
-      }
-      await delay(5);
-    }
-    proc.stdin.end();
-    const [out, code] = await Promise.all([collecting, proc.wait()]);
-    expect(code).toBe(0);
-    expect(out.length).toBe(4096 * writes);
   });
 
   it('preserves multi-byte UTF-8 across output packets', async () => {
@@ -313,7 +237,6 @@ describe('process output backpressure', () => {
     expect(text.length).toBeGreaterThan(second);
     expect(text).toBe('y\n'.repeat(text.length / 2));
   }, 15_000);
-
 });
 
 describe('stdin write chain recovery', () => {

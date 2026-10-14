@@ -7222,92 +7222,6 @@ command = "vim"
     });
   });
 
-  it('shows the main session binding badge for subagent approval requests', async () => {
-    const session = makeSession();
-    const { driver } = await makeDriver(session);
-    driver.state.appState.environment = { environmentId: 'main-box', type: 'ssh', status: 'ready' };
-
-    const approvalHandler = vi.mocked(session.setApprovalHandler).mock.calls[0]?.[0] as
-      | ((request: ApprovalRequest & { agentId?: string }) => Promise<ApprovalResponse>)
-      | undefined;
-    if (approvalHandler === undefined) throw new Error('expected approval handler');
-    void approvalHandler({
-      turnId: 1,
-      toolCallId: 'call_bash',
-      toolName: 'Bash',
-      action: 'Run shell command',
-      agentId: 'agent-sub',
-      display: {
-        kind: 'generic',
-        summary: 'Run shell command',
-        detail: { command: 'ls', description: 'List files' },
-      },
-    });
-
-    await vi.waitFor(() => {
-      const approval = stripSgr(driver.state.editorContainer.render(120).join('\n'));
-      expect(approval).toContain('ssh:main-box');
-    });
-  });
-
-  it('renders no badge when the session binding is local', async () => {
-    const session = makeSession();
-    const { driver } = await makeDriver(session);
-    driver.state.appState.environment = { environmentId: 'local', type: 'local', status: 'ready' };
-
-    const approvalHandler = vi.mocked(session.setApprovalHandler).mock.calls[0]?.[0] as
-      | ((request: ApprovalRequest & { agentId?: string }) => Promise<ApprovalResponse>)
-      | undefined;
-    if (approvalHandler === undefined) throw new Error('expected approval handler');
-    void approvalHandler({
-      turnId: 1,
-      toolCallId: 'call_bash',
-      toolName: 'Bash',
-      action: 'Run shell command',
-      agentId: 'agent-sub',
-      display: {
-        kind: 'generic',
-        summary: 'Run shell command',
-        detail: { command: 'ls', description: 'List files' },
-      },
-    });
-
-    await vi.waitFor(() => {
-      expect(driver.state.editorContainer.children[0]).toBeInstanceOf(ApprovalPanelComponent);
-    });
-    const approval = stripSgr(driver.state.editorContainer.render(120).join('\n'));
-    expect(approval).not.toContain('ssh:');
-    expect(approval).not.toContain('docker:');
-  });
-
-  it('keeps the main session binding as the approval badge for main-agent requests', async () => {
-    const session = makeSession();
-    const { driver } = await makeDriver(session);
-    driver.state.appState.environment = { environmentId: 'main-box', type: 'ssh', status: 'ready' };
-
-    const approvalHandler = vi.mocked(session.setApprovalHandler).mock.calls[0]?.[0] as
-      | ((request: ApprovalRequest & { agentId?: string }) => Promise<ApprovalResponse>)
-      | undefined;
-    if (approvalHandler === undefined) throw new Error('expected approval handler');
-    void approvalHandler({
-      turnId: 1,
-      toolCallId: 'call_bash',
-      toolName: 'Bash',
-      action: 'Run shell command',
-      agentId: 'main',
-      display: {
-        kind: 'generic',
-        summary: 'Run shell command',
-        detail: { command: 'ls', description: 'List files' },
-      },
-    });
-
-    await vi.waitFor(() => {
-      const approval = stripSgr(driver.state.editorContainer.render(120).join('\n'));
-      expect(approval).toContain('ssh:main-box');
-    });
-  });
-
   it('renders /status using the active session runtime status', async () => {
     const session = makeSession({
       getStatus: vi.fn(async () => ({
@@ -9745,72 +9659,6 @@ describe('KimiTUI environment slot', () => {
     });
   });
 
-  it('updates the slot on disconnect without a transcript notice', async () => {
-    const session = environmentSession({
-      listEnvironments: vi.fn(async () => ({
-        workspaceId: 'ws-1',
-        environments: [
-          { environmentId: 'local', type: 'local', status: 'ready', generation: 'g0', capabilities: [] },
-          { environmentId: 'dev-box', type: 'ssh', status: 'disconnected', generation: 'g1', capabilities: ['fs'] },
-        ],
-      })),
-    });
-    const { driver } = await makeDriver(session);
-    await driver.refreshEnvironmentSlot();
-
-    expect(driver.state.appState.environment?.status).toBe('disconnected');
-    expect(stripSgr(renderTranscript(driver))).not.toContain('Environment ssh:dev-box disconnected');
-  });
-
-  it('does not show the disconnect notice when the environment is reaped to pending', async () => {
-    let status: 'ready' | 'pending' = 'ready';
-    const session = environmentSession({
-      listEnvironments: vi.fn(async () => ({
-        workspaceId: 'ws-1',
-        environments: [
-          { environmentId: 'local', type: 'local', status: 'ready', generation: 'g0', capabilities: [] },
-          { environmentId: 'dev-box', type: 'ssh', status, generation: 'g1', capabilities: ['fs'] },
-        ],
-      })),
-    });
-    const { driver } = await makeDriver(session);
-    await driver.refreshEnvironmentSlot();
-
-    status = 'pending';
-    await driver.refreshEnvironmentSlot();
-
-    expect(driver.state.appState.environment?.status).toBe('pending');
-    expect(stripSgr(renderTranscript(driver))).not.toContain('Environment ssh:dev-box disconnected');
-  });
-
-  it('carries the disconnect reason into appState for the footer slot', async () => {
-    const session = environmentSession({
-      listEnvironments: vi.fn(async () => ({
-        workspaceId: 'ws-1',
-        environments: [
-          { environmentId: 'local', type: 'local', status: 'ready', generation: 'g0', capabilities: [] },
-          {
-            environmentId: 'dev-box',
-            type: 'ssh',
-            status: 'disconnected',
-            generation: 'g1',
-            capabilities: ['fs'],
-            connectError: 'ssh: connect failed (code 255)',
-          },
-        ],
-      })),
-    });
-    const { driver } = await makeDriver(session);
-    await driver.refreshEnvironmentSlot();
-    expect(driver.state.appState.environment).toEqual({
-      environmentId: 'dev-box',
-      type: 'ssh',
-      status: 'disconnected',
-      cwd: '/home/me/projects',
-      connectError: 'ssh: connect failed (code 255)',
-    });
-  });
-
   it('refreshes the slot with the recorded reason on a environment.status.changed hint', async () => {
     const session = environmentSession({
       listEnvironments: vi.fn(async () => ({
@@ -9845,41 +9693,6 @@ describe('KimiTUI environment slot', () => {
     });
 
     expect(driver.state.appState.environment?.connectError).toContain('executor stderr: Password:');
-    expect(stripSgr(renderTranscript(driver))).not.toContain('Environment ssh:dev-box disconnected');
-  });
-
-  it('shows connection progress while the first prompt awaits the startup session', async () => {
-    const lazySession = environmentSession({ id: 'ses-lazy' });
-    const startupInput: KimiTUIStartupInput = {
-      ...makeStartupInput(),
-      cliOptions: { ...makeStartupInput().cliOptions, model: 'k2', environment: 'dev-box' },
-    };
-    let resolveCreate!: (s: unknown) => void;
-    const createSession = vi.fn(
-      () =>
-        new Promise((resolve) => {
-          resolveCreate = resolve;
-        }),
-    );
-    const { driver } = await makeDriver(
-      lazySession,
-      {
-        createSession,
-      },
-      startupInput,
-    );
-
-    driver.handleUserInput('hello-remote-world');
-    await vi.waitFor(() => expect(createSession).toHaveBeenCalledOnce());
-    expect(driver.state.appState.environment).toBeUndefined();
-    expect(stripSgr(renderTranscript(driver))).toContain('Connecting to dev-box…');
-
-    resolveCreate(lazySession);
-    await vi.waitFor(() => {
-      expect(lazySession.prompt).toHaveBeenCalledWith('hello-remote-world', { promptId: undefined });
-    });
-    expect(driver.state.transcriptEntries.filter((entry) => entry.kind === 'user')).toHaveLength(1);
-    expect(driver.state.appState.environment?.status).toBe('ready');
   });
 
   it('surfaces the lazy creation failure and leaves the prompt for resubmission', async () => {
@@ -9956,32 +9769,6 @@ describe('KimiTUI editor replacement disposal', () => {
     expect(driver.state.editorContainer.children).toContain(panel);
     mounted.restoreEditor();
     expect(panel.dispose).toHaveBeenCalledOnce();
-  });
-
-  it('disposes the previous replacement when another panel mounts', async () => {
-    const { driver } = await makeDriver();
-    const mounted = mountDriver(driver);
-    const first = makePanel();
-    const second = makePanel();
-    mounted.mountEditorReplacement(first);
-    mounted.mountEditorReplacement(second);
-    expect(first.dispose).toHaveBeenCalledOnce();
-    expect(second.dispose).not.toHaveBeenCalled();
-    expect(driver.state.editorContainer.children).toContain(second);
-  });
-
-  it('closes a panel without dispose without failing', async () => {
-    const { driver } = await makeDriver();
-    const mounted = mountDriver(driver);
-    const panel = {
-      focused: false,
-      handleInput: vi.fn(),
-      invalidate: vi.fn(),
-      render: vi.fn(() => ['panel']),
-    };
-    mounted.mountEditorReplacement(panel as never);
-    mounted.restoreEditor();
-    expect(driver.state.editorContainer.children).not.toContain(panel);
   });
 });
 

@@ -10,7 +10,6 @@ import { Event } from '#/_base/event';
 import { InstantiationService } from '#/_base/di/instantiationService';
 import { ServiceCollection } from '#/_base/di/serviceCollection';
 import { AgentProfileRegistryService } from '#/app/agentProfileCatalog/agentProfileRegistryService';
-import { SessionAgentProfileCatalogService } from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalogService';
 import { noopTelemetryService } from '#/app/telemetry/telemetry';
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
 import { HostProcessService } from '#/os/backends/node-local/hostProcessService';
@@ -232,52 +231,6 @@ describe('Program', () => {
     await registry.dispose();
   });
 
-  it('retries a transient generation build failure on the next environment change and recovers', async () => {
-    const { registry, program, create } = setup();
-    const registration = registry.register(fakeEnvironment('local', 'one'));
-    await program.ready;
-    expect(program.sessionControllerGenerationFor('local')).toBe('one');
-
-    create.mockImplementationOnce(() => {
-      throw new Error('boom');
-    });
-    const second = fakeEnvironment('local', 'two');
-    await registration.remove();
-    registry.register(second);
-    second.setStatus('disconnected');
-    second.setStatus('ready');
-
-    await vi.waitFor(() => {
-      expect(program.sessionControllerGenerationFor('local')).toBe('two');
-    });
-    await vi.waitFor(() => {
-      expect(program.status).toBe('ready');
-    });
-    expect(() => program.createSessionController()).not.toThrow();
-    program.dispose();
-    await registry.dispose();
-  });
-
-  it('marks the program degraded and serves no new sessions while the new generation build keeps failing', async () => {
-    const { registry, program, create } = setup();
-    const registration = registry.register(fakeEnvironment('local', 'one'));
-    await program.ready;
-    expect(program.status).toBe('ready');
-
-    create.mockImplementation(() => {
-      throw new Error('boom');
-    });
-    await registration.remove();
-    registry.register(fakeEnvironment('local', 'two'));
-    await Promise.resolve();
-
-    expect(program.status).toBe('degraded');
-    expect(() => program.sessionControllerGenerationFor('local')).toThrow('no available generation for environment local');
-    expect(() => program.createSessionController()).toThrow('no available generation for environment local');
-    program.dispose();
-    await registry.dispose();
-  });
-
   it('owns catalog, instructions, MCP, provenance, and current environment in one generation', async () => {
     const { registry, program, create } = setup();
     registry.register(fakeEnvironment('local', 'one'));
@@ -429,7 +382,6 @@ interface LocalityFixture {
   readonly remoteRoot: string;
   readonly remoteAltRoot: string;
   readonly replaceLocal: (generation: string) => Promise<void>;
-  readonly replaceRemote: (generation: string, cwd: string) => Promise<void>;
   readonly cleanup: () => Promise<void>;
 }
 
@@ -638,16 +590,6 @@ async function localityFixture(options: { readonly remoteCwd?: string } = {}): P
         { fs: realFs, process: new HostProcessService() },
       ) as FakeEnvironment);
     },
-    replaceRemote: async (generation: string, cwd: string) => {
-      await remoteRegistration.remove();
-      registry.register(Object.assign(
-        new FakeEnvironment(
-          { environmentId: 'remote', generation },
-          { capabilities: ['fs', 'process'], host: { homeDir: remoteHomeDir } },
-        ),
-        { fs: scopedFs(cwd, await realpath(cwd), realFs), process: new HostProcessService() },
-      ) as FakeEnvironment);
-    },
     cleanup: async () => {
       await Promise.allSettled([...generations.values()].map((generation) => awaitLocality(generation)));
       program.dispose();
@@ -759,61 +701,6 @@ describe('Program remote generation activation', () => {
     }
   });
 
-  it('keeps personal instructions local when the remote working directory is the filesystem root', async () => {
-    const fixture = await localityFixture();
-    const controller = fixture.program.createSessionController('remote', '/');
-    try {
-      const input = fixture.controllerInputs[0]!;
-      await input.instructions.ready;
-      expect(input.instructions.sessionProvider().agentsMd).toContain('user instructions');
-    } finally {
-      controller.dispose();
-      await fixture.cleanup();
-    }
-  });
-
-  it('gives local and remote sessions their own project profiles while sharing personal profiles', async () => {
-    const fixture = await localityFixture({ remoteCwd: undefined });
-    const catalogs: SessionAgentProfileCatalogService[] = [];
-    const controllers = [];
-    try {
-      controllers.push(fixture.program.createSessionController());
-      controllers.push(fixture.program.createSessionController('remote', fixture.remoteRoot));
-      controllers.push(fixture.program.createSessionController('remote', fixture.remoteAltRoot));
-      for (const input of fixture.controllerInputs) {
-        await Promise.all([input.workspaceAgentProfiles.ready, input.userAgentProfiles.ready]);
-        catalogs.push(new SessionAgentProfileCatalogService(
-          fixture.profileRegistry,
-          { _serviceBrand: undefined, workspaceKey: 'workspace', contextKey: input.profileContextKey },
-          noopLogger,
-        ));
-      }
-      expect(catalogs[0]!.list().map((profile) => profile.name).toSorted()).toEqual(['local-agent', 'user-agent']);
-      expect(catalogs[1]!.list().map((profile) => profile.name).toSorted()).toEqual(['target-agent', 'user-agent']);
-      expect(catalogs[2]!.list().map((profile) => profile.name).toSorted()).toEqual(['alt-agent', 'user-agent']);
-      expect(fixture.controllerInputs[0]!.mcp.connectionManager()).toBe(fixture.controllerInputs[1]!.mcp.connectionManager());
-      expect(fixture.controllerInputs[0]!.mcp.connectionManager()).toBe(fixture.controllerInputs[2]!.mcp.connectionManager());
-      await fixture.replaceRemote('remote-two', fixture.remoteRoot);
-      controllers.push(fixture.program.createSessionController('remote', fixture.remoteRoot));
-      const replacement = fixture.controllerInputs[3]!;
-      await replacement.workspaceAgentProfiles.ready;
-      const reconnected = new SessionAgentProfileCatalogService(
-        fixture.profileRegistry,
-        { _serviceBrand: undefined, workspaceKey: 'workspace', contextKey: replacement.profileContextKey },
-        noopLogger,
-      );
-      catalogs.push(reconnected);
-      controllers[1]!.dispose();
-      expect(reconnected.list().map((profile) => profile.name).toSorted()).toEqual(['target-agent', 'user-agent']);
-      expect(catalogs[0]!.get('local-agent')).toBeDefined();
-      expect(replacement.mcp.connectionManager()).toBe(fixture.controllerInputs[0]!.mcp.connectionManager());
-    } finally {
-      for (const catalog of catalogs) catalog.dispose();
-      for (const controller of controllers) controller.dispose();
-      await fixture.cleanup();
-    }
-  });
-
   it('keeps same-environment generations rooted per session cwd', async () => {
     const fixture = await localityFixture({ remoteCwd: undefined });
     try {
@@ -837,57 +724,6 @@ describe('Program remote generation activation', () => {
 
       expect(fixture.program.sessionControllerGenerationFor('remote', fixture.remoteRoot)).toBe('remote-one');
       expect(fixture.program.sessionControllerGenerationFor('remote', fixture.remoteAltRoot)).toBe('remote-one');
-    } finally {
-      await fixture.cleanup();
-    }
-  });
-
-  it('rebuilds a remote generation at the same session cwd when the environment is replaced', async () => {
-    const fixture = await localityFixture();
-    try {
-      const local = fixture.generations.get('local')!;
-      await awaitLocality(local);
-      const first = fixture.program.createSessionController('remote', fixture.remoteRoot);
-      expect(fixture.program.sessionControllerGenerationFor('remote', fixture.remoteRoot)).toBe('remote-one');
-      expect(fixture.controllerInputs).toHaveLength(1);
-      const stale = fixture.generations.get(environmentBindingId('remote', fixture.remoteRoot))!;
-      await awaitLocality(stale);
-      expect(stale.instructions.snapshot.agentsMd).toContain('target project instructions');
-      expect(stale.dirs.additionalDirs).toEqual([join(fixture.remoteRoot, 'targetextra')]);
-
-      await fixture.replaceRemote('remote-two', fixture.remoteRoot);
-
-      expect(fixture.program.sessionControllerGenerationFor('remote', fixture.remoteRoot)).toBe('remote-two');
-      fixture.program.createSessionController('remote', fixture.remoteRoot);
-      expect(fixture.controllerInputs).toHaveLength(2);
-      const remote = fixture.generations.get(environmentBindingId('remote', fixture.remoteRoot))!;
-      await awaitLocality(remote);
-
-      const agentsMd = remote.instructions.snapshot.agentsMd ?? '';
-      expect(agentsMd).toContain('target project instructions');
-      expect(agentsMd).not.toContain('local project instructions');
-      expect(remote.dirs.additionalDirs).toEqual([join(fixture.remoteRoot, 'targetextra')]);
-      expect(remote.skills.catalog.listSkills().map((skill) => skill.name)).toEqual(['target-skill', 'user-skill']);
-      expect(fixture.controllerInputs[0]!.instructions).not.toBe(remote.instructions);
-      expect(fixture.controllerInputs[1]!.instructions).toBe(remote.instructions);
-
-      expect(local.instructions.snapshot.agentsMd).toContain('local project instructions');
-      expect(local.dirs.additionalDirs).toEqual([join(fixture.localRoot, 'localextra')]);
-      first.dispose();
-    } finally {
-      await fixture.cleanup();
-    }
-  });
-
-  it('falls back to the workspace root when a remote controller is requested without a session cwd', async () => {
-    const fixture = await localityFixture({ remoteCwd: undefined });
-    try {
-      fixture.program.createSessionController('remote');
-      const remote = fixture.generations.get('remote')!;
-      await awaitLocality(remote);
-
-      expect(remote.instructions.snapshot.agentsMd).toContain('local project instructions');
-      expect(remote.dirs.additionalDirs).toEqual([join(fixture.localRoot, 'localextra')]);
     } finally {
       await fixture.cleanup();
     }

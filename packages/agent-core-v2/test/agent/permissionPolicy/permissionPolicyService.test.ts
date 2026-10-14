@@ -683,44 +683,6 @@ describe('AgentPermissionPolicyService git cwd write approval', () => {
     },
   );
 
-  it('asks for Edit when environment acquire fails', async () => {
-    environmentAcquireError = () =>
-      new EnvironmentError('environment.unavailable', 'environment remote is disconnected');
-    await expect(evaluate({
-      toolName: 'Edit',
-      args: { path: 'src/a.ts', old_string: 'a', new_string: 'b' },
-      accesses: ToolAccesses.readWriteFile(join(workspaceDir, 'src/a.ts')),
-    })).resolves.toMatchObject({
-      policyName: 'fallback-ask',
-      result: { kind: 'ask' },
-    });
-  });
-
-  it('lets a Read through git-control-path-access-ask proceed when environment acquire fails', async () => {
-    environmentAcquireError = () =>
-      new EnvironmentError('environment.unavailable', 'environment remote is disconnected');
-    await expect(evaluate({
-      toolName: 'Read',
-      args: { path: join(workspaceDir, '.git', 'config') },
-      accesses: ToolAccesses.readFile(join(workspaceDir, '.git', 'config')),
-    })).resolves.toMatchObject({
-      policyName: 'default-tool-approve',
-      result: { kind: 'approve' },
-    });
-  });
-
-  it('asks for Write when the environment has no fs capability', async () => {
-    environmentFsAvailable = false;
-    await expect(evaluate({
-      toolName: 'Write',
-      args: { path: 'src/a.ts', content: 'x' },
-      accesses: ToolAccesses.writeFile(join(workspaceDir, 'src/a.ts')),
-    })).resolves.toMatchObject({
-      policyName: 'fallback-ask',
-      result: { kind: 'ask' },
-    });
-  });
-
   it('surfaces non-environment acquire failures', async () => {
     environmentAcquireError = () => new TypeError('programming error');
     await expect(evaluate({

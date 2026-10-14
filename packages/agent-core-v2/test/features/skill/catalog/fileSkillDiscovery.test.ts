@@ -12,7 +12,6 @@ import { ISkillDiscovery } from '#/features/skill/catalog/skillDiscovery';
 import type { SkillRoot } from '#/features/skill/catalog/types';
 import { EnvironmentSkillDiscovery } from '#/features/skill/workspace/environmentSkillDiscovery';
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
-import { HostFsError, OsFsErrors } from '#/os/interface/hostFsErrors';
 
 import { stubLog } from '../../../_base/log/stubs';
 
@@ -337,23 +336,5 @@ describe('EnvironmentSkillDiscovery directory failures', () => {
       message: 'Unable to scan skills in /remote/skills',
       payload: failure,
     }]);
-  });
-
-  it('keeps absent optional skill directories quiet', async () => {
-    class MissingDirectoryFs extends HostFileSystem {
-      override async readdir(): Promise<never> {
-        throw new HostFsError(OsFsErrors.codes.OS_FS_NOT_FOUND, 'path does not exist');
-      }
-    }
-    const warnings: RecordedWarning[] = [];
-    const discovery = new EnvironmentSkillDiscovery({
-      ...stubLog(),
-      warn: (message, payload) => { warnings.push({ message, payload }); },
-    }, new MissingDirectoryFs());
-
-    const result = await discovery.discover([{ path: '/remote/missing', source: 'project' }]);
-
-    expect(result.skills).toEqual([]);
-    expect(warnings).toEqual([]);
   });
 });

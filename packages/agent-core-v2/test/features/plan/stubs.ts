@@ -8,7 +8,7 @@ import type { Environment, EnvironmentPath, EnvironmentStatus } from '#/environm
 import { createFakeHostFs } from '../../tools/fixtures/fake-exec';
 import { stubAgentEnvironment } from '../../environment/stubs';
 
-export function posixEnvironmentPath(): EnvironmentPath {
+function posixEnvironmentPath(): EnvironmentPath {
   return {
     separator: '/',
     delimiter: ':',
@@ -24,14 +24,12 @@ export function posixEnvironmentPath(): EnvironmentPath {
 export interface PlanEnvironmentOptions {
   readonly fs: IHostFileSystem;
   readonly tempDir: string;
-  readonly environmentId?: string;
-  readonly workDir?: string;
 }
 
 export function stubPlanEnvironment(options: PlanEnvironmentOptions): IAgentEnvironmentService {
   const environment: Environment = {
     identity: {
-      environmentId: options.environmentId ?? 'remote',
+      environmentId: 'remote',
       generation: 'test-generation',
     },
     capabilities: new Set(['fs']),
@@ -52,10 +50,10 @@ export function stubPlanEnvironment(options: PlanEnvironmentOptions): IAgentEnvi
     onDidChangeStatus: Event.None as Event<EnvironmentStatus>,
     dispose: () => {},
   };
-  return stubAgentEnvironment(environment, { workDir: options.workDir });
+  return stubAgentEnvironment(environment);
 }
 
-export function missingFileError(path: string): Error {
+function missingFileError(path: string): Error {
   return Object.assign(new Error(`ENOENT: no such file or directory: ${path}`), {
     code: 'ENOENT',
   });

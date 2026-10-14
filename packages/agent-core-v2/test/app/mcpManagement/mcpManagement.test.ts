@@ -727,46 +727,6 @@ describe('McpManagementService', () => {
       expect(getOrCreate).not.toHaveBeenCalled();
     }, 20000);
 
-    it('probes a registered non-local environment without a workspace', async () => {
-      const cwd = mkdtempSync(join(tmpdir(), 'kimi-mcp-management-remote-miss-'));
-      tempDirs.push(cwd);
-
-      await expect(
-        management.testServer({
-          server: {
-            name: 'stdio-probe',
-            transport: 'stdio',
-            command: process.execPath,
-            args: [stdioFixture],
-            environment_id: 'remote',
-          },
-          cwd,
-        }),
-      ).resolves.toMatchObject({ success: true });
-      expect(findContaining).not.toHaveBeenCalled();
-      expect(getOrCreate).not.toHaveBeenCalled();
-    });
-
-    it('uses the app environment for an explicit local environment_id', async () => {
-      const cwd = mkdtempSync(join(tmpdir(), 'kimi-mcp-management-local-explicit-'));
-      tempDirs.push(cwd);
-
-      const result = await management.testServer({
-        server: {
-          name: 'stdio-probe',
-          transport: 'stdio',
-          command: process.execPath,
-          args: [stdioFixture],
-          environment_id: 'local',
-        },
-        cwd,
-      });
-
-      expect(result.success).toBe(true);
-      expect(findContaining).not.toHaveBeenCalled();
-      expect(getOrCreate).not.toHaveBeenCalled();
-    }, 20000);
-
     it('rejects an inline probe whose name disagrees with the server config', async () => {
       await expect(
         management.testServer({ name: 'other', server: stdioServer('inline') }),

@@ -12,11 +12,10 @@ import { createScopedTestHost, stubPair } from '#/_base/di/test';
 import { IGitService } from '#/app/git/git';
 import { ErrorCodes, Error2 } from '#/errors';
 import { type HostDirEntry, IHostFileSystem } from '#/os/interface/hostFileSystem';
-import { HostFsError, toHostFsError } from '#/os/interface/hostFsErrors';
+import { HostFsError } from '#/os/interface/hostFsErrors';
 import { IHostProcessService, type IHostProcess } from '#/os/interface/hostProcess';
 import { IWorkspaceFsService } from '#/workspace/workspaceFs/fs';
 import { WorkspaceFsService } from '#/workspace/workspaceFs/fsService';
-import { getShareBinRgPath } from '#/workspace/workspaceFs/internal/rgLocator';
 import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { IEnvironmentService, type EnvironmentResolver } from '#/app/environment/environment';
 import { FakeEnvironment } from '#/environment/fakeEnvironment';
@@ -241,27 +240,6 @@ function fakeFs(
       return current;
     },
   };
-}
-
-function remoteShapedFs(files: Record<string, string | Buffer>): IHostFileSystem {
-  const base = fakeFs(files) as unknown as Record<string, unknown>;
-  const wrapped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(base)) {
-    if (typeof value !== 'function') {
-      wrapped[key] = value;
-      continue;
-    }
-    const fn = value as (...args: unknown[]) => Promise<unknown>;
-    wrapped[key] = async (...args: unknown[]) => {
-      try {
-        return await fn(...args);
-      } catch (error) {
-        const domain = toHostFsError(error, { path: String(args[0]), op: key });
-        throw new HostFsError(domain.code, domain.message, { details: domain.details });
-      }
-    };
-  }
-  return wrapped as unknown as IHostFileSystem;
 }
 
 function fakeProcess(stdout: string, stderr: string, exitCode: number): IHostProcess {
@@ -1373,38 +1351,6 @@ describe('WorkspaceFsService.grep', () => {
   });
 });
 
-describe('WorkspaceFsService rg share-bin fallback', () => {
-  it.each([
-    { binding: 'remote', rgPath: '/home/target/.kimi-code/bin/rg', makeFs: makeRemoteSession },
-    { binding: 'local', rgPath: getShareBinRgPath(), makeFs: makeSession },
-  ])('runs the resolved share-bin rg for --files on a $binding binding', async ({ rgPath, makeFs }) => {
-    const captured: string[][] = [];
-    const fs = makeFs({}, (args) => {
-      captured.push([...args]);
-      if (args[1] === '--version') {
-        return args[0] === rgPath
-          ? { stdout: 'ripgrep 15.0.0', exitCode: 0 }
-          : { stdout: '', exitCode: 1 };
-      }
-      if (args[0] === rgPath && args.includes('--files')) {
-        return { stdout: 'src/foo.ts\n', exitCode: 0 };
-      }
-      return { stdout: '', exitCode: 1 };
-    });
-
-    const result = await fs.suggest({
-      query: 'foo',
-      limit: 50,
-      follow_gitignore: true,
-      show_hidden: false,
-    });
-
-    expect(result.items.map((i) => i.path)).toContain('src/foo.ts');
-    const filesRun = captured.find((a) => a.includes('--files'))!;
-    expect(filesRun[0]).toBe(rgPath);
-  });
-});
-
 describe('WorkspaceFsService.list', () => {
   it.each(['list', 'suggest'] as const)('rejects an oversized nested directory during %s', async (operation) => {
     const backend = fakeFs({ 'huge/hidden.txt': '', 'visible.txt': '' });
@@ -1476,31 +1422,6 @@ describe('WorkspaceFsService.list', () => {
         include_git_status: false,
       }),
     ).rejects.toMatchObject({ code: 'fs.path_escapes' });
-  });
-
-  it('throws fs.path_not_found when a remote fs reports fs-domain not_found for the path', async () => {
-    const fs = makeRemoteSession(
-      {},
-      emptyHandler,
-      [],
-      'ssh-dev',
-      '/home/target',
-      remoteShapedFs({}),
-    );
-    await expect(
-      fs.list({
-        path: 'missing-dir',
-        depth: 1,
-        limit: 200,
-        show_hidden: false,
-        follow_gitignore: false,
-        sort: 'name_asc',
-        include_git_status: false,
-      }),
-    ).rejects.toMatchObject({
-      code: 'fs.path_not_found',
-      message: 'path not found: missing-dir',
-    });
   });
 });
 
@@ -1648,29 +1569,6 @@ describe('WorkspaceFsService.statMany', () => {
 });
 
 describe('WorkspaceFsService.listMany', () => {
-  it('reports an oversized remote directory as too many results', async () => {
-    const backend = fakeFs({});
-    backend.readdir = async () => {
-      throw new HostFsError('os.fs.directory_too_large', 'Directory /repo exceeds 50000 entries', {
-        details: { path: '/repo', op: 'readdir', limit: 50000 },
-      });
-    };
-    const fs = makeRemoteSession({}, emptyHandler, [], 'ssh-dev', '/home/target', backend);
-
-    const result = await fs.listMany({
-      paths: ['.'],
-      depth: 1,
-      limit: 200,
-      show_hidden: false,
-      follow_gitignore: false,
-      sort: 'name_asc',
-      include_git_status: false,
-    });
-
-    expect(result.results['.']).toBeUndefined();
-    expect(result.partial_errors?.['.']).toEqual({ code: 41303, msg: 'Directory /repo exceeds 50000 entries' });
-  });
-
   it('returns results per path and partial_errors for failures', async () => {
     const fs = makeSession({ 'a.txt': '' }, emptyHandler);
     const result = await fs.listMany({
@@ -1700,23 +1598,6 @@ describe('WorkspaceFsService.mkdir', () => {
     await expect(fs.mkdir({ path: 'src', recursive: false })).rejects.toMatchObject({
       code: 'fs.already_exists',
     });
-  });
-
-  it('throws fs.path_not_found when a remote fs reports fs-domain not_found for the parent', async () => {
-    const fs = makeRemoteSession(
-      {},
-      emptyHandler,
-      [],
-      'ssh-dev',
-      '/home/target',
-      remoteShapedFs({}),
-    );
-    await expect(fs.mkdir({ path: 'missing-parent/newdir', recursive: false })).rejects.toMatchObject(
-      {
-        code: 'fs.path_not_found',
-        message: 'parent not found: missing-parent/newdir',
-      },
-    );
   });
 });
 

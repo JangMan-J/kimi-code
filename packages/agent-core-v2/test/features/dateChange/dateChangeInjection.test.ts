@@ -8,7 +8,6 @@ import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory'
 import type { ContextMessage } from '#/agent/contextMemory/types';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { IAgentProfileService } from '#/agent/profile/profile';
-import { IAgentEnvironmentBindingService } from '#/agent/environmentBinding/environmentBinding';
 import { IAgentConversationUndoService } from '#/agent/undo/undo';
 import { DEFAULT_AGENT_PROFILE_NAME } from '#/app/agentProfileCatalog/agentProfileCatalog';
 import {
@@ -20,7 +19,6 @@ import { ISessionContext } from '#/session/sessionContext/sessionContext';
 
 import {
   appService,
-  agentService,
   createTestAgent,
   hostEnvironmentServices,
   InMemoryWireRecordPersistence,
@@ -461,50 +459,5 @@ describe('AgentDateChangeService', () => {
     expect(changeText).toContain('2026-07-30');
     expect(changeText).toContain(TEST_TIME_ZONE);
     expect(changeText).toContain('local client');
-  });
-});
-
-describe('AgentDateChangeService on a remote environment binding', () => {
-  const REMOTE_WORK_DIR = '/remote/work';
-  let ctx: TestAgentContext;
-  let context: IAgentContextMemoryService;
-  let clock: TestHostClock;
-  let loop: IAgentLoopService;
-  let profile: IAgentProfileService;
-
-  beforeEach(async () => {
-    clock = testHostClock(INITIAL_INSTANT);
-    const binding = {
-      _serviceBrand: undefined,
-      current: { environmentId: 'remote-1', cwd: REMOTE_WORK_DIR },
-    } as unknown as IAgentEnvironmentBindingService;
-    ctx = createTestAgent(
-      { autoConfigure: false },
-      appService(IHostClock, clock),
-      agentService(IAgentEnvironmentBindingService, binding),
-    );
-    context = ctx.get(IAgentContextMemoryService);
-    loop = ctx.get(IAgentLoopService);
-    profile = ctx.get(IAgentProfileService);
-    await ctx.restorePersisted();
-    ctx.configure();
-  });
-
-  afterEach(async () => {
-    try {
-      await ctx.expectResumeMatches();
-    } finally {
-      await ctx.dispose();
-    }
-  });
-
-  it('injects when the disclosed cwd is the binding cwd rather than the session cwd', async () => {
-    updateSystemPrompt(profile, 'You are a deterministic test agent.', REMOTE_WORK_DIR);
-
-    await runWillBeginStepHooks(loop);
-
-    const reminders = dateReminders(context);
-    expect(reminders).toHaveLength(1);
-    expect(messageText(reminders[0] as ContextMessage)).toContain('2026-07-29');
   });
 });

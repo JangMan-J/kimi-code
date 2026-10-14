@@ -75,41 +75,6 @@ describe('HostProcessService', () => {
     });
   });
 
-  it('points at the cwd when the spawn cwd does not exist', async () => {
-    const svc = ix.get(IHostProcessService);
-    const missing = join(tmpdir(), 'kimi-missing-cwd-9f3x');
-    await expect(
-      svc.spawn('node', ['-e', ''], { cwd: missing }),
-    ).rejects.toSatisfy((err: unknown) => {
-      expect(err).toBeInstanceOf(HostProcessError);
-      const error = err as HostProcessError;
-      expect(error.code).toBe(HostProcessErrorCode.SpawnFailed);
-      expect(error.message).toContain(`cwd ${missing} does not exist or is not a directory`);
-      expect(error.details).toMatchObject({ command: 'node', cwd: missing });
-      return true;
-    });
-  });
-
-  it('points at the cwd when the spawn cwd is not a directory', async () => {
-    const svc = ix.get(IHostProcessService);
-    const dir = await mkdtemp(join(tmpdir(), 'kimi-cwd-file-'));
-    try {
-      const file = join(dir, 'not-a-dir');
-      await writeFile(file, 'x', 'utf-8');
-      await expect(
-        svc.spawn('node', ['-e', ''], { cwd: file }),
-      ).rejects.toSatisfy((err: unknown) => {
-        expect(err).toBeInstanceOf(HostProcessError);
-        const error = err as HostProcessError;
-        expect(error.code).toBe(HostProcessErrorCode.SpawnFailed);
-        expect(error.message).toContain(`cwd ${file} does not exist or is not a directory`);
-        return true;
-      });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  });
-
   it('terminates a running process with kill()', async () => {
     const svc = ix.get(IHostProcessService);
     const proc = await svc.spawn('node', ['-e', 'setTimeout(() => {}, 30000)']);

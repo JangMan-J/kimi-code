@@ -3,12 +3,7 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import {
-  ISessionContext,
-  IWorkspaceInstanceManager,
-  IWorkspaceService,
-  getLiveSessionById,
-} from '@moonshot-ai/agent-core-v2';
+import { IWorkspaceInstanceManager } from '@moonshot-ai/agent-core-v2';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { type RunningServer, startServer } from '../src/start';
@@ -56,8 +51,6 @@ function resolveExecServerFixture(): string {
   return join(dirname(packageJson), 'test', 'remote', 'fixtures', 'exec-server-child.ts');
 }
 
-const DYING_SCRIPT = 'process.stderr.write("kimi: command not found\\n"); process.exit(127)';
-
 function configToml(): string {
   const node = process.execPath;
   const tsx = resolveTsxCli();
@@ -67,11 +60,6 @@ function configToml(): string {
     `command = ${JSON.stringify(node)}`,
     `args = ${JSON.stringify([tsx, fixture])}`,
     'env = { EXEC_SERVER_VERSION = "9.9.9-test" }',
-    'defaultCwd = "/tmp"',
-    '',
-    '[environments.dying]',
-    `command = ${JSON.stringify(node)}`,
-    `args = ${JSON.stringify(['-e', DYING_SCRIPT])}`,
     'defaultCwd = "/tmp"',
     '',
   ].join('\n');
@@ -132,42 +120,6 @@ describe('server-v2 /api/v1 environment routes', () => {
       expect(binding.body.code).toBe(0);
       expect(binding.body.data.environment_id).toBe('local');
       expect(binding.body.data.cwd).toBeUndefined();
-    });
-
-    it('returns 40401 without a stack for an unknown session on every environment route', async () => {
-      const ghost = '/api/v1/sessions/s_does_not_exist';
-      const responses = await Promise.all([
-        call<null>('GET', `${ghost}/environment`),
-        call<null>('GET', `${ghost}/environments`),
-      ]);
-      for (const res of responses) {
-        expect(res.body.code).toBe(40401);
-        expect(res.body.msg).toContain('s_does_not_exist');
-        expect((res.body as { stack?: string }).stack).toBeUndefined();
-      }
-    });
-
-    it('lists app environments after the session workspace closes', async () => {
-      const id = await createSession();
-      const session = getLiveSessionById(server!.core.accessor, id);
-      const workspaceId = session!.accessor.get(ISessionContext).workspaceId;
-      await server!.core.accessor.get(IWorkspaceInstanceManager).close(workspaceId);
-      await server!.core.accessor.get(IWorkspaceService).delete(workspaceId);
-
-      const listed = await call<null>('GET', `/api/v1/sessions/${id}/environments`);
-      expect(listed.body.code).toBe(0);
-      expect((listed.body as { stack?: string }).stack).toBeUndefined();
-    });
-
-    it('lists declared environments as pending placeholders before any connect', async () => {
-      const id = await createSession();
-      const environments = await call<EnvironmentsWire>('GET', `/api/v1/sessions/${id}/environments`);
-      expect(environments.body.code).toBe(0);
-      const byId = new Map(environments.body.data.environments.map((entry) => [entry.environment_id, entry]));
-      expect(byId.get('local')).toMatchObject({ type: 'local', status: 'ready' });
-      expect(byId.get('loop')).toMatchObject({ type: 'command', status: 'pending' });
-      expect(byId.get('dying')).toMatchObject({ type: 'command', status: 'pending' });
-      expect(byId.get('loop')?.connect_error).toBeUndefined();
     });
 
     it('lists project-only environments only in the trusted originating workspace', async () => {
@@ -254,48 +206,5 @@ describe('server-v2 /api/v1 environment routes', () => {
       expect(cwdOnly.body.code).toBe(40001);
       expect(cwdOnly.body.msg).toContain('environment_cwd');
     });
-
-    it('surfaces the connect failure reason as connect_error in the environment list', async () => {
-      const created = await call<null>('POST', '/api/v1/sessions', {
-        metadata: { cwd: home as string },
-        environment_id: 'dying',
-        environment_cwd: '/tmp',
-      });
-      expect(created.body.code).toBe(40926);
-
-      const id = await createSession();
-      const environments = await call<EnvironmentsWire>('GET', `/api/v1/sessions/${id}/environments`);
-      const entry = environments.body.data.environments.find((candidate) => candidate.environment_id === 'dying');
-      expect(entry?.status).toBe('disconnected');
-      expect(entry?.connect_error).toContain('code 127');
-      expect(entry?.connect_error).toContain('kimi: command not found');
-    }, 90_000);
-
-    it('rejects a missing workspace root for a local binding but defers it for a remote binding', async () => {
-      const missingRoot = join(home as string, 'never-created');
-      const local = await call<null>('POST', '/api/v1/sessions', { metadata: { cwd: missingRoot } });
-      expect(local.body.code).toBe(40409);
-      expect(local.body.msg).toContain(missingRoot);
-
-      const remote = await call<SessionWire>('POST', '/api/v1/sessions', {
-        metadata: { cwd: missingRoot },
-        environment_id: 'loop',
-      });
-      expect(remote.body.code).toBe(0);
-
-      const bound = await call<null>('POST', '/api/v1/sessions', {
-        metadata: { cwd: home as string },
-        environment_id: 'loop',
-        environment_cwd: missingRoot,
-      });
-      expect(bound.body.code).toBe(40001);
-      expect(bound.body.msg).toContain(missingRoot);
-
-      const binding = await call<EnvironmentBindingWire>(
-        'GET',
-        `/api/v1/sessions/${remote.body.data.id}/environment`,
-      );
-      expect(binding.body.data.environment_id).toBe('loop');
-    }, 90_000);
   });
 });

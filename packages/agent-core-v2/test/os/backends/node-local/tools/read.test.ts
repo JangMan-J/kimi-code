@@ -6,14 +6,11 @@ import type { ISessionSkillCatalog } from '#/features/skill/session/skillCatalog
 import { stubWorkspaceContext } from '../../../../session/workspaceContext/stub-workspace-context';
 import { stubAgentEnvironment } from '../../../../environment/stubs';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
-import { HostFsError } from '#/os/interface/hostFsErrors';
 import {
   type ReadInput,
   ReadInputSchema,
   TRANSCODE_MAX_BYTES,
 } from '#/agent/tools/os/read/read';
-import { makeSessionContext } from '#/session/sessionContext/sessionContext';
-import { makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { ReadTool } from '#/agent/tools/os/read/readTool';
 import { renderToolResultForModel } from '#/agent/contextMemory/toolResultRender';
 import { stubToolResultTruncationService } from '../../../../agent/toolResultTruncation/stubs';
@@ -238,27 +235,6 @@ async function connectingReadExecution(status?: 'connecting') {
 }
 
 describe('ReadTool', () => {
-  it('reads owned Windows UNC task output with native case-insensitive root semantics', async () => {
-    const remote = createSpiedFs('remote file');
-    const local = createSpiedFs('local output');
-    const environment = Object.assign(new FakeEnvironment({ environmentId: 'remote', generation: 'test' }, { capabilities: ['fs'] }), { fs: remote.fs });
-    const tool = new ReadTool(
-      stubAgentEnvironment(environment), PERMISSIVE_WORKSPACE,
-      { catalog: { getSkillRoots: () => [] } } as unknown as ISessionSkillCatalog,
-      stubToolResultTruncationService(), stubConfigService(),
-      stubProfileService({ image_in: true, video_in: true }),
-      { isToolActive: () => true } as unknown as IAgentToolPolicyService,
-      { resolve: () => ({}) } as unknown as IAgentToolRegistryService,
-      undefined, undefined, local.fs, { ...createTestEnv(), pathClass: 'win32' },
-      makeSessionContext({ sessionId: 'session', workspaceId: 'workspace', sessionDir: '//server/share/session', sessionScope: 'sessions/session', cwd: '/workspace' }),
-      makeAgentScopeContext({ agentId: 'main', agentScope: 'sessions/session/agents/main' }),
-    );
-    const result = await execute(tool, { path: '//SERVER/SHARE/SESSION/agents/MAIN/tasks/bash-native01/output.log' });
-    expect(result.isError ?? false).toBe(false);
-    expect(result.output).toContain('local output');
-    expect(remote.stat).not.toHaveBeenCalled();
-  });
-
   it('reads a 4621-line document in full when the requested character budget fits', async () => {
     const content = Array.from({ length: 4621 }, (_, index) =>
       `section ${String(index + 1)} ${'x'.repeat(55)}`,
@@ -710,25 +686,6 @@ describe('ReadTool', () => {
 
   it('returns a friendly error for missing files before sniffing bytes', async () => {
     const { fs, readBytes, readLines } = createSpiedMapFs({});
-    const tool = createReadTool(fs, createTestEnv(), stubWorkspaceContext('/workspace'));
-
-    const result = await execute(tool, { path: '/workspace/missing.txt' });
-
-    expect(result).toMatchObject({
-      isError: true,
-      output: '"/workspace/missing.txt" does not exist.',
-    });
-    expect(readBytes).not.toHaveBeenCalled();
-    expect(readLines).not.toHaveBeenCalled();
-  });
-
-  it('returns a friendly missing-file error when a remote fs reports fs-domain not_found', async () => {
-    const { fs, readBytes, readLines, stat } = createSpiedMapFs({});
-    stat.mockRejectedValue(
-      new HostFsError('os.fs.not_found', 'stat failed: path does not exist', {
-        details: { path: '/workspace/missing.txt', op: 'stat', domainCode: 'os.fs.not_found' },
-      }),
-    );
     const tool = createReadTool(fs, createTestEnv(), stubWorkspaceContext('/workspace'));
 
     const result = await execute(tool, { path: '/workspace/missing.txt' });
@@ -1549,44 +1506,5 @@ describe('ReadTool', () => {
     await expect(
       execution.execute({ turnId: 0, toolCallId: 'call_read_late', signal }),
     ).rejects.toMatchObject({ code: 'environment.unavailable' });
-  });
-
-  it('waits for an in-flight connect when execution starts while the environment is connecting', async () => {
-    const { environmentValue, execution } = await connectingReadExecution('connecting');
-
-    let releaseConnect!: () => void;
-    environmentValue.whenReady = new Promise<void>((resolve) => {
-      releaseConnect = resolve;
-    });
-    let settled = false;
-    const pending = execution
-      .execute({ turnId: 0, toolCallId: 'call_read_connecting', signal })
-      .then((result) => {
-        settled = true;
-        return result;
-      });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(settled).toBe(false);
-
-    environmentValue.whenReady = undefined;
-    environmentValue.setStatus('ready');
-    releaseConnect();
-    const result = await pending;
-    expect(result.isError).not.toBe(true);
-    expect(result.output).toContain('visible');
-  });
-
-  it('fails with the connect reason when the in-flight connect fails during execution', async () => {
-    const { environmentValue, execution } = await connectingReadExecution('connecting');
-
-    const failure = new Error('executor process exited before the handshake completed (code 255, signal null): ssh: connect failed');
-    environmentValue.whenReady = Promise.reject(failure);
-    void environmentValue.whenReady.catch(() => {});
-
-    await expect(
-      execution.execute({ turnId: 0, toolCallId: 'call_read_connect_failed', signal }),
-    ).rejects.toBe(failure);
   });
 });

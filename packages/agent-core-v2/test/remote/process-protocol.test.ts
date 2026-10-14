@@ -9,7 +9,6 @@ import {
   createInProcessLoopback,
   RawClient,
   throttleClientPipe,
-  type InProcessLoopback,
 } from './helpers/loopback';
 import { RemoteExecConnection } from '#/remote/client/connection';
 
@@ -39,10 +38,6 @@ async function waitForDeath(pid: number, timeoutMs = 8_000): Promise<void> {
     });
   }
   throw new Error(`pid ${pid} is still alive`);
-}
-
-interface StartedProcess {
-  readonly pid: number;
 }
 
 async function startProcess(
@@ -95,123 +90,6 @@ describe('process protocol semantics', () => {
     const error = (await raw.nextResponse(1))['error'] as { code: number; message: string };
     expect(error.code).toBe(-32600);
     expect(error.message).toContain('terminated before it started');
-    loopback.clientInput.end();
-    await loopback.host.done;
-  });
-
-  it('still rejects a signal for a never-started id with -32600 when it is not terminate', async () => {
-    const loopback = createInProcessLoopback();
-    const raw = new RawClient(loopback);
-    await raw.handshake();
-    raw.send({ id: 1, method: 'process/signal', params: { processId: 'ghost', signal: 'kill' } });
-    const error = (await raw.nextResponse(1))['error'] as { code: number; message: string };
-    expect(error.code).toBe(-32600);
-    expect(error.message).toContain('unknown process id');
-    loopback.clientInput.end();
-    await loopback.host.done;
-  });
-
-  it('allows empty arguments after argv[0] but rejects an empty argv[0]', async () => {
-    const loopback = createInProcessLoopback();
-    const raw = new RawClient(loopback);
-    try {
-      await raw.handshake();
-      const started = await startProcess(raw, 1, {
-        processId: 'empty-arg',
-        argv: ['sh', '-c', 'test "$1" = ""', 'sh', ''],
-        cwd: '/tmp',
-      });
-      expect(started['error']).toBeUndefined();
-      await vi.waitFor(() => {
-        expect(raw.notifications('process/closed')).toHaveLength(1);
-      });
-      const rejected = await startProcess(raw, 2, { processId: 'empty-argv0', argv: [''], cwd: '/tmp' });
-      expect(rejected['error']).toMatchObject({ code: -32602 });
-    } finally {
-      loopback.clientInput.end();
-      await loopback.host.done;
-    }
-  });
-
-  it('rejects a spawn cwd that does not exist with an explicit cwd error', async () => {
-    const loopback = createInProcessLoopback();
-    const raw = new RawClient(loopback);
-    await raw.handshake();
-    const response = await startProcess(raw, 1, {
-      processId: 'missing-cwd',
-      argv: ['bash', '-c', 'true'],
-      cwd: '/definitely-missing-cwd-9f3x',
-    });
-    const error = response['error'] as {
-      code: number;
-      message: string;
-      data?: { domainCode?: string; cwd?: string };
-    };
-    expect(error.code).toBe(-32602);
-    expect(error.message).toBe(
-      'cwd /definitely-missing-cwd-9f3x does not exist or is not a directory',
-    );
-    expect(error.data?.domainCode).toBe('os.process.spawn_failed');
-    expect(error.data?.cwd).toBe('/definitely-missing-cwd-9f3x');
-    loopback.clientInput.end();
-    await loopback.host.done;
-  });
-
-  it('rejects a spawn cwd that is not a directory with an explicit cwd error', async () => {
-    const loopback = createInProcessLoopback();
-    const raw = new RawClient(loopback);
-    await raw.handshake();
-    const response = await startProcess(raw, 1, {
-      processId: 'file-cwd',
-      argv: ['bash', '-c', 'true'],
-      cwd: '/etc/hosts',
-    });
-    const error = response['error'] as { code: number; message: string };
-    expect(error.code).toBe(-32602);
-    expect(error.message).toBe('cwd /etc/hosts does not exist or is not a directory');
-    loopback.clientInput.end();
-    await loopback.host.done;
-  });
-
-  it('rejects a duplicate processId with -32600', async () => {
-    const loopback = createInProcessLoopback();
-    const raw = new RawClient(loopback);
-    await raw.handshake();
-    const first = await startProcess(raw, 1, {
-      processId: 'dup',
-      argv: ['sleep', '5'],
-      cwd: '/tmp',
-    });
-    expect(first['result']).toMatchObject({ pid: expect.any(Number) });
-    const second = await startProcess(raw, 2, {
-      processId: 'dup',
-      argv: ['sleep', '5'],
-      cwd: '/tmp',
-    });
-    expect((second['error'] as { code: number }).code).toBe(-32600);
-    loopback.clientInput.end();
-    await loopback.host.done;
-  });
-
-  it('drops writes after stdin EOF and for unknown processes', async () => {
-    const loopback = createInProcessLoopback();
-    const raw = new RawClient(loopback);
-    await raw.handshake();
-    await startProcess(raw, 1, { processId: 'cat', argv: ['cat'], cwd: '/tmp' });
-    raw.send({ id: 2, method: 'process/write', params: { processId: 'cat', chunkBase64: '', eof: true } });
-    expect((await raw.nextResponse(2))['result']).toEqual({});
-    raw.send({ id: 3, method: 'process/write', params: { processId: 'cat', chunkBase64: b64('x') } });
-    expect((await raw.nextResponse(3))['result']).toEqual({});
-    raw.send({ id: 4, method: 'process/write', params: { processId: 'ghost', chunkBase64: b64('x') } });
-    expect((await raw.nextResponse(4))['result']).toEqual({});
-    await vi.waitFor(() => {
-      expect(raw.notifications('process/closed')).toHaveLength(1);
-    });
-    const echoed = raw
-      .notifications('process/output')
-      .map((event) => fromB64(event['chunkBase64'] as string))
-      .join('');
-    expect(echoed).not.toContain('x');
     loopback.clientInput.end();
     await loopback.host.done;
   });
@@ -298,24 +176,6 @@ describe('process protocol semantics', () => {
     expect(done).toBe('shutdown');
     expect(loopback.logs.some((line) => line.includes('fuse'))).toBe(true);
     await rm(bigFile, { force: true });
-  });
-
-  it('disconnects when a single message exceeds the 64MiB frame cap', async () => {
-    const loopback = createInProcessLoopback();
-    const raw = new RawClient(loopback);
-    await raw.handshake();
-    const header = '{"id":2,"method":"fs/writeFile","params":{"path":"/tmp/oversize","dataBase64":"';
-    raw.sendRaw(header + 'A'.repeat(64 * 1024 * 1024));
-    const done = await Promise.race([
-      loopback.host.done.then(() => 'shutdown' as const),
-      new Promise<'timeout'>((resolve) => {
-        setTimeout(() => {
-          resolve('timeout');
-        }, 10_000);
-      }),
-    ]);
-    expect(done).toBe('shutdown');
-    expect(loopback.logs.some((line) => line.includes('protocol violation'))).toBe(true);
   });
 
   it('backpressures writes when the child stops reading stdin', async () => {

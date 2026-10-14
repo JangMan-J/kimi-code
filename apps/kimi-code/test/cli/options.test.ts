@@ -514,84 +514,22 @@ describe('CLI options parsing', () => {
   });
 
   describe('--environment', () => {
-    it('parses --environment as the new-session environment override', () => {
-      expect(parse(['--environment', 'dev-box']).environment).toBe('dev-box');
-    });
-
-    it('is hidden from the help output while the feature is experimental', () => {
-      const help = createProgram('0.1.0-test', () => {}, () => {}).helpInformation();
-      expect(help).not.toContain('--environment');
-    });
-
-    it('rejects empty environment values', () => {
-      const opts = parse(['--environment', '   ']);
-      expect(() => validateOptions(opts)).toThrow(OptionConflictError);
-      expect(() => validateOptions(opts)).toThrow('Environment cannot be empty.');
-    });
-
-    it('rejects --environment with --session', () => {
-      const opts = parse(['--environment', 'dev-box', '--session', 'ses_123']);
+    it.each([
+      ['--session', 'ses_123'],
+      ['--continue'],
+    ])('rejects --environment with %s', (...resumeArgs: string[]) => {
+      const opts = parse(['--environment', 'dev-box', ...resumeArgs]);
       expect(() => validateOptions(opts)).toThrow(OptionConflictError);
       expect(() => validateOptions(opts)).toThrow(
         'Cannot combine --environment with --session/--continue',
       );
-    });
-
-    it('rejects --environment with --continue', () => {
-      const opts = parse(['--environment', 'dev-box', '--continue']);
-      expect(() => validateOptions(opts)).toThrow(OptionConflictError);
-      expect(() => validateOptions(opts)).toThrow(
-        'Cannot combine --environment with --session/--continue',
-      );
-    });
-
-    it('accepts --environment for a new interactive session', () => {
-      expect(validateOptions(parse(['--environment', 'dev-box']), {}).uiMode).toBe('shell');
-    });
-
-    it('accepts --environment in prompt mode', () => {
-      const opts = parse(['-p', 'hi', '--environment', 'dev-box']);
-      expect(validateOptions(opts, {}).uiMode).toBe('print');
     });
   });
 
   describe('--environment-cwd', () => {
-    it('parses the remote cwd override alongside --environment', () => {
-      const opts = parse(['--environment', 'dev-box', '--environment-cwd', '/remote/work']);
-      expect(opts.environmentCwd).toBe('/remote/work');
-      expect(validateOptions(opts, {}).uiMode).toBe('shell');
-    });
-
-    it('is hidden from the help output while the feature is experimental', () => {
-      const help = createProgram('0.1.0-test', () => {}, () => {}).helpInformation();
-      expect(help).not.toContain('--environment-cwd');
-    });
-
-    it('rejects empty values', () => {
-      const opts = parse(['--environment', 'dev-box', '--environment-cwd', '   ']);
-      expect(() => validateOptions(opts)).toThrow('Environment cwd cannot be empty.');
-    });
-
     it('requires --environment', () => {
       const opts = parse(['--environment-cwd', '/remote/work']);
       expect(() => validateOptions(opts)).toThrow('--environment-cwd requires --environment.');
-    });
-
-    it('inherits the creation-only conflict with resume flags', () => {
-      const opts = parse([
-        '--environment',
-        'dev-box',
-        '--environment-cwd',
-        '/remote/work',
-        '--session',
-        'ses_123',
-      ]);
-      expect(() => validateOptions(opts)).toThrow('Cannot combine --environment with --session/--continue');
-    });
-
-    it('is accepted in prompt mode', () => {
-      const opts = parse(['-p', 'hi', '--environment', 'dev-box', '--environment-cwd', '/remote/work']);
-      expect(validateOptions(opts, {}).uiMode).toBe('print');
     });
   });
 

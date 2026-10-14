@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { PassThrough } from 'node:stream';
 
 import type { BytePipe, ExecBridge } from '#/remote/client/execBridge';
@@ -137,7 +136,7 @@ export interface SpawnedExecutor {
   readonly child: ChildProcess;
 }
 
-export async function spawnExecutorBridge(env?: Record<string, string>): Promise<SpawnedExecutor> {
+async function spawnExecutorBridge(env?: Record<string, string>): Promise<SpawnedExecutor> {
   const fixture = join(here, '..', 'fixtures', 'exec-server-child.ts');
   const { ExecBridge } = await import('#/remote/client/execBridge');
   const child = spawn(process.execPath, [resolveTsxCli(), fixture], {

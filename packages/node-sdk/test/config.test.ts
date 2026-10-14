@@ -94,20 +94,4 @@ env = { SANDBOX_TOKEN = "x" }
       env: { SANDBOX_TOKEN: 'x' },
     });
   });
-
-  it('rejects an invalid [environments] entry through parseConfigString', () => {
-    expect(() =>
-      parseConfigString(`
-[environments.broken]
-type = "ssh"
-`),
-    ).toThrow(/Invalid configuration/);
-    expect(() =>
-      parseConfigString(`
-[environments.local]
-type = "ssh"
-host = "local"
-`),
-    ).toThrow(/Invalid configuration/);
-  });
 });

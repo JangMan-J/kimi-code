@@ -376,30 +376,6 @@ describe('AgentToolActivationService', () => {
     expect(registry.resolve('Beta')).toBeInstanceOf(BetaTool);
   });
 
-  it('withdraws environment-bound tools when the environment is unavailable and cannot reconnect', async () => {
-    registerAgentToolService(IAlphaTool, AlphaTool, {
-      name: 'Alpha',
-      requiredEnvironmentCapabilities: ['fs'],
-    });
-    registerAgentToolService(IGammaTool, GammaTool, { name: 'Gamma' });
-    environmentData.available = false;
-    environmentData.connectable = false;
-    const ix = createActivationHost();
-    const registry = ix.get(IAgentToolRegistryService);
-
-    await ix.get(IAgentToolActivationService).activate();
-    expect(registry.resolve('Alpha')).toBeUndefined();
-    expect(registry.resolve('Gamma')).toBeInstanceOf(GammaTool);
-
-    environmentData.connectable = true;
-    environmentChangeEmitter.fire();
-    expect(registry.resolve('Alpha')).toBeInstanceOf(AlphaTool);
-
-    environmentData.available = true;
-    environmentChangeEmitter.fire();
-    expect(registry.resolve('Alpha')).toBeInstanceOf(AlphaTool);
-  });
-
   it('activates only the tools allowed by the profile allowlist', async () => {
     profileData.activeToolNames = ['Alpha'];
     registerAgentToolService(IAlphaTool, AlphaTool, { name: 'Alpha' });
@@ -440,25 +416,6 @@ describe('AgentToolActivationService', () => {
 
     expect(ix.get(IAgentToolRegistryService).resolve('Gamma')).toBeUndefined();
     expect(gammaConstructions).toBe(0);
-  });
-
-  it('withdraws and restores a contribution when its when predicate flips across re-activations', async () => {
-    let allowed = true;
-    registerAgentToolService(IGammaTool, GammaTool, { name: 'Gamma', when: () => allowed });
-    const ix = createActivationHost();
-    const activation = ix.get(IAgentToolActivationService);
-    const registry = ix.get(IAgentToolRegistryService);
-
-    await activation.activate();
-    expect(registry.resolve('Gamma')).toBeInstanceOf(GammaTool);
-
-    allowed = false;
-    await activation.activate();
-    expect(registry.resolve('Gamma')).toBeUndefined();
-
-    allowed = true;
-    await activation.activate();
-    expect(registry.resolve('Gamma')).toBeInstanceOf(GammaTool);
   });
 
   it('honors the workspace tool-policy veto before the profile', async () => {

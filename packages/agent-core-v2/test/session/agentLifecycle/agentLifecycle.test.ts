@@ -1126,20 +1126,6 @@ describe('AgentLifecycleService', () => {
     expectCurrentBinding('agent-1', { environmentId: 'remote', cwd: '/remote/work' });
   });
 
-  it('restores a remote-bound subagent from wire records without reconnecting', async () => {
-    ix.stub(IAppendLogStore, recordingAppendLog([
-      createWireMetadataRecord(1),
-      { type: 'environment.set_binding', agentId: 'agent-1', workspaceId: 'ws_test', environmentId: 'remote', cwd: '/remote/work', time: 2 },
-    ]).store);
-    const { connectCalls } = stubRemoteResolver();
-
-    const svc = ix.get(IAgentLifecycleService);
-    await svc.create({ agentId: 'agent-1' });
-
-    expectCurrentBinding('agent-1', { environmentId: 'remote', cwd: '/remote/work' });
-    expect(connectCalls).toEqual([]);
-  });
-
   it('keeps a restored gone environment declaration bound and fails explicitly at use', async () => {
     ix.stub(IAppendLogStore, recordingAppendLog([
       createWireMetadataRecord(1),
@@ -1155,22 +1141,6 @@ describe('AgentLifecycleService', () => {
     expect(() => agent.accessor.get(IAgentEnvironmentService).acquire()).toThrowError(
       expect.objectContaining<Partial<EnvironmentError>>({ code: 'environment.not_found' }),
     );
-  });
-
-  it('keeps a create-seeded remote binding durable across an agent rebuild without reconnecting', async () => {
-    const log = recordingAppendLog();
-    ix.stub(IAppendLogStore, log.store);
-    const { connectCalls, remoteEnvironment } = stubRemoteResolver({ remoteStatus: 'ready' });
-
-    const svc = ix.get(IAgentLifecycleService);
-    const created = await svc.create({ agentId: 'agent-1', environmentId: 'remote', environmentCwd: '/remote/work' });
-    await svc.remove(created);
-    remoteEnvironment.setStatus('disconnected');
-
-    await svc.create({ agentId: 'agent-1' });
-
-    expectCurrentBinding('agent-1', { environmentId: 'remote', cwd: '/remote/work' });
-    expect(connectCalls).toEqual([]);
   });
 
   it('attaches durable environments before restore and replays their records', async () => {

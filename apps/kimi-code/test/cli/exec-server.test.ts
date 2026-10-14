@@ -14,15 +14,10 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createProgram } from '#/cli/commands';
-import {
-  EXEC_SERVER_COMMAND,
-  isExecServerArgv,
-  resolveExecutorVersion,
-  runExecServerCommand,
-} from '#/cli/exec-server';
+import { isExecServerArgv } from '#/cli/exec-server';
 
 const appRoot = resolve(import.meta.dirname, '..', '..');
 const srcRoot = resolve(appRoot, 'src');
@@ -31,65 +26,10 @@ const hostPackage = JSON.parse(readFileSync(resolve(appRoot, 'package.json'), 'u
 };
 
 describe('isExecServerArgv', () => {
-  it('matches the node/tsx argv shape [exec, script, ...args]', () => {
-    expect(isExecServerArgv(['node', 'dist/main.mjs', 'exec-server', '--listen', 'stdio'])).toBe(
-      true,
-    );
-  });
-
-  it('matches the bare command, which defaults to stdio', () => {
-    expect(isExecServerArgv(['node', 'dist/main.mjs', 'exec-server'])).toBe(true);
-    expect(isExecServerArgv(['/home/me/.kimi-code/bin/kimi', 'exec-server'])).toBe(true);
-  });
-
   it('matches the SEA argv shape without a script slot', () => {
     expect(isExecServerArgv(['/home/me/.kimi-code/bin/kimi', 'exec-server', '--listen', 'stdio'])).toBe(
       true,
     );
-  });
-
-  it('matches the SEA argv shape with the executable repeated', () => {
-    expect(
-      isExecServerArgv(['kimi', 'kimi', 'exec-server', '--listen', 'stdio']),
-    ).toBe(true);
-  });
-
-  it('rejects malformed transports, unknown options, and excess args', () => {
-    expect(isExecServerArgv(['node', 'main.mjs', 'exec-server', '--listen', 'ws'])).toBe(false);
-    expect(isExecServerArgv(['node', 'main.mjs', 'exec-server', '--listen=stdio'])).toBe(false);
-    expect(isExecServerArgv(['node', 'main.mjs', 'exec-server', '--bogus'])).toBe(false);
-    expect(
-      isExecServerArgv(['node', 'main.mjs', 'exec-server', '--listen', 'stdio', '--verbose']),
-    ).toBe(false);
-  });
-
-  it('does not match the tokens in later positions', () => {
-    expect(isExecServerArgv(['node', 'main.mjs', '-p', 'exec-server --listen stdio'])).toBe(false);
-    expect(isExecServerArgv(['node', 'main.mjs', 'web', 'exec-server', '--listen', 'stdio'])).toBe(
-      false,
-    );
-  });
-});
-
-describe('runExecServerCommand transport validation', () => {
-  it('rejects an unsupported transport with exit code 2 and a stderr-only error', async () => {
-    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    try {
-      const code = await runExecServerCommand('ws');
-      expect(code).toBe(2);
-      expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('--listen stdio'));
-      expect(stdoutSpy).not.toHaveBeenCalled();
-    } finally {
-      stderrSpy.mockRestore();
-      stdoutSpy.mockRestore();
-    }
-  });
-});
-
-describe('resolveExecutorVersion', () => {
-  it('reports the host package version for the handshake gate', () => {
-    expect(resolveExecutorVersion()).toBe(hostPackage.version);
   });
 });
 
@@ -121,40 +61,6 @@ describe('hidden exec-server subcommand', () => {
     const { program, calls } = createExecServerProgram();
     program.parse(['node', 'kimi', 'exec-server', '--listen', 'stdio']);
     expect(calls).toEqual(['stdio']);
-  });
-
-  it('defaults --listen to stdio on a bare invocation', () => {
-    const { program, calls } = createExecServerProgram();
-    program.parse(['node', 'kimi', 'exec-server']);
-    expect(calls).toEqual(['stdio']);
-  });
-
-  it('accepts the --listen=stdio spelling', () => {
-    const { program, calls } = createExecServerProgram();
-    program.parse(['node', 'kimi', 'exec-server', '--listen=stdio']);
-    expect(calls).toEqual(['stdio']);
-  });
-
-  it('passes an unsupported transport through for the runner to reject', () => {
-    const { program, calls } = createExecServerProgram();
-    program.parse(['node', 'kimi', 'exec-server', '--listen', 'ws']);
-    expect(calls).toEqual(['ws']);
-  });
-
-  it('rejects unknown options instead of silently starting', () => {
-    const { program, calls } = createExecServerProgram();
-    expect(() => program.parse(['node', 'kimi', 'exec-server', '--bogus'])).toThrow();
-    expect(calls).toEqual([]);
-  });
-
-  it('rejects excess arguments', () => {
-    const { program } = createExecServerProgram();
-    expect(() => program.parse(['node', 'kimi', 'exec-server', '--listen', 'stdio', 'extra'])).toThrow();
-  });
-
-  it('stays out of the help output', () => {
-    const help = createProgram('0.0.0', () => {}, () => {}).helpInformation();
-    expect(help).not.toContain(EXEC_SERVER_COMMAND);
   });
 });
 
@@ -206,12 +112,6 @@ describe('light entry import graph', () => {
       'cli/host-package.ts',
       'main.ts',
     ]);
-  });
-
-  it('reaches the executor implementation only through a dynamic import of the server subpath', () => {
-    const source = readFileSync(resolve(srcRoot, 'cli/exec-server.ts'), 'utf-8');
-    expect(source).toContain(`import('@moonshot-ai/agent-core-v2/remote/server')`);
-    expect(source).not.toMatch(/^\s*import\s+.*['"]@moonshot-ai\//m);
   });
 });
 

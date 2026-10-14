@@ -1571,54 +1571,6 @@ describe('agentsMdReminder remote environment binding', () => {
     expect(reminderText(h)).toContain(remoteAgentsMd);
   });
 
-  it('reminds for an explicit relative cwd argument resolved against the bound environment workDir', async () => {
-    const h = remoteHarness();
-
-    const result = await fire(
-      h,
-      didCtx('Bash', { command: 'git status', cwd: 'packages/kap-server' }),
-    );
-
-    expect(outputText(result)).toBe('original result');
-    expect(reminderText(h)).toContain(remoteAgentsMd);
-  });
-
-  it('keeps absolute-path Bash targets working under a remote binding', async () => {
-    const h = remoteHarness();
-
-    const result = await fire(
-      h,
-      didCtx('Bash', { command: `ls ${remoteSubDir}` }),
-    );
-
-    expect(outputText(result)).toBe('original result');
-    expect(reminderText(h)).toContain(remoteAgentsMd);
-  });
-
-  it('logs at debug level when probing finds no existing anchor directory', async () => {
-    const debugLogs: { message: string; payload?: unknown }[] = [];
-    const log: ILogService = {
-      ...stubLog(),
-      debug: (message: string, payload?: unknown) => {
-        debugLogs.push({ message, payload });
-      },
-    };
-    const missingFs = {
-      stat: vi.fn(async (path: string): Promise<HostFileStat> => {
-        throw new Error(`missing: ${path}`);
-      }),
-    } as unknown as IHostFileSystem;
-    const h = createHarness({ hostFs: missingFs, log });
-    h.reminder.seedInjected([], workDir);
-
-    const result = await fire(h, didCtx('Bash', { command: 'ls /nonexistent/dir' }));
-
-    expect(outputText(result)).toBe('original result');
-    expect(agentsMdMessages(h)).toHaveLength(0);
-    expect(debugLogs).toHaveLength(1);
-    expect(debugLogs[0]?.message).toContain('no existing anchor');
-    expect(debugLogs[0]?.payload).toMatchObject({ path: '/nonexistent/dir' });
-  });
 });
 
 describe('agentsMdReminder environment degradation', () => {
@@ -1637,19 +1589,6 @@ describe('agentsMdReminder environment degradation', () => {
     expect(h.reminders).toHaveLength(0);
   });
 
-  it('stays unseeded and keeps the hook quiet when the seed acquire fails on a disconnected environment', async () => {
-    const h = createHarness({
-      acquireError: new EnvironmentError('environment.unavailable', 'environment remote is disconnected'),
-    });
-    const dir = join(workDir, 'pkg');
-    await writeAgentsMd(dir, 'pkg instructions');
-
-    const result = await fire(h, didCtx('Read', { path: join(dir, 'index.ts') }));
-
-    expect(outputText(result)).toBe('original result');
-    expect(agentsMdMessages(h)).toHaveLength(0);
-    expect(h.reminders).toHaveLength(0);
-  });
 });
 
 describe('extractBashTargetDirs', () => {

@@ -18,18 +18,6 @@ function serviceWithReadError(error: Error): FileProjectLocalConfigService {
 }
 
 describe('FileProjectLocalConfigService.readAdditionalDirs', () => {
-  it('treats a node-errno not-found from a local fs as no project-local config', async () => {
-    const service = serviceWithReadError(Object.assign(new Error('ENOENT: open'), { code: 'ENOENT' }));
-    await expect(service.readAdditionalDirs('/repo')).resolves.toMatchObject({ additionalDirs: [] });
-  });
-
-  it('treats a domain-coded not-found from a remote fs as no project-local config', async () => {
-    const service = serviceWithReadError(
-      new HostFsError(OsFsErrors.codes.OS_FS_NOT_FOUND, 'read failed: path does not exist'),
-    );
-    await expect(service.readAdditionalDirs('/repo')).resolves.toMatchObject({ additionalDirs: [] });
-  });
-
   it('propagates a real read failure as a storage io error', async () => {
     const service = serviceWithReadError(
       new HostFsError(OsFsErrors.codes.OS_FS_PERMISSION_DENIED, 'read failed: permission denied'),

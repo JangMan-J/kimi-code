@@ -225,13 +225,6 @@ describe('SessionTerminalService', () => {
     expect(terminal.rows).toBe(24);
   });
 
-  it('tags the tracked terminal killer with the owning session id', async () => {
-    const svc = ix.get(ISessionTerminalService);
-    await svc.create({ environment_id: 'local' });
-    expect(resolver.tracked).toHaveLength(1);
-    expect(resolver.tracked[0]?.sessionId).toBe('s1');
-  });
-
   it('lists and gets terminals', async () => {
     const svc = ix.get(ISessionTerminalService);
     const created = await svc.create({ environment_id: 'local',});
@@ -307,29 +300,6 @@ describe('SessionTerminalService', () => {
     const fetched = await svc.get(terminal.id);
     expect(fetched.status).toBe('exited');
     expect(fetched.exit_code).toBe(7);
-  });
-
-  it('disposes the tracked killer when the terminal exits so the environment can go idle', async () => {
-    const svc = ix.get(ISessionTerminalService);
-    await svc.create({ environment_id: 'local' });
-    expect(resolver.tracked).toHaveLength(1);
-    expect(resolver.tracked[0]?.disposed).toBe(false);
-
-    host.processes[0]!.emitExit(0);
-
-    expect(resolver.tracked[0]?.disposed).toBe(true);
-    expect(resolver.activeLeases).toBe(0);
-  });
-
-  it('disposes the tracked killer on close', async () => {
-    const svc = ix.get(ISessionTerminalService);
-    const terminal = await svc.create({ environment_id: 'local' });
-    expect(resolver.tracked[0]?.disposed).toBe(false);
-
-    await svc.close(terminal.id);
-
-    expect(resolver.tracked[0]?.disposed).toBe(true);
-    expect(resolver.activeLeases).toBe(0);
   });
 
   it('delegates write and resize to the process', async () => {

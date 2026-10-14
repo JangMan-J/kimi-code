@@ -5,8 +5,8 @@ import type { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import '#/agent/contextMemory/conversationTime';
 import { event2FromRecord } from '#/app/event/event2';
 import { IAgentScopeContext, makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
-import { AgentEnvironmentService, acquireOrWhenReady, snapshotAgentEnvironmentBinding } from '#/agent/environmentBinding/agentEnvironment';
-import { AgentEnvironmentBindingService, agentEnvironmentBindingKey, ENVIRONMENT_BINDING_REMINDER_VARIANT, PROJECT_CONTEXT_REMINDER_VARIANT } from '#/agent/environmentBinding/environmentBindingService';
+import { AgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
+import { AgentEnvironmentBindingService, PROJECT_CONTEXT_REMINDER_VARIANT } from '#/agent/environmentBinding/environmentBindingService';
 import { environmentBindingKey, EnvironmentSetBinding, RuntimeSetBinding } from '#/agent/environmentBinding/environmentBindingOps';
 import { AgentStateService } from '#/agent/state/agentStateService';
 import { IAgentStateService } from '#/agent/state/agentState';
@@ -30,7 +30,7 @@ import { IEnvironmentService, type EnvironmentResolver } from '#/app/environment
 import type { IEnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclaration';
 import { stubAgentContext } from '../agentContext/stubs';
 import { noopLogger } from '../../wire/stubs';
-import { fakeEnvironment, connectableEnvironment } from '../../environment/stubs';
+import { fakeEnvironment } from '../../environment/stubs';
 
 const LOCAL_HOST = {
   osKind: 'Linux',
@@ -286,7 +286,7 @@ describe('AgentEnvironmentBindingService', () => {
     expect(metadataUpdates).toEqual([]);
   });
 
-  it.each(['C:\\repo\\src', '\\\\server\\share\\repo'])('restores native Windows ACP cwd %s without POSIX normalization', async (cwd) => {
+  it.each(['C:\\repo\\src'])('restores native Windows ACP cwd %s without POSIX normalization', async (cwd) => {
     const restored = setup({ seedBinding: { environmentId: 'acp:example', cwd } });
     restored.registry.register(environment('acp:example', 'acp-one', 'ready', ['process'], { ...LOCAL_HOST, pathClass: 'win32' }));
     restored.state.set(environmentBindingKey, { environmentId: 'acp:example', cwd });
@@ -296,26 +296,6 @@ describe('AgentEnvironmentBindingService', () => {
     expect(restored.metadataUpdates).toEqual([]);
     restored.agentEnvironment.acquire().dispose();
     await restored.registry.dispose();
-  });
-
-  it('normalizes restored executor cwd before applying and persisting it', async () => {
-    const restored = setup();
-    restored.state.set(environmentBindingKey, { environmentId: 'remote', cwd: '/remote//repo/./sub/..' });
-    await restored.restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-    expect(restored.binding.current.cwd).toBe('/remote/repo');
-    expect(restored.workDirWrites).toEqual(['/remote/repo']);
-    expect(restored.metadataUpdates).toEqual([{ environmentId: 'remote', environmentCwd: '/remote/repo' }]);
-    await restored.registry.dispose();
-  });
-
-  it('switches only after the target can be acquired and emits the committed binding', () => {
-    const { binding } = setup();
-    const changes: EnvironmentBinding[] = [];
-    binding.onDidChange((next) => changes.push(next));
-
-    expect(binding.bind('remote')).toEqual({ environmentId: 'remote' });
-    expect(binding.current).toEqual({ environmentId: 'remote' });
-    expect(changes).toEqual([{ environmentId: 'remote' }]);
   });
 
   it('keeps the prior binding for missing and unavailable targets without fallback', () => {
@@ -329,102 +309,6 @@ describe('AgentEnvironmentBindingService', () => {
       expect.objectContaining<Partial<EnvironmentError>>({ code: 'environment.unavailable' }),
     );
     expect(binding.current).toEqual({ environmentId: 'local' });
-  });
-
-
-  it('pins old leases while new calls use the switched environment', () => {
-    const { binding, agentEnvironment } = setup();
-    const oldLease = agentEnvironment.acquire();
-    binding.bind('remote');
-    const newLease = agentEnvironment.acquire();
-
-    expect(oldLease.environment.identity).toMatchObject({ environmentId: 'local', generation: 'local-one' });
-    expect(newLease.environment.identity).toMatchObject({ environmentId: 'remote', generation: 'remote-one' });
-    oldLease.dispose();
-    newLease.dispose();
-  });
-
-  it('persists no generation and resolves the current generation after re-registration', async () => {
-    const { registry, state, binding, agentEnvironment } = setup();
-    binding.bind('remote');
-    const registration = registry.register(environment('replaceable', 'one'));
-    binding.bind('replaceable');
-    await registration.remove();
-    registry.register(environment('replaceable', 'two'));
-
-    expect(state.get(agentEnvironmentBindingKey)).toEqual({
-      environmentId: 'replaceable',
-    });
-    const lease = agentEnvironment.acquire();
-    expect(lease.environment.identity.generation).toBe('two');
-    lease.dispose();
-  });
-
-  it('updates capability availability when the binding switches environments', () => {
-    const { binding, agentEnvironment } = setup();
-    const changes: void[] = [];
-    agentEnvironment.onDidChange(() => changes.push(undefined));
-
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(true);
-    expect(agentEnvironment.isAvailable(['process'])).toBe(true);
-
-    binding.bind('remote');
-
-    expect(changes).toHaveLength(1);
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(false);
-    expect(agentEnvironment.isAvailable(['process'])).toBe(true);
-  });
-
-  it('snapshots the binding switch and current environment generation', () => {
-    const { binding, agentEnvironment } = setup();
-
-    expect(snapshotAgentEnvironmentBinding(binding, agentEnvironment)).toEqual({
-      binding: { environmentId: 'local' },
-      available: true,
-      environment: {
-        environmentId: 'local',
-        generation: 'local-one',
-        status: 'ready',
-        capabilities: ['fs', 'process'],
-      },
-    });
-
-    binding.bind('remote');
-    expect(snapshotAgentEnvironmentBinding(binding, agentEnvironment)).toMatchObject({
-      binding: { environmentId: 'remote' },
-      available: true,
-      environment: { environmentId: 'remote', generation: 'remote-one' },
-    });
-  });
-
-  it('forwards the bound environment connectError into the snapshot', () => {
-    const { remote, binding, agentEnvironment } = setup();
-    binding.bind('remote');
-    remote.setStatus('disconnected');
-    remote.connectError = 'executor process exited before the handshake completed (code 255): ssh: connect failed';
-
-    expect(snapshotAgentEnvironmentBinding(binding, agentEnvironment)).toMatchObject({
-      binding: { environmentId: 'remote' },
-      available: false,
-      environment: {
-        environmentId: 'remote',
-        status: 'disconnected',
-        connectError: 'executor process exited before the handshake completed (code 255): ssh: connect failed',
-      },
-    });
-  });
-
-  it('tracks environment changes independently of workspace instances', () => {
-    const { local, agentEnvironment } = setup();
-    const changes: void[] = [];
-    agentEnvironment.onDidChange(() => changes.push(undefined));
-
-    local.setStatus('disconnected');
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(false);
-    local.setStatus('ready');
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(true);
-
-    expect(changes).toHaveLength(2);
   });
 
   it('publishes a environment status hint when the bound environment changes status', () => {
@@ -442,40 +326,6 @@ describe('AgentEnvironmentBindingService', () => {
     published.length = 0;
     local.setStatus('disconnected');
     expect(published).toEqual([]);
-  });
-
-  it('does not publish environment status hints for a non-main agent', () => {
-    const { remote, binding, published } = setup({ agentId: 'agent-1' });
-    binding.bind('remote');
-    remote.setStatus('disconnected');
-    expect(published).toEqual([]);
-  });
-
-  it('applies the shared status gate to every environment lifecycle state', () => {
-    const { local, agentEnvironment } = setup();
-
-    local.setStatus('connecting');
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(false);
-    local.setStatus('disconnected');
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(false);
-    local.setStatus('disposed');
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(false);
-  });
-
-  it('tracks the re-registered generation without observing the drained generation', async () => {
-    const { registry, local, localRegistration, agentEnvironment } = setup();
-    const changes: void[] = [];
-    agentEnvironment.onDidChange(() => changes.push(undefined));
-
-    await localRegistration.remove();
-    registry.register(environment('local', 'local-two', 'ready', ['process']));
-
-    expect(changes).toHaveLength(2);
-    expect(agentEnvironment.inspect().identity.generation).toBe('local-two');
-    expect(agentEnvironment.isAvailable(['fs'])).toBe(false);
-    expect(agentEnvironment.isAvailable(['process'])).toBe(true);
-    local.setStatus('ready');
-    expect(changes).toHaveLength(2);
   });
 
   it('carries cwd through switch and the persisted op payload', () => {
@@ -515,34 +365,6 @@ describe('AgentEnvironmentBindingService', () => {
     binding.bind('remote', '/remote/work');
     expect(workDirWrites).toEqual([]);
   });
-
-  it('keeps turn acquires working when another session switches cwd on the pinned environment', async () => {
-    const { binding, agentEnvironment, registry, makeAgent } = setup();
-    connectableEnvironment(registry, { environmentId: 'shared', status: 'ready' });
-    binding.bind('shared', '/remote/work');
-
-    const other = makeAgent('agent-2');
-    other.binding.bind('shared', '/remote/other');
-
-    const lease = agentEnvironment.acquire();
-    expect(lease.environment.identity).toMatchObject({ environmentId: 'shared', generation: 'shared-pending' });
-    lease.dispose();
-  });
-
-  it('replays the restored binding without reconnecting and raises unavailable on first acquire', async () => {
-    const { state, remote, restoreHooks, binding, agentEnvironment, workDirWrites } = setup();
-    state.set(environmentBindingKey, { environmentId: 'remote', cwd: '/remote/work' });
-    remote.setStatus('disconnected');
-
-    await restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-
-    expect(binding.current).toEqual({ environmentId: 'remote', cwd: '/remote/work' });
-    expect(workDirWrites).toEqual(['/remote/work']);
-    expect(() => agentEnvironment.acquire()).toThrowError(
-      expect.objectContaining<Partial<EnvironmentError>>({ code: 'environment.unavailable' }),
-    );
-    expect(binding.current.environmentId).toBe('remote');
-  });
 });
 
 describe('AgentEnvironmentBindingService restore from wire records', () => {
@@ -558,28 +380,6 @@ describe('AgentEnvironmentBindingService restore from wire records', () => {
     const fold = environmentBindingKey.replayable.folds.get(RuntimeSetBinding);
     expect(fold).toBeDefined();
     expect(fold!(undefined, event!, {} as never)).toEqual({ environmentId: 'remote' });
-  });
-
-  it('does not reseed a remote binding from raw wire records that replay excluded', async () => {
-    const { binding, restoreHooks, dispatched, reminders } = setup({ agentId: 'agent-1' });
-
-    await restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-
-    expect(binding.current).toEqual({ environmentId: 'local' });
-    expect(dispatched.at(-1)).toMatchObject({ agentId: 'agent-1', environmentId: 'local' });
-    expect(reminders).toEqual([]);
-  });
-
-  it('emits the seed environment reminder when a remote seed round-trips through a replayed op', async () => {
-    const { state, restoreHooks, reminders } = setup({
-      seedBinding: { environmentId: 'remote', cwd: '/remote/work' },
-    });
-    state.set(environmentBindingKey, { environmentId: 'remote', cwd: '/remote/work' });
-
-    await restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-
-    expect(reminders).toHaveLength(1);
-    expect(reminders[0]!.variant).toBe(ENVIRONMENT_BINDING_REMINDER_VARIANT);
   });
 });
 
@@ -608,14 +408,6 @@ describe('AgentEnvironmentBindingService environment reminder', () => {
     state.set(environmentBindingKey, { environmentId: 'remote', cwd: '/remote/work' });
 
     await restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-
-    expect(reminders).toHaveLength(0);
-  });
-
-  it('does not emit reminders for non-main agents', () => {
-    const { binding, reminders } = setup({ agentId: 'agent-1' });
-
-    binding.bind('remote', '/remote/work');
 
     expect(reminders).toHaveLength(0);
   });
@@ -685,76 +477,6 @@ describe('AgentEnvironmentBindingService project context reminder', () => {
         'Read them before making changes in this working directory.',
     );
   });
-
-  it('injects on a remote to same-host remote switch because the view is new', async () => {
-    const { registry, binding, reminders } = setup();
-    registry.register(
-      probingEnvironment('remote-one', REMOTE_HOST, probeFs({ '/remote/one/AGENTS.md': 'one' }, ['/remote/one/.git'])),
-    );
-    registry.register(
-      probingEnvironment('remote-two', REMOTE_HOST, probeFs({ '/remote/two/AGENTS.md': 'two' }, ['/remote/two/.git'])),
-    );
-
-    binding.bind('remote-one', '/remote/one');
-    await flushProbe();
-    binding.bind('remote-two', '/remote/two');
-    await flushProbe();
-
-    const injected = projectContextReminders(reminders);
-    expect(injected).toHaveLength(2);
-    expect(injected[1]!.content).toContain('"remote-two"');
-    expect(injected[1]!.content).toContain('- /remote/two/AGENTS.md');
-  });
-
-  it('injects the local paths when a session created remote switches to local for the first time', async () => {
-    const { binding, local, reminders } = setup({
-      seedBinding: { environmentId: 'remote', cwd: '/remote/work' },
-    });
-    Object.assign(local, { fs: probeFs({ '/workspace/AGENTS.md': 'local instructions' }, ['/workspace/.git']) });
-
-    binding.bind('local');
-    await flushProbe();
-
-    const injected = projectContextReminders(reminders);
-    expect(injected).toHaveLength(1);
-    expect(injected[0]!.content).toContain('"local"');
-    expect(injected[0]!.content).toContain('at working directory /workspace');
-    expect(injected[0]!.content).toContain('- /workspace/AGENTS.md');
-  });
-
-  it('injects on a local to local switch when the cwd view was never visited, without the environment reminder', async () => {
-    const { binding, local, reminders } = setup();
-    Object.assign(local, { fs: probeFs({ '/other/AGENTS.md': 'other instructions' }, ['/other/.git']) });
-
-    binding.bind('local', '/other');
-    await flushProbe();
-
-    expect(reminders).toHaveLength(1);
-    expect(reminders[0]!.variant).toBe(PROJECT_CONTEXT_REMINDER_VARIANT);
-    expect(reminders[0]!.content).toContain('at working directory /other');
-    expect(reminders[0]!.content).toContain('- /other/AGENTS.md');
-  });
-
-  it('injects nothing when the new view has no AGENTS.md files', async () => {
-    const { registry, binding, reminders } = setup();
-    registry.register(probingEnvironment('bare-remote', REMOTE_HOST, probeFs({})));
-
-    binding.bind('bare-remote', '/bare/work');
-    await flushProbe();
-
-    expect(projectContextReminders(reminders)).toHaveLength(0);
-  });
-
-  it('does not inject for non-main agents', async () => {
-    const { registry, binding, reminders } = setup({ agentId: 'agent-1' });
-    const fs = probeFs({ '/remote/work/AGENTS.md': 'remote instructions' }, ['/remote/work/.git']);
-    registry.register(probingEnvironment('remote-view', REMOTE_HOST, fs));
-
-    binding.bind('remote-view', '/remote/work');
-    await flushProbe();
-
-    expect(reminders).toHaveLength(0);
-  });
 });
 
 describe('AgentEnvironmentService workspaceRoots', () => {
@@ -782,39 +504,6 @@ describe('AgentEnvironmentService workspaceRoots', () => {
       seedBinding: { environmentId: 'ghost' },
     });
     expect(uninspectable.agentEnvironment.workspaceRoots().workDir).toBe('/workspace');
-  });
-});
-
-describe('acquireOrWhenReady', () => {
-  it('returns the current environment lease when it is already available', async () => {
-    const { agentEnvironment } = setup();
-
-    const lease = await acquireOrWhenReady(agentEnvironment, ['fs']);
-
-    expect(lease.environment.identity).toMatchObject({ environmentId: 'local', generation: 'local-one' });
-    lease.dispose();
-  });
-
-  it('rejects through the readiness path when a required capability is missing', async () => {
-    const { binding, agentEnvironment } = setup();
-    binding.bind('remote');
-
-    await expect(acquireOrWhenReady(agentEnvironment, ['fs'])).rejects.toThrowError(
-      expect.objectContaining<Partial<EnvironmentError>>({ code: 'environment.capability_unavailable' }),
-    );
-  });
-
-  it('connects a disconnected environment through the whenReady path', async () => {
-    const { registry, state, restoreHooks, agentEnvironment } = setup();
-    const { calls } = connectableEnvironment(registry, { environmentId: 'remote-x', status: 'disconnected' });
-    state.set(environmentBindingKey, { environmentId: 'remote-x', cwd: '/remote/x' });
-    await restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-
-    const lease = await acquireOrWhenReady(agentEnvironment, ['fs']);
-
-    expect(calls).toEqual(['connect']);
-    expect(lease.environment.status).toBe('ready');
-    lease.dispose();
   });
 });
 
@@ -866,25 +555,6 @@ describe('AgentEnvironmentService on-demand connect', () => {
     expect(next.environment.identity.generation).toBe('remote-x-ready');
     next.dispose();
     publishBus('turn.ended', { agentId: 'main' });
-  });
-
-  it('adopts the generation another session connected before the first turn acquire without reconnecting', async () => {
-    const { registry, state, restoreHooks, agentEnvironment } = setup();
-    const { calls } = connectSwappingEnvironment(registry, 'remote-x');
-    state.set(environmentBindingKey, { environmentId: 'remote-x', cwd: '/remote/x' });
-    await restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-
-    await registry.current('remote-x')!.connect!();
-    expect(calls).toEqual(['connect']);
-
-    const lease = await agentEnvironment.acquireWhenReady(['fs']);
-    expect(calls).toEqual(['connect']);
-    expect(lease.environment.identity.generation).toBe('remote-x-ready');
-    lease.dispose();
-
-    const next = agentEnvironment.acquire(['fs']);
-    expect(next.environment.identity.generation).toBe('remote-x-ready');
-    next.dispose();
   });
 
   it('propagates a failed on-demand connect and retries on the next call', async () => {

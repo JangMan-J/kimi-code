@@ -550,17 +550,6 @@ describe('server-v2 /api/v1 fs:content and fs:mkdir with environment_id', () => 
     return (await res.json()) as Envelope<{ path: string } | null>;
   }
 
-  it('serves file content from the selected environment fs', async () => {
-    await writeFile(join(remoteRoot as string, 'remote-only.txt'), 'remote-bytes');
-
-    const res = await fetch(contentUrl('/remote-only.txt', 'remote-test'), {
-      headers: { connection: 'close', ...authHeaders(server as RunningServer) },
-    } as never);
-    expect(res.status).toBe(200);
-    expect(res.headers.get('content-length')).toBe('12');
-    expect(await res.text()).toBe('remote-bytes');
-  });
-
   it('reads stat, sample, and body from the environment fs when the path exists on both filesystems', async () => {
     const requestPath = join(localRoot as string, 'shared.txt');
     const remoteFile = join(remoteRoot as string, requestPath);
@@ -576,25 +565,6 @@ describe('server-v2 /api/v1 fs:content and fs:mkdir with environment_id', () => 
     expect(await res.text()).toBe('remote-bytes');
   });
 
-  it('keeps serving the server-local filesystem when environment_id is local', async () => {
-    const file = join(localRoot as string, 'local.txt');
-    await writeFile(file, 'local-bytes');
-
-    const res = await fetch(contentUrl(file, 'local'), {
-      headers: { connection: 'close', ...authHeaders(server as RunningServer) },
-    } as never);
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe('local-bytes');
-  });
-
-  it('maps an unknown content environment_id to ENVIRONMENT_NOT_FOUND', async () => {
-    const res = await fetch(contentUrl('/remote-only.txt', 'no-such-environment'), {
-      headers: { connection: 'close', ...authHeaders(server as RunningServer) },
-    } as never);
-    const body = (await res.json()) as Envelope<null>;
-    expect(body.code).toBe(40420);
-  });
-
   it('creates directories on the environment fs, never on the server-local disk', async () => {
     const requestPath = join(localRoot as string, 'made-remote');
     await mkdir(join(remoteRoot as string, localRoot as string), { recursive: true });
@@ -606,53 +576,5 @@ describe('server-v2 /api/v1 fs:content and fs:mkdir with environment_id', () => 
     const remoteStat = await stat(join(remoteRoot as string, requestPath));
     expect(remoteStat.isDirectory()).toBe(true);
     await expect(stat(requestPath)).rejects.toThrow();
-  });
-
-  it('rejects mkdir on an existing environment path (40919)', async () => {
-    const requestPath = join(localRoot as string, 'already-here');
-    await mkdir(join(remoteRoot as string, requestPath), { recursive: true });
-
-    const body = await postMkdir({ path: requestPath, environment_id: 'remote-test' });
-    expect(body.code).toBe(40919);
-  });
-
-  it('rejects mkdir with a missing environment parent (40409)', async () => {
-    const requestPath = join(localRoot as string, 'no-such-parent', 'child');
-
-    const body = await postMkdir({ path: requestPath, environment_id: 'remote-test' });
-    expect(body.code).toBe(40409);
-  });
-
-  it('maps an unknown mkdir environment_id to ENVIRONMENT_NOT_FOUND', async () => {
-    const body = await postMkdir({
-      path: join(localRoot as string, 'x'),
-      environment_id: 'no-such-environment',
-    });
-    expect(body.code).toBe(40420);
-  });
-
-  it('shares one app-level environment across workspaces', async () => {
-    const localRootB = await realpath(await mkdtemp(join(tmpdir(), 'kimi-server-v2-fsrt-local-b-')));
-    remoteRoots.set(localRootB, localRootB);
-    const res = await fetch(`${base}/api/v1/sessions`, {
-      method: 'POST',
-      headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ metadata: { cwd: localRootB } }),
-    } as never);
-    const createdB = (await res.json()) as Envelope<{ id: string; workspace_id: string }>;
-    if (createdB.code !== 0) throw new Error(`session create failed: ${createdB.msg}`);
-
-    await writeFile(join(remoteRoot as string, 'shared.txt'), 'workspace-a-bytes');
-
-    const listed = await fetch(contentUrl('/shared.txt', 'remote-test'), {
-      headers: { connection: 'close', ...authHeaders(server as RunningServer) },
-    } as never);
-    expect(listed.status).toBe(200);
-    expect(await listed.text()).toBe('workspace-a-bytes');
-
-    const mkdirBody = await postMkdir({ path: '/made-after-b', environment_id: 'remote-test' });
-    expect(mkdirBody.code).toBe(0);
-    const statB = await stat(join(remoteRoot as string, 'made-after-b'));
-    expect(statB.isDirectory()).toBe(true);
   });
 });

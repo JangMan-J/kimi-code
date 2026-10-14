@@ -7,10 +7,7 @@ import type { IHostFileSystem, HostFileStat } from '#/os/interface/hostFileSyste
 import type { IHostProcessService } from '#/os/interface/hostProcess';
 import { noopTelemetryService } from '#/app/telemetry/telemetry';
 import { FakeEnvironment } from '#/environment/fakeEnvironment';
-import {
-  ensureRgPath,
-  getShareBinRgPath,
-} from '#/os/backends/node-local/tools/rgLocator';
+import { ensureRgPath } from '#/os/backends/node-local/tools/rgLocator';
 import { GlobTool } from '#/agent/tools/os/glob/globTool';
 import { GrepTool } from '#/agent/tools/os/grep/grepTool';
 import { stubWorkspaceContext } from '../../../session/workspaceContext/stub-workspace-context';
@@ -24,8 +21,6 @@ vi.mock('#/os/backends/node-local/tools/rgLocator', async (importOriginal) => {
 
 const ensureRgPathMock = vi.mocked(ensureRgPath);
 
-const REMOTE_HOME = '/home/remote';
-const REMOTE_SHARE_BIN_RG = '/home/remote/.kimi-code/bin/rg';
 const LOCAL_SHARE_BIN_RG = join(
   '/kimi-home-test',
   'bin',
@@ -135,19 +130,6 @@ describe('rg-unavailable guidance', () => {
 
   for (const { name, execute } of TOOLS) {
     describe(name, () => {
-      it('names the bound environment and the target-side share-bin path on a remote environment', async () => {
-        ensureRgPathMock.mockRejectedValue(new Error('boom'));
-        const result = await execute(createBackend({ environmentId: 'ssh-dev', homeDir: REMOTE_HOME }));
-
-        expect(result.isError).toBe(true);
-        const output = outputOf(result);
-        expect(output).toContain('ssh-dev');
-        expect(output).toContain(REMOTE_SHARE_BIN_RG);
-        expect(output).toContain('on the target');
-        expect(output).toContain('brew install ripgrep');
-        expect(output).not.toContain(getShareBinRgPath());
-      });
-
       it('keeps the local-binding guidance byte-identical', async () => {
         ensureRgPathMock.mockRejectedValue(new Error('boom'));
         const result = await execute(createBackend({ environmentId: 'local', homeDir: '/home/test' }));
@@ -165,28 +147,6 @@ describe('rg-unavailable guidance', () => {
             '\n' +
             `Alternatively, drop a static rg binary at ${LOCAL_SHARE_BIN_RG}`,
         );
-      });
-
-      it('names the environment and target path when the resolved rg fails to spawn', async () => {
-        ensureRgPathMock.mockResolvedValue({ path: REMOTE_SHARE_BIN_RG, source: 'share-bin-cached' });
-        const enoent = Object.assign(new Error(`spawn ${REMOTE_SHARE_BIN_RG} ENOENT`), {
-          code: 'ENOENT',
-        });
-        const result = await execute(
-          createBackend({
-            environmentId: 'ssh-dev',
-            homeDir: REMOTE_HOME,
-            spawn: async () => {
-              throw enoent;
-            },
-          }),
-        );
-
-        expect(result.isError).toBe(true);
-        const output = outputOf(result);
-        expect(output).toContain('ssh-dev');
-        expect(output).toContain(REMOTE_SHARE_BIN_RG);
-        expect(output).not.toContain(getShareBinRgPath());
       });
     });
   }

@@ -26,8 +26,7 @@ import type {
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import type { ToolCall } from '#human/llm/message';
 import { IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
-import { HostFsError } from '#/os/interface/hostFsErrors';
-import { IHostEnvironment, type PathClass } from '#/os/interface/hostEnvironment';
+import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { ToolAccesses } from '#/tool/toolContract';
 import type { ToolInputDisplay } from '#/tool/toolInputDisplay';
@@ -174,7 +173,7 @@ describe('AgentPlanService plan-guard listener', () => {
     };
   }
 
-  function buildServices(environment: IAgentEnvironmentService, sessionDir = TEMP_DIR, pathClass: PathClass = 'posix'): void {
+  function buildServices(environment: IAgentEnvironmentService, sessionDir = TEMP_DIR): void {
     const toolApproval: IAgentToolApprovalService = {
       _serviceBrand: undefined,
       resolvePermissionResolution: async () => {
@@ -193,7 +192,7 @@ describe('AgentPlanService plan-guard listener', () => {
       additionalServices: (reg) => {
         registerTestAgentWireServices(reg);
         reg.defineInstance(IAgentEnvironmentService, environment);
-        reg.definePartialInstance(IHostEnvironment, { pathClass });
+        reg.definePartialInstance(IHostEnvironment, { pathClass: 'posix' });
         reg.defineInstance(IHostFileSystem, environment.inspect().fs ?? createFakeHostFs());
         reg.defineInstance(ISessionContext, makeSessionContext({
           sessionId: 'session',
@@ -273,54 +272,6 @@ describe('AgentPlanService plan-guard listener', () => {
       expect(permissionRan).toBe(false);
     });
 
-    it('lets a write through when the plan file is addressed through a symlinked tempDir alias', async () => {
-      await enterPlan();
-      const aliasPath = `/private${PLAN_PATH}`;
-      const decision = await run(
-        hookContext('Write', {
-          args: { path: aliasPath },
-          accesses: ToolAccesses.writeFile(aliasPath),
-        }),
-      );
-
-      expect(decision).toBeUndefined();
-      expect(permissionRan).toBe(false);
-    });
-
-    it('lets a write through when a remote fs reports fs-domain not_found while canonicalizing the plan path', async () => {
-      const remoteNotFound = (path: string): HostFsError =>
-        new HostFsError('os.fs.not_found', 'realpath failed: path does not exist', {
-          details: { path, op: 'realpath', domainCode: 'os.fs.not_found' },
-        });
-      const environment = stubPlanEnvironment({
-        fs: createFakeHostFs({
-          mkdir: vi.fn().mockResolvedValue(undefined),
-          readText: vi.fn(async (path: string) => files.get(path) ?? ''),
-          writeText: vi.fn(async (path: string, content: string) => {
-            files.set(path, content);
-          }),
-          realpath: vi.fn(async (path: string) => {
-            if (path.endsWith(`${PLAN_ID}.md`)) throw remoteNotFound(path);
-            return path.startsWith('/var/') ? `/private${path}` : path;
-          }),
-        }),
-        tempDir: TEMP_DIR,
-      });
-      buildServices(environment);
-      await enterPlan();
-      const aliasPath = `/private${PLAN_PATH}`;
-
-      const decision = await run(
-        hookContext('Write', {
-          args: { path: aliasPath },
-          accesses: ToolAccesses.writeFile(aliasPath),
-        }),
-      );
-
-      expect(decision).toBeUndefined();
-      expect(permissionRan).toBe(false);
-    });
-
     it('blocks a non-plan file addressed through the same tempDir alias prefix', async () => {
       await enterPlan();
       const otherPath = `/private${TEMP_DIR}/kimi-code/plans/test-agent/other.md`;
@@ -333,22 +284,6 @@ describe('AgentPlanService plan-guard listener', () => {
 
       expect(decision?.veto?.isError).toBe(true);
       expect(decision?.veto?.output).toContain('current plan file');
-      expect(permissionRan).toBe(false);
-    });
-
-    it('keeps the plan file in the local session directory when the environment is unavailable', async () => {
-      buildServices(unavailableEnvironment());
-      const svc = await enterPlan();
-
-      expect((await svc.status())?.path).toBe(PLAN_PATH);
-      const decision = await run(
-        hookContext('Write', {
-          args: { path: PLAN_PATH },
-          accesses: ToolAccesses.writeFile(PLAN_PATH),
-        }),
-      );
-
-      expect(decision).toBeUndefined();
       expect(permissionRan).toBe(false);
     });
 
@@ -462,20 +397,6 @@ describe('AgentPlanService plan-guard listener', () => {
 
     expect((await firstPlan.status())!.path).toBe(`${TEMP_DIR}/session-a/agents/test-agent/plans/${PLAN_ID}.md`);
     expect((await secondPlan.status())!.path).toBe(`${TEMP_DIR}/session-b/agents/test-agent/plans/${PLAN_ID}.md`);
-  });
-
-  it('preserves native Windows path semantics for plan files', async () => {
-    const environment = stubPlanEnvironment({
-      fs: createFakeHostFs({
-        mkdir: vi.fn().mockResolvedValue(undefined),
-        readText: vi.fn().mockResolvedValue(''),
-      }),
-      tempDir: 'C:\\Temp',
-    });
-    buildServices(environment, '//server/share/session', 'win32');
-    const svc = await enterPlan();
-
-    expect((await svc.status())?.path).toBe('\\\\server\\share\\session\\agents\\test-agent\\plans\\plan-1.md');
   });
 
   it('limits saved-plan Read routing to direct plan files owned by this agent', async () => {

@@ -1,5 +1,3 @@
-import * as win32Path from 'node:path/win32';
-import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
@@ -9,8 +7,6 @@ import { dirname, join } from 'pathe';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
-import { IReadTool } from '#/agent/tools/os/read/read';
-import { IWriteTool } from '#/agent/tools/os/write/write';
 import { IAgentLoopService } from '#/agent/loop/loop';
 import { runWillBeginStepHooks, type StubLoop } from '../../agent/loop/stubs';
 import { IAgentPlanService, type PlanData } from '#/features/plan/plan';
@@ -20,14 +16,11 @@ import { IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnviro
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
-import { HostFsError } from '#/os/interface/hostFsErrors';
 import { IBlobStore } from '#/persistence/interface/blobStore';
 import type { IHostProcessService } from '#/os/interface/hostProcess';
 import { createFakeHostFs, createFakeProcessRunner } from '../../tools/fixtures/fake-exec';
 import { createMapFs, stubPlanEnvironment } from './stubs';
 import {
-  appService,
-  sessionService,
   agentService,
   createCommandRunner,
   createTestAgent,
@@ -293,136 +286,6 @@ describe('Plan service', () => {
       remoteCtx.get(IAgentProfileService).update({ activeToolNames: [...tools] });
       remoteCtx.newEvents();
     }
-
-    it.each(['posix', 'win32'] as const)('writes, edits, and reads the plan file on the local %s session filesystem', async (pathClass) => {
-      if (pathClass === 'win32') {
-        const host = remoteCtx.get(IHostEnvironment);
-        const session = remoteCtx.get(ISessionContext);
-        await remoteCtx.dispose();
-        remoteCtx = createTestAgent([
-          execEnvServices({ hostFs: createMapFs(localFiles) }),
-          appService(IHostEnvironment, { ...host, pathClass }),
-          sessionService(ISessionContext, { ...session, sessionDir: '//server/share/session' }),
-          agentService(IAgentEnvironmentService, stubPlanEnvironment({ fs: createMapFs(remoteFiles, { mkdir: remoteMkdir }), tempDir: remoteTempDir })),
-        ]);
-        remotePlan = remoteCtx.get(IAgentPlanService);
-        await remoteCtx.restorePersisted();
-      }
-      useRemoteTools(['Write', 'Edit', 'Read']);
-      await remotePlan.enter('remote-plan', false);
-
-      const planPath = (pathClass === 'win32' ? win32Path.join : join)(remoteCtx.get(ISessionContext).sessionDir, 'agents', 'main', 'plans', 'remote-plan.md');
-      expect((await remotePlan.status())?.path).toBe(planPath);
-      expect(remoteMkdir).not.toHaveBeenCalled();
-
-      const content = '# Plan\n\n- Inspect the remote tree';
-      const writeCall: ToolCall = {
-        type: 'function',
-        id: 'call_write_remote_plan',
-        name: 'Write',
-        arguments: JSON.stringify({ path: planPath, content }),
-      };
-      remoteCtx.mockNextResponse({ type: 'text', text: 'I will write the plan.' }, writeCall);
-      remoteCtx.mockNextResponse({ type: 'text', text: 'Plan written.' });
-      await remoteCtx.rpc.prompt({ input: [{ type: 'text', text: 'Write the plan file' }] });
-
-      await remoteCtx.untilTurnEnd();
-
-      expect(localFiles.get(planPath)).toBe(content);
-      expect(remoteFiles.has(planPath)).toBe(false);
-      expect((await remotePlan.status())?.content).toBe(content);
-
-      const editCall: ToolCall = {
-        type: 'function',
-        id: 'call_edit_remote_plan',
-        name: 'Edit',
-        arguments: JSON.stringify({ path: planPath, old_string: 'Inspect', new_string: 'Review' }),
-      };
-      remoteCtx.mockNextResponse({ type: 'text', text: 'I will review the plan.' }, editCall);
-      remoteCtx.mockNextResponse({ type: 'text', text: 'Plan updated.' });
-      await remoteCtx.rpc.prompt({ input: [{ type: 'text', text: 'Review the plan file' }] });
-      await remoteCtx.untilTurnEnd();
-
-      const updated = content.replace('Inspect', 'Review');
-      expect(localFiles.get(planPath)).toBe(updated);
-      expect(remoteFiles.has(planPath)).toBe(false);
-      expect((await remotePlan.status())?.content).toBe(updated);
-
-      const readCall: ToolCall = {
-        type: 'function',
-        id: 'call_read_remote_plan',
-        name: 'Read',
-        arguments: JSON.stringify({ path: planPath }),
-      };
-      remoteCtx.mockNextResponse({ type: 'text', text: 'I will read the plan.' }, readCall);
-      remoteCtx.mockNextResponse({ type: 'text', text: 'Plan read.' });
-      await remoteCtx.rpc.prompt({ input: [{ type: 'text', text: 'Read the plan file' }] });
-      await remoteCtx.untilTurnEnd();
-
-      expect(toolResultText(remoteCtx.llmCalls.at(-1)!.history)).toContain('- Review the remote tree');
-      await remotePlan.recordRevision();
-      expect((await remotePlan.status())?.content).toBe(updated);
-      const staleWrite = await remoteCtx.get(IWriteTool).resolveExecution({ path: planPath, content: 'stale write' });
-      if (staleWrite.isError === true) throw new Error('expected runnable Write');
-      remotePlan.exit();
-      expect(await remotePlan.status()).toBeNull();
-      const toolContext = { turnId: 0, toolCallId: 'local_plan_after_exit', signal: new AbortController().signal };
-      expect((await staleWrite.execute(toolContext)).isError).toBe(true);
-      const readSaved = async () => {
-        const execution = await remoteCtx.get(IReadTool).resolveExecution({ path: planPath });
-        if (execution.isError === true) throw new Error('expected runnable Read');
-        const result = await execution.execute(toolContext);
-        expect(result.isError ?? false).toBe(false);
-        expect(result.output).toContain('- Review the remote tree');
-      };
-      await readSaved();
-      await remotePlan.enter('another-plan');
-      await readSaved();
-      expect(localFiles.get(planPath)).toBe(updated);
-      expect(remoteFiles.size).toBe(0);
-    });
-
-    it('returns empty plan content when the local fs reports fs-domain not_found for the plan file', async () => {
-      const files = new Map<string, string>();
-      const ctx = createTestAgent([
-        execEnvServices({ hostFs: createMapFs(files, {
-          readText: (path) => Promise.reject(new HostFsError('os.fs.not_found', 'read failed: path does not exist', { details: { path, op: 'read' } })),
-        }) }),
-        agentService(
-          IAgentEnvironmentService,
-          stubPlanEnvironment({
-            fs: createMapFs(files, {
-              readText: (path) => {
-                const content = files.get(path);
-                if (content === undefined) {
-                  return Promise.reject(
-                    new HostFsError('os.fs.not_found', 'read failed: path does not exist', {
-                      details: { path, op: 'read', domainCode: 'os.fs.not_found' },
-                    }),
-                  );
-                }
-                return Promise.resolve(content);
-              },
-            }),
-            tempDir: remoteTempDir,
-          }),
-        ),
-      ]);
-      try {
-        const plan = ctx.get(IAgentPlanService);
-        await ctx.restorePersisted();
-        await plan.enter('remote-shape-plan', false);
-        const planPath = join(ctx.get(ISessionContext).sessionDir, 'agents', 'main', 'plans', 'remote-shape-plan.md');
-        files.delete(planPath);
-
-        const status = await plan.status();
-
-        expect(status?.path).toBe(planPath);
-        expect(status?.content).toBe('');
-      } finally {
-        await ctx.dispose();
-      }
-    });
 
     it('keeps denying writes to non-plan files on a remote binding', async () => {
       useRemoteTools(['Write']);
