@@ -393,9 +393,9 @@ export class Program {
             onDidChange: Event.None as Event<void>,
           });
       const fs = new WorkspaceFsService(context, dirs, targetFs, this.resolver, this.dependencies.telemetry, git, environmentId);
-      const instructions = own(new WorkspaceInstructionsService(context, targetFs, localEnvironment.host, this.dependencies.bootstrap, this.dependencies.log, state, localFs));
+      const instructions = own(new WorkspaceInstructionsService(context, targetFs, localEnvironment.host, this.dependencies.bootstrap, this.dependencies.log, state, localFs, environmentId === LOCAL_ENVIRONMENT_ID));
       const profileContextKey = environmentBindingId(environmentId, root);
-      const agentProfiles = own(new WorkspaceAgentProfileLoaderService(context, targetFs, this.dependencies.log, userAgentProfiles, this.dependencies.agentProfiles, profileContextKey));
+      const agentProfiles = own(new WorkspaceAgentProfileLoaderService(context, targetFs, this.dependencies.log, userAgentProfiles, this.dependencies.agentProfiles, profileContextKey, environmentId === LOCAL_ENVIRONMENT_ID));
       const targetSkillDiscovery = new EnvironmentSkillDiscovery(this.dependencies.log, targetFs);
       const userSkills = this.dependencies.userSkills;
       const workspaceSkills = own(new WorkspaceRootSkillSource(targetSkillDiscovery, context, this.dependencies.config, this.dependencies.bootstrap, targetFs, environmentId === LOCAL_ENVIRONMENT_ID));

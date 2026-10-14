@@ -38,9 +38,10 @@ export class WorkspaceAgentProfileLoaderService
     @IUserAgentProfileLoader private readonly user: IUserAgentProfileLoader,
     registry?: IAgentProfileRegistry,
     protected override readonly contextKey?: string,
+    private readonly watchEnabled = true,
   ) {
     super(log, registry);
-    this.watchReady = this.watchProjectAgentRoots();
+    this.watchReady = this.watchEnabled ? this.watchProjectAgentRoots() : Promise.resolve();
     this.start();
   }
 
