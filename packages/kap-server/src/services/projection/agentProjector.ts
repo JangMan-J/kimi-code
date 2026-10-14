@@ -804,6 +804,11 @@ export class AgentMessageProjector {
     providerFinishReason?: string;
     llmFirstTokenLatencyMs?: number;
     llmStreamDurationMs?: number;
+    llmRequestBuildMs?: number;
+    llmServerFirstTokenMs?: number;
+    llmServerDecodeMs?: number;
+    llmClientConsumeMs?: number;
+    llmClientBlockedMs?: number;
   }): ServerMessage[] {
     const ops = this.settlePendingClear();
     ops.push(...this.flushOpenTexts());
@@ -2103,13 +2108,23 @@ function turnUsageToWire(usage: StepUsage): {
 function timingOf(event: {
   llmFirstTokenLatencyMs?: number;
   llmStreamDurationMs?: number;
+  llmRequestBuildMs?: number;
+  llmServerFirstTokenMs?: number;
+  llmServerDecodeMs?: number;
+  llmClientConsumeMs?: number;
+  llmClientBlockedMs?: number;
 }): StepTiming | undefined {
-  if (event.llmFirstTokenLatencyMs === undefined && event.llmStreamDurationMs === undefined) {
+  if (event.llmFirstTokenLatencyMs === undefined && event.llmStreamDurationMs === undefined && event.llmRequestBuildMs === undefined && event.llmServerFirstTokenMs === undefined && event.llmServerDecodeMs === undefined && event.llmClientConsumeMs === undefined && event.llmClientBlockedMs === undefined) {
     return undefined;
   }
   return {
     llm_first_token_ms: event.llmFirstTokenLatencyMs,
     llm_stream_duration_ms: event.llmStreamDurationMs,
+    llm_request_build_ms: event.llmRequestBuildMs,
+    llm_server_first_token_ms: event.llmServerFirstTokenMs,
+    llm_server_decode_ms: event.llmServerDecodeMs,
+    llm_client_consume_ms: event.llmClientConsumeMs,
+    llm_client_blocked_ms: event.llmClientBlockedMs,
   };
 }
 

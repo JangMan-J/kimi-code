@@ -338,6 +338,11 @@ export function foldWireTurn(records: readonly ContextRecord[], turnOrdinal: num
             usage?: TokenUsage;
             llmFirstTokenLatencyMs?: number;
             llmStreamDurationMs?: number;
+            llmRequestBuildMs?: number;
+            llmServerFirstTokenMs?: number;
+            llmServerDecodeMs?: number;
+            llmClientConsumeMs?: number;
+            llmClientBlockedMs?: number;
           };
           const ref = stepOf(e.uuid);
           if (ref === undefined || ref.turn !== turnOrdinal) continue;
@@ -347,11 +352,16 @@ export function foldWireTurn(records: readonly ContextRecord[], turnOrdinal: num
             usage: e.usage === undefined ? undefined : toSnakeUsage(e.usage),
             finishReason: e.finishReason ?? e.rawFinishReason ?? e.providerFinishReason,
             timing:
-              e.llmFirstTokenLatencyMs === undefined && e.llmStreamDurationMs === undefined
+              e.llmFirstTokenLatencyMs === undefined && e.llmStreamDurationMs === undefined && e.llmRequestBuildMs === undefined && e.llmServerFirstTokenMs === undefined && e.llmServerDecodeMs === undefined && e.llmClientConsumeMs === undefined && e.llmClientBlockedMs === undefined
                 ? undefined
                 : {
                     llm_first_token_ms: e.llmFirstTokenLatencyMs,
                     llm_stream_duration_ms: e.llmStreamDurationMs,
+                    llm_request_build_ms: e.llmRequestBuildMs,
+                    llm_server_first_token_ms: e.llmServerFirstTokenMs,
+                    llm_server_decode_ms: e.llmServerDecodeMs,
+                    llm_client_consume_ms: e.llmClientConsumeMs,
+                    llm_client_blocked_ms: e.llmClientBlockedMs,
                   },
           });
           continue;

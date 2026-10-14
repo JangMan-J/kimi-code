@@ -27,7 +27,8 @@ export function taskStorageKey(taskId: string): string {
   }
   let encoded = '';
   for (let index = 0; index < taskId.length; index++) {
-    const code = taskId.codePointAt(index);
+    // eslint-disable-next-line unicorn/prefer-code-point
+    const code = taskId.charCodeAt(index);
     const ch = taskId[index]!;
     encoded +=
       code < 0x80 && STORAGE_KEY_SAFE_CHAR.test(ch)
@@ -46,7 +47,8 @@ export function taskStorageKey(taskId: string): string {
 function storageKeyDigest(taskId: string): string {
   let hash = 0xcbf29ce484222325n;
   for (let index = 0; index < taskId.length; index++) {
-    hash ^= BigInt(taskId.codePointAt(index));
+    // eslint-disable-next-line unicorn/prefer-code-point
+    hash ^= BigInt(taskId.charCodeAt(index));
     hash = BigInt.asUintN(64, hash * 0x100000001b3n);
   }
   return hash.toString(16).padStart(16, '0');

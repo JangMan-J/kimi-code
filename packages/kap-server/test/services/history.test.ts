@@ -89,6 +89,7 @@ describe('foldWireHistory turn lifecycle', () => {
         usage: { inputOther: 10, output: 5, inputCacheRead: 2, inputCacheCreation: 1 },
         llmFirstTokenLatencyMs: 100,
         llmStreamDurationMs: 900,
+      llmRequestBuildMs: 10, llmServerFirstTokenMs: 80, llmServerDecodeMs: 800, llmClientConsumeMs: 90, llmClientBlockedMs: 5,
       },
       T0 + 7,
     ),
@@ -140,7 +141,7 @@ describe('foldWireHistory turn lifecycle', () => {
       ended_at: iso(T0 + 7),
       usage: { input_other: 10, output: 5, input_cache_read: 2, input_cache_creation: 1 },
       finish_reason: 'stop',
-      timing: { llm_first_token_ms: 100, llm_stream_duration_ms: 900 },
+      timing: { llm_first_token_ms: 100, llm_stream_duration_ms: 900, llm_request_build_ms: 10, llm_server_first_token_ms: 80, llm_server_decode_ms: 800, llm_client_consume_ms: 90, llm_client_blocked_ms: 5 },
     });
     const thinking = ofType(messages, 'thinking')[0]!;
     expect(thinking).toMatchObject({ message_id: 't0.1.a1', status: 'completed', text: 'hmm' });

@@ -322,7 +322,8 @@ function truncateTextToTokens(text: string, maxTokens: number): string {
   let nonAsciiCount = 0;
   let end = 0;
   for (const char of text) {
-    if (char.codePointAt(0)! <= 127) {
+    // eslint-disable-next-line unicorn/prefer-code-point
+    if (char.charCodeAt(0)! <= 127) {
       asciiCount++;
     } else {
       nonAsciiCount++;
@@ -340,9 +341,11 @@ function truncateTextToTokensFromEnd(text: string, maxTokens: number): string {
   let start = text.length;
   for (let i = text.length - 1; i >= 0; i--) {
     let isAscii = false;
-    const code = text.codePointAt(i);
+    // eslint-disable-next-line unicorn/prefer-code-point
+    const code = text.charCodeAt(i);
     if (code >= 0xdc00 && code <= 0xdfff && i > 0) {
-      const high = text.codePointAt(i - 1);
+      // eslint-disable-next-line unicorn/prefer-code-point
+      const high = text.charCodeAt(i - 1);
       if (high >= 0xd800 && high <= 0xdbff) {
         i--;
       }

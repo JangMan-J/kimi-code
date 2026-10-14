@@ -6,6 +6,11 @@ import { stepUsageSchema } from './step-usage';
 export const stepTimingSchema = z.object({
   llm_first_token_ms: z.number().nonnegative().optional(),
   llm_stream_duration_ms: z.number().nonnegative().optional(),
+  llm_request_build_ms: z.number().nonnegative().optional(),
+  llm_server_first_token_ms: z.number().nonnegative().optional(),
+  llm_server_decode_ms: z.number().nonnegative().optional(),
+  llm_client_consume_ms: z.number().nonnegative().optional(),
+  llm_client_blocked_ms: z.number().nonnegative().optional(),
 });
 
 export type StepTiming = z.infer<typeof stepTimingSchema>;
