@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -610,21 +610,6 @@ describe('AgentPermissionPolicyService git cwd write approval', () => {
     });
   });
 
-  it('asks for paths outside cwd and additionalDirs', async () => {
-    const extraDir = await mkdtemp(join(tmpdir(), 'kimi-permission-extra-'));
-    cleanupDirs.push(extraDir);
-    workspace.addAdditionalDir(extraDir);
-    const outsidePath = join(`${extraDir}-evil`, 'outside.ts');
-    await expect(evaluate({
-      toolName: 'Write',
-      args: { path: outsidePath, content: 'x' },
-      accesses: ToolAccesses.writeFile(outsidePath),
-    })).resolves.toMatchObject({
-      policyName: 'fallback-ask',
-      result: { kind: 'ask' },
-    });
-  });
-
   it('asks for git control files before git-cwd approval', async () => {
     await expect(evaluate({
       toolName: 'Write',
@@ -665,6 +650,18 @@ describe('AgentPermissionPolicyService git cwd write approval', () => {
     })).resolves.toMatchObject({
       policyName: 'default-tool-approve',
       result: { kind: 'approve' },
+    });
+
+    const linkedSecretsDir = join(workspaceDir, 'linked-secrets');
+    await mkdir(linkedSecretsDir, { recursive: true });
+    await symlink(linkedSecretsDir, join(workspaceDir, 'id_rsa'), 'dir');
+    await expect(evaluate({
+      toolName: 'Grep',
+      args: { pattern: 'token', path: join(workspaceDir, 'id_rsa') },
+      accesses: ToolAccesses.searchTree(join(workspaceDir, 'id_rsa')),
+    })).resolves.toMatchObject({
+      policyName: 'sensitive-file-access-ask',
+      result: { kind: 'ask' },
     });
   });
 

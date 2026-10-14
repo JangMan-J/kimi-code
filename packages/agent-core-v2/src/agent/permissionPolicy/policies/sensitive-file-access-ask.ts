@@ -27,7 +27,7 @@ export class SensitiveFileAccessAskPermissionPolicyService implements Permission
     try {
       const fs = lease.runtime.fs;
       if (fs === undefined) return { kind: 'ask' };
-      const stat = await fs.stat(access.path).catch(() => undefined);
+      const stat = await fs.lstat(access.path).catch(() => undefined);
       return stat !== undefined && stat.isDirectory ? undefined : { kind: 'ask' };
     } finally {
       lease.dispose();

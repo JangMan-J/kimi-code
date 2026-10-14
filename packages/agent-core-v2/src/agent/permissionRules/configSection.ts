@@ -11,6 +11,7 @@ import {
   cloneRecord,
   isPlainObject,
   plainObjectToToml,
+  setDefined,
   transformPlainObject,
 } from '#/app/config/toml';
 
@@ -165,6 +166,9 @@ export const permissionToToml = (value: unknown, rawSnake: unknown): unknown => 
   } else {
     delete out['rules'];
   }
+  setDefined(out, 'dangerous_command_guard', value['dangerousCommandGuard']);
+  setDefined(out, 'sensitive_file_guard', value['sensitiveFileGuard']);
+  setDefined(out, 'git_control_path_guard', value['gitControlPathGuard']);
   return out;
 };
 

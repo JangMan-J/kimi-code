@@ -9,6 +9,10 @@ import { DisposableStore } from '#/_base/di/lifecycle';
 import { TestInstantiationService } from '#/_base/di/test';
 import { ILogService } from '#/_base/log/log';
 import { IMAGE_SECTION, type ImageConfig } from '#/agent/media/configSection';
+import {
+  PERMISSION_SECTION,
+  type PermissionConfig,
+} from '#/agent/permissionRules/configSection';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { IConfigRegistry, IConfigService } from '#/app/config/config';
 import { ConfigRegistry, ConfigService } from '#/app/config/configService';
@@ -111,6 +115,27 @@ describe('config.toml writeback preservation', () => {
     await config.set(IMAGE_SECTION, { maxEdgePx: 2000 });
     expect(writeSpy).toHaveBeenCalledTimes(1);
     expect(await readText()).toBe(afterFirst);
+
+    disposables.dispose();
+  });
+
+  it('persists permission guard switches set through the config API', async () => {
+    const { config, disposables, readText } = await setup(
+      '[permission]\ndangerous_command_guard = false\n',
+    );
+
+    await config.set(PERMISSION_SECTION, { sensitiveFileGuard: false, gitControlPathGuard: false });
+
+    const parsed = parseToml(await readText()) as Record<string, unknown>;
+    const permission = section(parsed, 'permission');
+    expect(permission['dangerous_command_guard']).toBe(false);
+    expect(permission['sensitive_file_guard']).toBe(false);
+    expect(permission['git_control_path_guard']).toBe(false);
+    expect(config.get<PermissionConfig>(PERMISSION_SECTION)).toEqual({
+      dangerousCommandGuard: false,
+      sensitiveFileGuard: false,
+      gitControlPathGuard: false,
+    });
 
     disposables.dispose();
   });
