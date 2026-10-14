@@ -5,7 +5,7 @@ import { ProtocolViolationError } from './messages';
 export const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 
 const utf8Encoder = new TextEncoder();
-const fatalUtf8Decoder = (): TextDecoder => new TextDecoder('utf-8', { fatal: true });
+const fatalUtf8Decoder = new TextDecoder('utf-8', { fatal: true });
 
 export function encodeFrame(value: unknown): Uint8Array {
   const encoded = utf8Encoder.encode(`${JSON.stringify(value)}\n`);
@@ -32,11 +32,12 @@ export class LineFrameDecoder {
     const frames: unknown[] = [];
     const buffer: Buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
     let start = 0;
-    for (let i = 0; i < buffer.length; i += 1) {
-      if (buffer[i] !== 0x0a) continue;
-      const frame = this.decodeLine(this.takeLine(buffer, start, i));
+    let newline = buffer.indexOf(0x0a, start);
+    while (newline !== -1) {
+      const frame = this.decodeLine(this.takeLine(buffer, start, newline));
       if (frame !== undefined) frames.push(frame);
-      start = i + 1;
+      start = newline + 1;
+      newline = buffer.indexOf(0x0a, start);
     }
     if (start < buffer.length) {
       this.pending.push(buffer.subarray(start));
@@ -66,7 +67,7 @@ export class LineFrameDecoder {
     }
     let text: string;
     try {
-      text = fatalUtf8Decoder().decode(line.subarray(0, end));
+      text = fatalUtf8Decoder.decode(line.subarray(0, end));
     } catch {
       throw new ProtocolViolationError('message is not valid UTF-8');
     }
