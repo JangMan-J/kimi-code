@@ -1053,9 +1053,12 @@ export class KimiTUI {
         // shows the config defaults the engine would apply at createSession
         // time (model, permission, plan mode, thinking effort, context cap).
         await this.hydrateLazyConfigDefaults();
-        this.appendStartupNotice(SESSIONLESS_STARTUP_NOTICE);
         if (startup.environment !== undefined && startup.environment !== 'local') {
+          // The remote session is created eagerly, so the session-less
+          // "No session yet" notice would contradict the live banner.
           void this.ensureSession();
+        } else {
+          this.appendStartupNotice(SESSIONLESS_STARTUP_NOTICE);
         }
       }
       if (session !== undefined && shouldReplayHistory) {
@@ -3358,7 +3361,10 @@ export class KimiTUI {
       return;
     }
     const welcome = new WelcomeComponent(this.state.appState);
-    this.state.transcriptContainer.addChild(welcome);
+    // Startup progress rows (e.g. the "Ready." spinner) are added before
+    // initMainTui() reaches this point; the welcome stays on top of them.
+    this.state.transcriptContainer.children.unshift(welcome);
+    this.state.transcriptContainer.invalidate();
   }
 
   private clearTerminalInlineImages(): void {
