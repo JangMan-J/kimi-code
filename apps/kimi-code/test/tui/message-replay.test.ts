@@ -229,6 +229,7 @@ function makeHarness(initialSession: Session) {
       },
     })),
     setConfig: vi.fn(async () => ({ providers: {} })),
+    resolveSessionEnvironment: vi.fn(async () => ({ environmentId: 'local', cwd: undefined })),
     createSession: vi.fn(async () => initialSession),
     resumeSession: vi.fn(async () => initialSession),
     forkSession: vi.fn(async () => initialSession),
