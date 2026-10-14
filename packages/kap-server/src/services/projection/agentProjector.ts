@@ -168,6 +168,7 @@ interface UserRecord {
 }
 
 interface PromptRecord {
+  clientMetadata?: Record<string, unknown>[];
   promptId: string;
   userMessageId: string;
   content: readonly ContentPart[];
@@ -1378,6 +1379,7 @@ export class AgentMessageProjector {
   }
 
   private onPromptSubmitted(event: {
+    clientMetadata?: Record<string, unknown>[];
     promptId: string;
     userMessageId: string;
     status: 'running' | 'queued';
@@ -1391,11 +1393,13 @@ export class AgentMessageProjector {
       content: event.content,
       status: event.status,
       createdAt: prev?.createdAt ?? event.createdAt,
+      clientMetadata: event.clientMetadata,
     });
     return [];
   }
 
   private onPromptQueued(event: {
+    clientMetadata?: Record<string, unknown>[];
     promptId: string;
     content: readonly ContentPart[];
   }): ServerMessage[] {
@@ -1407,6 +1411,7 @@ export class AgentMessageProjector {
         content: event.content,
         status: 'queued',
         createdAt: nowIso(),
+        clientMetadata: event.clientMetadata,
       };
       this.prompts.set(event.promptId, prev);
     }
@@ -1414,6 +1419,7 @@ export class AgentMessageProjector {
     const user: UserRecord = {
       messageId: prev.userMessageId,
       text: wireContentParts(prev.content),
+      clientMetadata: event.clientMetadata ?? prev.clientMetadata,
       status: 'unread',
     };
     this.users.set(user.messageId, user);
@@ -1483,6 +1489,7 @@ export class AgentMessageProjector {
       const existing = this.users.get(matched);
       if (existing !== undefined) {
         if (existing.status === 'unread') {
+          existing.clientMetadata = clientMetadataOf(event.origin) ?? existing.clientMetadata;
           existing.status = 'read';
           existing.turnId = turn.turnId;
           existing.timestamp = event.time;
@@ -1493,7 +1500,7 @@ export class AgentMessageProjector {
       ops.push(
         this.steerUserMessage(turn, event.input, {
           origin: userOriginOf(event.origin),
-        clientMetadata: clientMetadataOf(event.origin),
+          clientMetadata: clientMetadataOf(event.origin),
           skillActivations: skillActivationsOf(event.origin),
           skipBlocks,
           at: event.time,

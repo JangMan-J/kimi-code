@@ -1,3 +1,4 @@
+import type { UserMessage } from '../src/protocol/messages/user';
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -209,16 +210,16 @@ describe('server-v2 /api/v1 skills', () => {
       const metadata = { display_text: 'Example skill · Save button', kimi_code_composer: { version: 1, doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'client-only literal' }] }] }, attachments: [], attachmentOrder: [] } };
       const result = await postJson(`/api/v1/sessions/${id}/skills/update-config:activate`, { args: 'Example argument', attachments: [{ type: 'text', text: 'Captured page evidence' }, { type: 'text', text: 'Image association' }], metadata });
       expect(result.body.code).toBe(0);
-      const messages = await getJson<{ items: { role: string; content: { type: string; text?: string }[]; metadata?: { origin?: { clientMetadata?: unknown } } }[] }>(`/api/v1/sessions/${id}/messages`);
-      const input = messages.body.data.items.find((message) => message.role === 'user' && message.content.some((part) => part.text?.includes('User activated the skill')));
-      const modelText = input?.content.map((part) => part.text ?? '').join('\n') ?? '';
+      const messages = await getJson<{ messages: UserMessage[] }>(`/api/v1/sessions/${id}/history?agent_id=main`);
+      const input = messages.body.data.messages.find((message) => message.type === 'user');
+      const modelText = input?.text.map((part) => part.text ?? '').join('\n') ?? '';
       expect(modelText).toContain('Captured page evidence');
       expect(modelText.indexOf('Image association')).toBeGreaterThan(modelText.indexOf('Captured page evidence'));
-      expect(input?.metadata?.origin?.clientMetadata).toEqual([metadata]);
-      expect(JSON.stringify(input?.content)).not.toContain('client-only literal');
+      expect(input?.client_metadata).toEqual([metadata]);
+      expect(JSON.stringify(input?.text)).not.toContain('client-only literal');
       await closeSessionById(server!.core.accessor, id);
-      const transcript = await getJson<{ items: { kind: string; origin?: { payload?: { clientMetadata?: unknown } } }[] }>(`/api/v1/sessions/${id}/transcript?agent_id=main`);
-      expect(transcript.body.data.items.find((item) => item.kind === 'turn')?.origin?.payload?.clientMetadata).toEqual([metadata]);
+      const transcript = await getJson<{ messages: UserMessage[] }>(`/api/v1/sessions/${id}/history?agent_id=main`);
+      expect(transcript.body.data.messages.find((item) => item.type === 'user')?.client_metadata).toEqual([metadata]);
       const session = await getJson<{ title: string }>(`/api/v1/sessions/${id}`);
       expect(session.body.data.title).toBe(metadata.display_text);
     });
@@ -234,10 +235,10 @@ describe('server-v2 /api/v1 skills', () => {
         ],
       });
       expect(result.body.code).toBe(0);
-      const messages = await getJson<{ items: { role: string; content: { type: string; text?: string }[] }[] }>(`/api/v1/sessions/${id}/messages`);
-      const input = messages.body.data.items.find((message) => message.role === 'user' && message.content.some((part) => part.text?.includes('User activated the skill')));
-      const text = input?.content.map((part) => part.text ?? '').join('\n') ?? '';
-      expect(text).toContain('args="Example argument"');
+      const messages = await getJson<{ messages: UserMessage[] }>(`/api/v1/sessions/${id}/history?agent_id=main`);
+      const input = messages.body.data.messages.find((message) => message.type === 'user');
+      const text = input?.text.map((part) => part.text ?? '').join('\n') ?? '';
+      expect(input?.skill_activations).toEqual([{ skill_name: 'update-config', skill_args: 'Example argument' }]);
       expect(text).toContain('First context block');
       expect(text.indexOf('Second context block')).toBeGreaterThan(text.indexOf('First context block'));
     });

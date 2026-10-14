@@ -901,6 +901,7 @@ describe('AgentMessageProjector', () => {
         userMessageId: 'q1',
         status: 'queued',
         content: [{ type: 'text', text: 'second' }],
+        clientMetadata: [{ display_text: 'second metadata' }],
         createdAt: new Date(T0).toISOString(),
       }),
       sink,
@@ -913,6 +914,7 @@ describe('AgentMessageProjector', () => {
     const queued = ofType(sink, 'user').at(-1)!;
     expect(queued).toMatchObject({
       message_id: 'q1',
+      client_metadata: [{ display_text: 'second metadata' }],
       text: [{ type: 'text', text: 'second', meta: {} }],
       status: 'unread',
     });
