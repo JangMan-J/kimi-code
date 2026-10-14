@@ -77,6 +77,7 @@ import {
 } from './internal/fsSearch';
 
 const SEARCH_HARD_CAP = 500;
+const LIST_LSTAT_CONCURRENCY = 16;
 const PROBE_MAX_DEPTH = 6;
 const PROBE_MAX_ENTRIES = 500;
 const GREP_TIMEOUT_MS = 30_000;
@@ -190,7 +191,11 @@ export class WorkspaceFsService implements IWorkspaceFsService {
         continue;
       }
 
-      const visible: Child[] = [];
+      const candidates: {
+        readonly name: string;
+        readonly childRel: string;
+        readonly ancestorOfAllowed: boolean;
+      }[] = [];
       for (const name of names) {
         if (!req.show_hidden && isHidden(name)) continue;
         const childRel = entry.relPath === '' ? name : `${entry.relPath}/${name}`;
@@ -203,13 +208,20 @@ export class WorkspaceFsService implements IWorkspaceFsService {
           }
         }
         if (req.exclude_globs && matchesAnyGlob(childRel, req.exclude_globs)) continue;
-        const st = await this.hostFs.lstat(this.absOf(childRel)).catch(() => undefined);
-        if (st === undefined || (ancestorOfAllowed && !st.isDirectory)) continue;
+        candidates.push({ name, childRel, ancestorOfAllowed });
+      }
+      const stats = await mapWithConcurrency(candidates, LIST_LSTAT_CONCURRENCY, (candidate) =>
+        this.hostFs.lstat(this.absOf(candidate.childRel)).catch(() => undefined),
+      );
+      const visible: Child[] = [];
+      for (const [index, candidate] of candidates.entries()) {
+        const st = stats[index];
+        if (st === undefined || (candidate.ancestorOfAllowed && !st.isDirectory)) continue;
         if (
-          ancestorOfAllowed &&
-          !(await this.hasAllowedDescendant(childRel, req.allow_ignored_globs!, req.exclude_globs, req.show_hidden, probeBudget))
+          candidate.ancestorOfAllowed &&
+          !(await this.hasAllowedDescendant(candidate.childRel, req.allow_ignored_globs!, req.exclude_globs, req.show_hidden, probeBudget))
         ) continue;
-        visible.push({ name, relPath: childRel, stat: st });
+        visible.push({ name: candidate.name, relPath: candidate.childRel, stat: st });
       }
 
       sortChildren(visible, req.sort);
@@ -258,6 +270,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
       } catch {
         return false;
       }
+      const candidates: string[] = [];
       for (const name of names) {
         if (budget.visited >= PROBE_MAX_ENTRIES) return true;
         budget.visited += 1;
@@ -265,8 +278,13 @@ export class WorkspaceFsService implements IWorkspaceFsService {
         const childRel = `${rel}/${name}`;
         if (excludeGlobs !== undefined && matchesAnyGlob(childRel, excludeGlobs)) continue;
         if (matchesAnyGlob(childRel, globs)) return true;
-        const st = await this.hostFs.lstat(this.absOf(childRel)).catch(() => undefined);
-        if (st?.isDirectory === true && globCanMatchBelow(childRel, globs)) {
+        candidates.push(childRel);
+      }
+      const stats = await mapWithConcurrency(candidates, LIST_LSTAT_CONCURRENCY, (childRel) =>
+        this.hostFs.lstat(this.absOf(childRel)).catch(() => undefined),
+      );
+      for (const [index, childRel] of candidates.entries()) {
+        if (stats[index]?.isDirectory === true && globCanMatchBelow(childRel, globs)) {
           if (await walk(childRel, depth + 1)) return true;
         }
       }
@@ -299,8 +317,23 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     }
 
     const sampleSize = Math.min(FS_BINARY_SAMPLE_BYTES, st.size);
-    const sample =
-      sampleSize === 0 ? new Uint8Array() : await this.hostFs.readBytes(abs, sampleSize);
+    const rawLength = Math.max(0, Math.min(req.length, st.size - req.offset));
+    const readSample = (): Promise<Uint8Array> =>
+      sampleSize === 0 ? Promise.resolve(new Uint8Array()) : this.hostFs.readBytes(abs, sampleSize);
+    const readWindow = (): Promise<Uint8Array> =>
+      rawLength === 0
+        ? Promise.resolve(new Uint8Array())
+        : this.hostFs.readBytes(abs, rawLength, req.offset);
+
+    let sample: Uint8Array;
+    let rawWindow: Uint8Array;
+    if (req.offset === 0 && rawLength >= sampleSize) {
+      rawWindow = await readWindow();
+      sample = rawWindow.subarray(0, sampleSize);
+    } else {
+      [sample, rawWindow] = await Promise.all([readSample(), readWindow()]);
+    }
+
     const classification = classifyTextSample(sample);
     const transcodeEncoding =
       !classification.isBinary && classification.encoding !== 'utf-8' && req.encoding !== 'base64'
@@ -333,8 +366,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     } else if (decodedBytes !== undefined) {
       bytes = decodedBytes.subarray(req.offset, req.offset + effectiveLength);
     } else {
-      const window = await this.hostFs.readBytes(abs, req.offset + effectiveLength);
-      bytes = window.subarray(req.offset, req.offset + effectiveLength);
+      bytes = rawWindow.subarray(0, effectiveLength);
     }
 
     const encoding: 'utf-8' | 'base64' =
@@ -1322,6 +1354,24 @@ function isPrematureCloseError(error: unknown): boolean {
     error instanceof Error &&
     (error as NodeJS.ErrnoException).code === 'ERR_STREAM_PREMATURE_CLOSE'
   );
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = [];
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await fn(items[index]!);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 function sortChildren(

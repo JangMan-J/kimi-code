@@ -134,11 +134,11 @@ function fakeFs(
     },
     writeText: async () => {},
     appendText: async () => {},
-    readBytes: async (p, n) => {
+    readBytes: async (p, n, offset = 0) => {
       const c = fileMap.get(p);
       if (c === undefined) throw enoent(p);
       const buf = Buffer.isBuffer(c) ? c : Buffer.from(c);
-      return buf.subarray(0, n ?? buf.length);
+      return buf.subarray(offset, n === undefined ? buf.length : offset + n);
     },
     readLines: async function* (): AsyncGenerator<string> {
     },
@@ -1448,6 +1448,13 @@ describe('WorkspaceFsService.read', () => {
     const result = await fs.read({ path: 'a.txt', offset: 0, length: 5, encoding: 'utf-8' });
     expect(result.content).toBe('hello');
     expect(result.truncated).toBe(true);
+  });
+
+  it('honors a non-zero offset window', async () => {
+    const fs = makeSession({ 'a.txt': 'hello world' }, emptyHandler);
+    const result = await fs.read({ path: 'a.txt', offset: 6, length: 5, encoding: 'utf-8' });
+    expect(result.content).toBe('world');
+    expect(result.truncated).toBe(false);
   });
 
   it('returns base64 for binary content in auto mode', async () => {
