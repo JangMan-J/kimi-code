@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createRequire } from 'node:module';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { ConnectionClosedError } from '#/remote/client/connection';
 import { RemoteEnvironment } from '#/remote/client/remoteEnvironment';
@@ -81,6 +81,28 @@ describe('RemoteEnvironment over a subprocess loopback', () => {
       await environment.dispose();
     }
     expect(environment.status).toBe('disposed');
+  });
+
+  it('lets the executor kill TERM-resistant children before disposing the launcher', async () => {
+    const environment = await RemoteEnvironment.connect({ environmentId: 'loopback', launcher: loopbackLauncher() });
+    let pid: number | undefined;
+    const alive = (): boolean => {
+      try { process.kill(pid!, 0); return true; } catch { return false; }
+    };
+    try {
+      const proc = await environment.process.spawn(process.execPath, ['-e',
+        'process.on("SIGTERM", () => {}); process.stdout.write("ready"); setInterval(() => {}, 1000)',
+      ], { cwd: workDir });
+      pid = proc.pid;
+      await new Promise<void>((resolve) => {
+        proc.stdout.once('data', () => { resolve(); });
+      });
+      await environment.dispose();
+      await vi.waitFor(() => { expect(alive()).toBe(false); }, { timeout: 5_000 });
+    } finally {
+      await environment.dispose();
+      if (pid !== undefined && alive()) process.kill(pid, 'SIGKILL');
+    }
   });
 
   it('moves to disconnected when the bridge drops and rejects new calls', async () => {

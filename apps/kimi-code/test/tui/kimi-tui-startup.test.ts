@@ -217,6 +217,7 @@ function makeHarness(session = makeSession(), overrides: Record<string, unknown>
         k2: { model: 'moonshot-v1', maxContextSize: 100 },
       },
     })),
+    resolveSessionEnvironment: vi.fn(async (options: { environmentId?: string; environmentCwd?: string }) => ({ environmentId: options.environmentId ?? 'local', cwd: options.environmentCwd })),
     createSession: vi.fn(
       async (_options?: {
         environmentId?: string;
@@ -527,6 +528,48 @@ describe('KimiTUI startup', () => {
     expect(harness.createSession).toHaveBeenCalledWith(
       expect.objectContaining({ environmentId: 'dev-box', environmentCwd: '/remote/work' }),
     );
+  });
+
+  it('labels an explicit remote before creation defaults have loaded', () => {
+    const driver = makeDriver(makeHarness(), makeStartupInput({ environment: 'dev-box' }));
+    expect((driver as unknown as { startupProgressLabel(): string }).startupProgressLabel()).toBe('Connecting to dev-box…');
+  });
+
+  it('pre-creates an engine-resolved remote default without a CLI environment flag', async () => {
+    const harness = makeHarness(makeSession(), {
+      resolveSessionEnvironment: vi.fn(async () => ({ environmentId: 'dev-box', cwd: '/remote/work' })),
+    });
+    const driver = makeDriver(harness, makeStartupInput({ model: 'k2' }));
+    await driver.init();
+    expect(harness.resolveSessionEnvironment).toHaveBeenCalledWith({
+      workDir: '/tmp/proj-a', environmentId: undefined, environmentCwd: undefined,
+    });
+    expect(harness.createSession).toHaveBeenCalledTimes(1);
+    expect((driver as unknown as { startupProgressLabel(): string }).startupProgressLabel()).toBe('Connecting to dev-box…');
+  });
+
+  it('uses the resolved remote default for @ while the first session is still connecting', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const session = makeSession();
+    const suggestFiles = vi.fn(async () => ({ items: [], truncated: false }));
+    const harness = makeHarness(session, {
+      resolveSessionEnvironment: vi.fn(async () => ({ environmentId: 'dev-box', cwd: '/remote/work' })),
+      createSession: vi.fn(async () => { await pending; return session; }),
+      suggestFiles,
+    });
+    const driver = makeDriver(harness, makeStartupInput({ model: 'k2' }));
+    try {
+      await driver.init();
+      const providerSpy = vi.spyOn(driver.state.editor, 'setAutocompleteProvider');
+      driver.refreshSlashCommandAutocomplete();
+      const provider = providerSpy.mock.calls.at(-1)![0];
+      await provider.getSuggestions(['@app'], 0, 4, { signal: new AbortController().signal });
+      expect(suggestFiles).toHaveBeenCalledWith('/tmp/proj-a', expect.objectContaining({ environment: { environmentId: 'dev-box', cwd: '/remote/work' } }));
+    } finally {
+      release();
+      await (driver as unknown as { waitForSessionAssembly(): Promise<void> }).waitForSessionAssembly();
+    }
   });
 
   it('uses the bound environment for remote @ completion', async () => {

@@ -1065,7 +1065,7 @@ describe('AgentMediaToolsRegistrar', () => {
     expect(registry.resolve('ReadMediaFile')).toBeInstanceOf(ReadMediaFileTool);
   });
 
-  it('keeps session-image reads available while the workspace environment is unavailable', async () => {
+  it.each([undefined, { x: 0, y: 0, width: 16, height: 16 }])('keeps session-image reads available while the workspace environment is unavailable (region=%j)', async (region) => {
     const storage = new InMemoryStorageService();
     const store = new SessionMediaStoreService(makeSessionContext({
       sessionId: 'session', workspaceId: 'workspace', cwd: '/workspace',
@@ -1078,7 +1078,7 @@ describe('AgentMediaToolsRegistrar', () => {
     setEnvironmentAvailable(false);
     const tool = registry.resolve('ReadMediaFile');
     expect(tool).toBeDefined();
-    const execution = await tool!.resolveExecution({ path: 'kimi-file://f_picture' });
+    const execution = await tool!.resolveExecution({ path: 'kimi-file://f_picture', region });
     if (execution.isError === true) throw new Error('expected runnable attachment read');
     const result = await execution.execute({ turnId: 1, toolCallId: 'image', signal: new AbortController().signal });
     expect(result.isError).not.toBe(true);

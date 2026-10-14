@@ -139,6 +139,10 @@ export class KimiHarness {
     this.telemetry.setContext?.(patch);
   }
 
+  async resolveSessionEnvironment(options: Pick<CreateSessionOptions, 'workDir' | 'environmentId' | 'environmentCwd'>) {
+    return this.rpc.resolveSessionEnvironment(options);
+  }
+
   async createSession(options: CreateSessionOptions): Promise<Session> {
     const { planMode, sessionStartedProperties, ...coreOptions } = stripLegacyKaosOptions(options);
     const summary = await this.rpc.createSession(coreOptions);

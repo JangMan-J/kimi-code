@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { OsProcessErrors } from '#/os/interface/hostProcess';
+import { PROCESS_TERMINATION_GRACE_MS } from '../processLifecycle';
 
 import { RpcError, RpcErrorCode } from '#/remote/protocol/errors';
 import {
@@ -41,8 +42,7 @@ interface ManagedProcess {
 const EMPTY: Record<string, never> = {};
 
 const TERMINATED_ID_CACHE_SIZE = 4096;
-const EXITED_GROUP_CACHE_SIZE = 4096;
-const EXITED_GROUP_RETENTION_MS = 5_000;
+const GROUP_REAP_INTERVAL_MS = 5_000;
 
 export class ProcessManager {
   private readonly processes = new Map<string, ManagedProcess>();
@@ -242,23 +242,25 @@ export class ProcessManager {
       killTimer: entry.killTimer,
       expiryTimer: undefined,
     };
-    group.expiryTimer = setTimeout(() => {
-      if (this.exitedGroups.get(entry.processId) !== group) return;
-      this.exitedGroups.delete(entry.processId);
-    }, EXITED_GROUP_RETENTION_MS);
-    group.expiryTimer.unref?.();
     this.exitedGroups.set(entry.processId, group);
-    while (this.exitedGroups.size > EXITED_GROUP_CACHE_SIZE) {
-      const oldest = this.exitedGroups.entries().next();
-      if (oldest.done) break;
-      const [id, group] = oldest.value;
-      if (group.killTimer !== undefined) {
-        clearTimeout(group.killTimer);
-        this.killOrphanedGroup(group.pid, 'SIGKILL');
+    this.scheduleGroupReap(entry.processId, group);
+  }
+
+  private scheduleGroupReap(processId: string, group: ExitedProcessGroup): void {
+    group.expiryTimer = setTimeout(() => {
+      if (this.exitedGroups.get(processId) !== group) return;
+      try {
+        process.kill(-group.pid, 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+          if (group.killTimer !== undefined) clearTimeout(group.killTimer);
+          this.exitedGroups.delete(processId);
+          return;
+        }
       }
-      if (group.expiryTimer !== undefined) clearTimeout(group.expiryTimer);
-      this.exitedGroups.delete(id);
-    }
+      this.scheduleGroupReap(processId, group);
+    }, GROUP_REAP_INTERVAL_MS);
+    group.expiryTimer.unref?.();
   }
 
   async write(rawParams: unknown): Promise<typeof EMPTY> {
@@ -321,7 +323,7 @@ export class ProcessManager {
             group.killTimer = setTimeout(() => {
               this.killOrphanedGroup(group.pid, 'SIGKILL');
               group.killTimer = undefined;
-            }, 1_000);
+            }, PROCESS_TERMINATION_GRACE_MS);
             group.killTimer.unref?.();
           }
           return EMPTY;
@@ -362,7 +364,7 @@ export class ProcessManager {
         this.killGroup(entry, 'SIGKILL');
       } catch {
       }
-    }, 1_000);
+    }, PROCESS_TERMINATION_GRACE_MS);
     entry.killTimer.unref?.();
   }
 
@@ -436,7 +438,7 @@ export class ProcessManager {
       this.killOrphanedGroup(group.pid, 'SIGTERM');
     }
     if (entries.some((entry) => entry.exitCode === null)) {
-      const deadline = Date.now() + 1_000;
+      const deadline = Date.now() + PROCESS_TERMINATION_GRACE_MS;
       while (Date.now() < deadline) {
         if (entries.every((entry) => entry.exitCode !== null)) break;
         await new Promise((resolve) => {

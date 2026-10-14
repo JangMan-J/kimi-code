@@ -63,6 +63,8 @@ import {
   OsProcessErrors,
 } from '@moonshot-ai/agent-core-v2';
 
+import { ISessionMediaStore } from '@moonshot-ai/agent-core-v2/agent/media/sessionMediaStore';
+import { attachmentFileSource } from '@moonshot-ai/agent-core-v2/agent/tools/fileReadSource';
 import { HostFileSystem } from '@moonshot-ai/agent-core-v2/os/backends/node-local/hostFsService';
 import { HostProcessService } from '@moonshot-ai/agent-core-v2/os/backends/node-local/hostProcessService';
 import { FakeEnvironment } from '@moonshot-ai/agent-core-v2/environment/fakeEnvironment';
@@ -284,6 +286,79 @@ describe('SDKRpcClientV2 (agent-core-v2 wiring)', () => {
       },
     });
   }
+
+  it('resolves creation defaults with project trust and precedence without creating a session', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-default-work-'));
+    const remoteDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-default-target-'));
+    tempDirs.push(workDir, remoteDir);
+    const { harness, client } = await makeEnvironmentHarness({ defaultCwd: remoteDir });
+    const provider = await attachFakeBoxEnvironment(client);
+    try {
+      await client.engineAccessor.get(IConfigService).set('environments', { default: 'fake-box' });
+      expect(await harness.resolveSessionEnvironment({ workDir })).toEqual({ environmentId: 'fake-box', cwd: remoteDir });
+      expect(await harness.resolveSessionEnvironment({ workDir, environmentId: 'local' })).toEqual({ environmentId: 'local', cwd: undefined });
+      await mkdir(join(workDir, '.kimi-code'));
+      await writeFile(join(workDir, '.kimi-code', 'environments.toml'), `default = "fake-box"
+[fake-box]
+type = "ssh"
+host = "fake-box"
+defaultCwd = ${JSON.stringify(join(remoteDir, 'project-override'))}`);
+      await expect(harness.resolveSessionEnvironment({ workDir })).rejects.toThrow('Trust the local workspace');
+      await harness.trustWorkspace(workDir);
+      expect(await harness.resolveSessionEnvironment({ workDir })).toEqual({ environmentId: 'fake-box', cwd: join(remoteDir, 'project-override') });
+      expect(client.engineAccessor.get(ISessionManager).list()).toHaveLength(0);
+    } finally {
+      await provider.dispose(); await harness.close(); vi.unstubAllEnvs();
+    }
+  });
+
+  it('resolves relative additional directories against the same remote cwd on cold resume', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-resume-local-'));
+    const target = await mkdtemp(join(tmpdir(), 'kimi-sdk-resume-target-'));
+    const remoteDir = join(target, 'project');
+    const sharedDir = join(target, 'shared');
+    tempDirs.push(workDir, target);
+    await mkdir(remoteDir); await mkdir(sharedDir);
+    const { harness, client } = await makeEnvironmentHarness({ defaultCwd: remoteDir });
+    const provider = await attachFakeBoxEnvironment(client);
+    try {
+      const session = await harness.createSession({ workDir, environmentId: 'fake-box', additionalDirs: ['../shared'] });
+      await session.close();
+      const restored = await harness.resumeSession({ id: session.id, additionalDirs: ['../shared'] });
+      expect(restored.summary?.workDir).toBe(workDir);
+      expect(restored.summary?.additionalDirs).toContain(sharedDir);
+      expect(await restored.getEnvironment()).toMatchObject({ environmentId: 'fake-box', cwd: remoteDir });
+      expect(getLiveSessionById(client.engineAccessor, session.id)!.accessor.get(ISessionContext).cwd).toBe(workDir);
+    } finally {
+      await provider.dispose(); await harness.close(); vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps attached originals readable in remote sessions, forks and cold resumes without staging files', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-attachment-work-'));
+    const remoteDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-attachment-target-'));
+    tempDirs.push(workDir, remoteDir);
+    const { harness, client } = await makeEnvironmentHarness({ defaultCwd: remoteDir });
+    const provider = await attachFakeBoxEnvironment(client);
+    const bytes = Buffer.from('original-image-bytes');
+    const read = async (sessionId: string, reference: string) => {
+      const store = getLiveSessionById(client.engineAccessor, sessionId)!.accessor.get(ISessionMediaStore);
+      return (await attachmentFileSource(reference, store)).readBytes();
+    };
+    try {
+      const session = await harness.createSession({ workDir, environmentId: 'fake-box' });
+      const reference = await session.attachFile(bytes, { name: 'original.png', mimeType: 'image/png' });
+      expect(reference).toMatch(/^kimi-file:\/\/f_attachment_/);
+      expect(await read(session.id, reference)).toEqual(bytes);
+      const fork = await harness.forkSession({ id: session.id });
+      expect(await read(fork.id, reference)).toEqual(bytes);
+      await session.close();
+      await harness.resumeSession({ id: session.id });
+      expect(await read(session.id, reference)).toEqual(bytes);
+    } finally {
+      await provider.dispose(); await harness.close(); vi.unstubAllEnvs();
+    }
+  });
 
   it('persists project provenance and refuses restore after its declaration disappears even when a user launcher remains', async () => {
     const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-project-work-'));

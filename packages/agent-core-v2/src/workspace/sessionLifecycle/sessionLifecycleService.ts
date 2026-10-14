@@ -194,6 +194,7 @@ export class SessionLifecycleService extends Disposable implements ISessionLifec
     private readonly environments: IEnvironmentService,
     onDispose?: () => void,
     private readonly profileContextKey?: string,
+    private readonly environmentCwd?: string,
   ) {
     super();
     if (onDispose !== undefined) this._register({ dispose: onDispose });
@@ -266,9 +267,7 @@ export class SessionLifecycleService extends Disposable implements ISessionLifec
     const metaScope = sessionScope;
     await Promise.all([this.config.ready, this.models.ready, this.providers.ready]);
     await this.workspaceDirs.ready;
-    const additionalDirBase = opts.environmentId === undefined || opts.environmentId === LOCAL_ENVIRONMENT_ID
-      ? opts.workDir
-      : opts.environmentCwd ?? opts.workDir;
+    const additionalDirBase = this.environmentCwd ?? opts.workDir;
     await this.workspaceDirs.mergeAdditionalDirs(additionalDirBase, opts.additionalDirs ?? []);
     const ctx: ISessionContext = {
       _serviceBrand: undefined,

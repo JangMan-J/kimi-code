@@ -178,10 +178,9 @@ import { ImageAttachmentStore, type ImageAttachment, type MediaAttachment } from
 import {
   extractMediaAttachments,
   omitExpiredVideoFileRefs,
-  originalsDirForSession,
   pendingMediaIngestions,
   refreshExpiringImageFileRefs,
-  resolveOriginalCaptions,
+  resolveSessionOriginalCaptions,
   rewriteMediaPlaceholders,
 } from './utils/image-placeholder';
 import type { ExtractionResult } from './utils/image-placeholder';
@@ -556,7 +555,7 @@ export class KimiTUI {
     const environmentBinding =
       environment !== undefined
         ? environment
-        : {
+        : this.creationEnvironment ?? {
             environmentId: this.options.startup.environment,
             cwd: this.options.startup.environmentCwd,
           };
@@ -829,8 +828,9 @@ export class KimiTUI {
   private startupProgressLabel(): string {
     const { startup } = this.options;
     if (startup.sessionFlag !== undefined || startup.continueLast) return 'Restoring session…';
-    if (startup.environment !== undefined && startup.environment !== 'local') {
-      return `Connecting to ${startup.environment}…`;
+    const environmentId = this.creationEnvironment?.environmentId ?? startup.environment;
+    if (environmentId !== undefined && environmentId !== 'local') {
+      return `Connecting to ${environmentId}…`;
     }
     return 'Preparing Kimi Code…';
   }
@@ -1053,7 +1053,7 @@ export class KimiTUI {
         // shows the config defaults the engine would apply at createSession
         // time (model, permission, plan mode, thinking effort, context cap).
         await this.hydrateLazyConfigDefaults();
-        if (startup.environment !== undefined && startup.environment !== 'local') {
+        if (this.creationEnvironment?.environmentId !== undefined && this.creationEnvironment.environmentId !== 'local') {
           // The remote session is created eagerly, so the session-less
           // "No session yet" notice would contradict the live banner.
           void this.ensureSession();
@@ -1711,15 +1711,15 @@ export class KimiTUI {
     extraction: ReturnType<typeof extractMediaAttachments>,
   ): void {
     let prepared: PreparedSkillActivations | undefined;
-    let input: string | readonly PromptPart[];
+    let input: string | readonly PromptPart[] | Promise<PromptPart[]>;
     try {
       prepared = this.prepareSkillActivations(activations, extraction.mediaSnapshots);
       input = extraction.hasMedia
-        ? resolveOriginalCaptions(
+        ? resolveSessionOriginalCaptions(
             omitExpiredVideoFileRefs(extraction.parts, prepared.cachedVideos),
             extraction.imageAttachmentIds,
             this.imageStore,
-            originalsDirForSession(session),
+            session,
           )
         : text;
     } catch (error) {
@@ -1748,7 +1748,8 @@ export class KimiTUI {
       imageAttachmentIds:
         extraction.imageAttachmentIds.length > 0 ? extraction.imageAttachmentIds : undefined,
     });
-    const request = session.promptWithSkills(input, prepared.skills);
+    const skills = prepared.skills;
+    const request = this.dispatchPreparedInput(session, input, (parts) => session.promptWithSkills(parts, skills));
     this.staging.trackDispatch(stagingLease, request, (error) => {
       if (this.session === session && stagingLease !== undefined && stagingLease.turnId === undefined) {
         this.staging.defer(stagingLease);
@@ -1987,6 +1988,28 @@ export class KimiTUI {
     this.sessionEventHandler.requestQueuedGoalPromotion();
   }
 
+  private dispatchPreparedInput<T>(
+    session: Session,
+    input: T | Promise<T>,
+    dispatch: (input: T) => Promise<void>,
+  ): Promise<void> {
+    if (!(input instanceof Promise)) return dispatch(input);
+    let rejectPreparation!: (error: Error) => void;
+    const interrupted = new Promise<never>((_resolve, reject) => { rejectPreparation = reject; });
+    const cancel = () => {
+      rejectPreparation(new Error('Interrupted by user'));
+      void session.cancel().catch(() => {});
+    };
+    this.cancelInFlight = cancel;
+    return Promise.race([input, interrupted]).then((parts) => {
+      if (this.cancelInFlight === cancel) this.cancelInFlight = undefined;
+      if (this.session !== session) throw new Error('Session changed while preparing media.');
+      return dispatch(parts);
+    }).finally(() => {
+      if (this.cancelInFlight === cancel) this.cancelInFlight = undefined;
+    });
+  }
+
   private sendMessageInternal(session: Session, input: string, options?: SendMessageOptions): void {
     const imageAttachmentIds =
       options?.imageAttachmentIds !== undefined && options.imageAttachmentIds.length > 0
@@ -2017,11 +2040,11 @@ export class KimiTUI {
     // dir) known: extraction runs before a first session exists.
     const sdkInput =
       options?.parts !== undefined
-        ? resolveOriginalCaptions(
+        ? resolveSessionOriginalCaptions(
             options.parts,
             options.imageAttachmentIds ?? [],
             this.imageStore,
-            originalsDirForSession(session),
+            session,
           )
         : input;
     const goalActive = this.state.appState.goal?.status === 'active';
@@ -2054,17 +2077,21 @@ export class KimiTUI {
     // turn, or launches a turn of its own if the loop just ended.
     if (goalActive) {
       if (runningTurnId !== undefined) this.staging.bindToTurn(stagingLease, runningTurnId);
-      this.staging.trackDispatch(stagingLease, session.steer(sdkInput), (error) => {
+      const request = this.dispatchPreparedInput(session, sdkInput, (parts) => session.steer(parts));
+      this.staging.trackDispatch(stagingLease, request, (error) => {
         // Same reset as the prompt path: beginSessionRequest already moved the
         // TUI to the waiting phase, and no turn events may follow a failed
         // steer (e.g. the session is gone), which would leave the UI stuck
         // queueing input behind a request that never completes.
-        this.failSessionRequest(`Failed to steer: ${formatErrorMessage(error)}`);
+        if (this.session === session) this.failSessionRequest(`Failed to steer: ${formatErrorMessage(error)}`);
       });
       return;
     }
-    this.staging.trackDispatch(stagingLease, session.prompt(sdkInput, { promptId: submissionId }), (error) => {
-      this.failSessionRequest(`Failed to send: ${formatErrorMessage(error)}`);
+    const request = this.dispatchPreparedInput(
+      session, sdkInput, (parts) => session.prompt(parts, { promptId: submissionId }),
+    );
+    this.staging.trackDispatch(stagingLease, request, (error) => {
+      if (this.session === session) this.failSessionRequest(`Failed to send: ${formatErrorMessage(error)}`);
     });
   }
 
@@ -2260,7 +2287,7 @@ export class KimiTUI {
     }
     const activations = input.flatMap((item) => item.inlineSkillActivations ?? []);
     let prepared: PreparedSkillActivations | undefined;
-    let resolvedInput: readonly SteerInputItem[];
+    let resolvedInput: readonly (SteerInputItem | Promise<SteerInputItem>)[];
     try {
       if (activations.length > 0) {
         prepared = this.prepareSkillActivations(
@@ -2270,19 +2297,14 @@ export class KimiTUI {
             : undefined,
         );
       }
-      resolvedInput = input.map((item) =>
-        item.parts === undefined
-          ? item
-          : {
-              ...item,
-              parts: resolveOriginalCaptions(
-                prepared === undefined ? item.parts : omitExpiredVideoFileRefs(item.parts, prepared.cachedVideos),
-                item.imageAttachmentIds ?? [],
-                this.imageStore,
-                originalsDirForSession(session),
-              ),
-            },
-      );
+      resolvedInput = input.map((item) => {
+        if (item.parts === undefined) return item;
+        const parts = resolveSessionOriginalCaptions(
+          prepared === undefined ? item.parts : omitExpiredVideoFileRefs(item.parts, prepared.cachedVideos),
+          item.imageAttachmentIds ?? [], this.imageStore, session,
+        );
+        return parts instanceof Promise ? parts.then((parts) => ({ ...item, parts })) : { ...item, parts };
+      });
     } catch (error) {
       if (prepared !== undefined) this.releaseSkillArgumentMedia(prepared);
       this.showError(`Failed to prepare media attachment: ${formatErrorMessage(error)}`);
@@ -2320,13 +2342,16 @@ export class KimiTUI {
     // the submission's own turn.started claims them; a merged steer simply
     // retires its media at session close instead.
     if (currentTurnId !== undefined && prepared === undefined) this.staging.bindToTurn(stagingLease, currentTurnId);
-    const request = prepared === undefined
-      ? session.steer(combineSteerInput(resolvedInput))
-      : session.promptWithSkills(
-          combineSteerInput(resolvedInput),
-          prepared.skills,
-          { steerIfActive: true },
-        );
+    const dispatch = (items: readonly SteerInputItem[]) => prepared === undefined
+      ? session.steer(combineSteerInput(items))
+      : session.promptWithSkills(combineSteerInput(items), prepared.skills, { steerIfActive: true });
+    const request = this.dispatchPreparedInput(
+      session,
+      resolvedInput.some((item) => item instanceof Promise)
+        ? Promise.all(resolvedInput.map((item) => Promise.resolve(item)))
+        : resolvedInput as readonly SteerInputItem[],
+      dispatch,
+    );
     if (onSettled !== undefined) {
       void request.then(
         () => onSettled(true),
@@ -2496,6 +2521,12 @@ export class KimiTUI {
   async hydrateLazyConfigDefaults(): Promise<void> {
     const { startup } = this.options;
     const config = await this.harness.getConfig({ reload: true });
+    this.creationEnvironment = await this.harness.resolveSessionEnvironment({
+      workDir: this.state.appState.workDir,
+      environmentId: startup.environment,
+      environmentCwd: startup.environmentCwd,
+    });
+    this.refreshSlashCommandAutocomplete();
     const patch: Partial<AppState> = lazyModelSelection(
       config,
       startup.model ?? config.defaultModel,
@@ -2520,6 +2551,8 @@ export class KimiTUI {
     }
     this.setAppState(patch);
   }
+
+  private creationEnvironment?: { readonly environmentId: string; readonly cwd?: string };
 
   private async environmentForNewSession(): Promise<
     { readonly environmentId: string; readonly environmentCwd?: string } | undefined
@@ -2642,7 +2675,7 @@ export class KimiTUI {
   }
 
   private async lazyCreateSession(): Promise<Session | undefined> {
-    const environmentId = this.options.startup.environment;
+    const environmentId = this.creationEnvironment?.environmentId ?? this.options.startup.environment;
     const progress = environmentId !== undefined && environmentId !== 'local'
       ? this.showProgressSpinner(`Connecting to ${environmentId}…`)
       : undefined;

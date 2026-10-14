@@ -132,6 +132,10 @@
  *   interaction bridge already relies on.
  */
 import { readdir } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { ISessionMediaStore } from '@moonshot-ai/agent-core-v2/agent/media/sessionMediaStore';
+import { buildDaemonFileUrl } from '@moonshot-ai/agent-core-v2/agent/media/mediaRef';
 import { join } from 'node:path';
 
 import { encodeWorkDirKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
@@ -666,6 +670,17 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
       mimeType: options.mimeType,
       expiresInSec: options.expiresInSec,
     });
+  }
+
+  override async attachFile(input: { sessionId: string; data: Uint8Array; options: Pick<UploadFileOptions, 'name' | 'mimeType'> }): Promise<string> {
+    const store = this.requireLiveSession(input.sessionId).accessor.get(ISessionMediaStore);
+    const mimeType = input.options.mimeType ?? 'application/octet-stream';
+    const fileId = `f_attachment_${createHash('sha256').update(mimeType).update('\0').update(input.data).digest('hex')}`;
+    await store.materialize({
+      fileId, size: input.data.length, name: input.options.name, mimeType,
+      stream: () => Readable.from([input.data]),
+    });
+    return buildDaemonFileUrl(fileId);
   }
 
   override async deleteFile(fileId: string): Promise<void> {
@@ -1941,6 +1956,16 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     } finally {
       lease.dispose();
     }
+  }
+
+  override async resolveSessionEnvironment(options: Pick<CreateSessionOptions, 'workDir' | 'environmentId' | 'environmentCwd'>): Promise<AgentEnvironmentBinding> {
+    await this.configReady;
+    const binding = await this.engineAccessor.get(ISessionManager).resolveCreationEnvironment({
+      workDir: options.workDir,
+      environmentId: options.environmentId,
+      environmentCwd: options.environmentCwd,
+    });
+    return { environmentId: binding.environmentId ?? 'local', cwd: binding.environmentCwd };
   }
 
   override async getEnvironment(input: SessionIdRpcInput): Promise<AgentEnvironmentBinding> {

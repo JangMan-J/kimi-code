@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 
+import { EXECUTOR_SHUTDOWN_GRACE_MS, LAUNCHER_TERMINATION_GRACE_MS } from '../processLifecycle';
+
 export interface BytePipe {
   write(chunk: Uint8Array): void;
   end(): void;
@@ -64,6 +66,9 @@ export class ExecBridge implements BytePipe {
         resolve({ code, signal });
       });
     });
+    void this.exited.then(() => {
+      if (this.closeTimer !== undefined) clearTimeout(this.closeTimer);
+    });
   }
 
   static spawn(options: ExecBridgeOptions): ExecBridge {
@@ -115,16 +120,20 @@ export class ExecBridge implements BytePipe {
       this.child.stdin!.end();
     } catch {
     }
-    try {
-      this.child.kill('SIGTERM');
-    } catch {
-    }
+    if (this.child.exitCode !== null || this.child.signalCode !== null) return;
     this.closeTimer = setTimeout(() => {
       try {
-        this.child.kill('SIGKILL');
+        this.child.kill('SIGTERM');
       } catch {
       }
-    }, 500);
+      this.closeTimer = setTimeout(() => {
+        try {
+          this.child.kill('SIGKILL');
+        } catch {
+        }
+      }, LAUNCHER_TERMINATION_GRACE_MS);
+      this.closeTimer.unref?.();
+    }, EXECUTOR_SHUTDOWN_GRACE_MS);
     this.closeTimer.unref?.();
   }
 

@@ -219,6 +219,7 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
           input.environments,
           input.onDispose,
           input.profileContextKey,
+          input.environmentCwd,
         ),
       },
     );

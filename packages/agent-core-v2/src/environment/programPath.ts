@@ -42,10 +42,16 @@ export function resolveProgramPath(
     process.platform === 'win32'
       ? (process.env['PATHEXT'] ?? '.EXE;.CMD;.BAT;.COM').split(';')
       : [''];
+  const hasExecutableExtension = process.platform === 'win32' && extensions.some(
+    (extension) => extension.length > 0 && program.toLowerCase().endsWith(extension.toLowerCase()),
+  );
+  const candidateNames = hasExecutableExtension
+    ? [program]
+    : extensions.map((extension) => program + extension.toLowerCase());
   for (const entry of pathEnv.split(delimiter)) {
     if (entry.length === 0 || !isAbsolute(entry)) continue;
-    for (const extension of extensions) {
-      const candidate = join(entry, program + extension.toLowerCase());
+    for (const name of candidateNames) {
+      const candidate = join(entry, name);
       if (!isExecutableFile(candidate)) continue;
       if (isInsideCwd(candidate, cwd)) {
         throw new Error(`launcher command "${program}" resolves inside the working directory; refusing cwd match`);

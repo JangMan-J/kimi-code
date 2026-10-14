@@ -216,6 +216,7 @@ export class Program {
       return this.dependencies.createSessionController({
         context: this.context,
         profileContextKey: generation.profileContextKey,
+        environmentCwd: environmentId === LOCAL_ENVIRONMENT_ID ? undefined : cwd,
         environments: {
           ...resolver, ready: this.environments.ready,
           register: (environment) => this.environments.register(environment),

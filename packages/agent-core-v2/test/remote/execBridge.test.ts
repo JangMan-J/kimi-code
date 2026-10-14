@@ -44,3 +44,30 @@ describe('ExecBridge spawn environment', () => {
     }
   });
 });
+
+describe('ExecBridge shutdown', () => {
+  it('waits for EOF cleanup without interrupting the executor', async () => {
+    const bridge = ExecBridge.spawn({
+      program: process.execPath,
+      args: ['-e', 'process.on("SIGTERM", () => process.exit(2)); process.stdin.resume(); process.stdin.on("end", () => setTimeout(() => process.exit(0), 800)); process.stdout.write("ready")'],
+    });
+    await new Promise<void>((resolve) => {
+      bridge.onData(() => { resolve(); });
+    });
+    bridge.close();
+    bridge.close();
+    expect(await bridge.exited).toMatchObject({ code: 0, signal: null });
+  });
+
+  it('force-kills a launcher that ignores EOF and TERM', async () => {
+    const bridge = ExecBridge.spawn({
+      program: process.execPath,
+      args: ['-e', 'process.on("SIGTERM", () => {}); process.stdin.resume(); setInterval(() => {}, 1000); process.stdout.write("ready")'],
+    });
+    await new Promise<void>((resolve) => {
+      bridge.onData(() => { resolve(); });
+    });
+    bridge.close();
+    expect(await bridge.exited).toMatchObject({ signal: 'SIGKILL' });
+  });
+});

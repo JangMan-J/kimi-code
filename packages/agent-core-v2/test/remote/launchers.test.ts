@@ -132,6 +132,23 @@ describe('command program PATH resolution', () => {
     await rm(sandbox, { recursive: true, force: true });
   });
 
+  it.each(['sandbox', 'sandbox.exe', 'sandbox.EXE'])('resolves Windows launcher %s without doubling its extension', async (program) => {
+    const descriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    await writeFile(join(pathDir, 'sandbox.exe'), 'executable');
+    await chmod(join(pathDir, 'sandbox.exe'), 0o755);
+    await writeFile(join(pathDir, 'sandbox.EXE'), 'executable');
+    await chmod(join(pathDir, 'sandbox.EXE'), 0o755);
+    vi.stubEnv('PATHEXT', '.EXE;.CMD');
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      expect(resolveProgramPath(program, { cwd: cwdDir, pathEnv: pathDir }).toLowerCase()).toBe(join(pathDir, 'sandbox.exe').toLowerCase());
+      expect(() => resolveProgramPath(program, { cwd: pathDir, pathEnv: pathDir })).toThrow(/refusing cwd match/);
+    } finally {
+      Object.defineProperty(process, 'platform', descriptor);
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('skips relative PATH entries', () => {
     expect(resolveProgramPath('sandbox', { cwd: cwdDir, pathEnv: `relative:${pathDir}` })).toBe(
       join(pathDir, 'sandbox'),

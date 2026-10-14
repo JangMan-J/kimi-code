@@ -40,6 +40,7 @@ import type {
   SkillSummary,
   PluginCommandDef,
   ThinkingEffort,
+  UploadFileOptions,
   Unsubscribe,
 } from '#/types';
 
@@ -262,6 +263,11 @@ export class Session {
       ErrorCodes.REQUEST_INVALID,
     );
     return this.rpc.switchRuntime({ sessionId: this.id, runtimeId: normalized });
+  }
+
+  async attachFile(data: Uint8Array, options: Pick<UploadFileOptions, 'name' | 'mimeType'>): Promise<string> {
+    this.ensureOpen();
+    return this.rpc.attachFile({ sessionId: this.id, data, options });
   }
 
   async getEnvironment(): Promise<AgentEnvironmentBinding> {

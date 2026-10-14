@@ -77,7 +77,7 @@ export class SessionManager implements ISessionManager {
     @IBootstrapService private readonly bootstrap: IBootstrapService,
   ) {}
 
-  async create(options: CreateManagedSessionOptions): Promise<ISessionScopeHandle> {
+  async resolveCreationEnvironment(options: CreateManagedSessionOptions) {
     await this.environments.ready;
     if (options.workDir !== undefined && (options.environmentId === undefined || options.environmentId === LOCAL_ENVIRONMENT_ID)) {
       const userDefault = options.environmentId === undefined ? (await this.environmentDeclarations.declarations())?.default : undefined;
@@ -129,21 +129,26 @@ export class SessionManager implements ISessionManager {
     const environmentCwd = environmentId !== undefined && this.environmentDeclarations.isDeclared(environmentId) && requestedCwd !== undefined
       ? normalizeRemoteCwd(requestedCwd)
       : requestedCwd;
+    return { workspaceId: workspace.id, environmentId, environmentCwd, environmentProject: (resolved?.source ?? declared?.source) === 'project' ? true : undefined };
+  }
+
+  async create(options: CreateManagedSessionOptions): Promise<ISessionScopeHandle> {
+    const { workspaceId, environmentId, environmentCwd, environmentProject } = await this.resolveCreationEnvironment(options);
     const effective =
       environmentId === undefined && environmentCwd === undefined
         ? options
         : {
             ...options, environmentId, environmentCwd,
-            environmentProject: (resolved?.source ?? declared?.source) === 'project' ? true : undefined,
+            environmentProject,
             ensureMainAgent: environmentId !== undefined && environmentId !== LOCAL_ENVIRONMENT_ID ? true : options.ensureMainAgent,
           };
     const create = async () => {
-      if (environmentId !== undefined) this.environmentDeclarations.assertAllowed(workspace.id, environmentId);
+      if (environmentId !== undefined) this.environmentDeclarations.assertAllowed(workspaceId, environmentId);
       if (environmentId !== undefined) await this.connectForCreate(environmentId, environmentCwd);
       const controllerEnvironmentId = environmentId ?? LOCAL_ENVIRONMENT_ID;
       if (controllerEnvironmentId !== LOCAL_ENVIRONMENT_ID) this.assertControllerEnvironmentReady(controllerEnvironmentId);
       const controllerCwd = controllerEnvironmentId === LOCAL_ENVIRONMENT_ID ? undefined : environmentCwd ?? options.workDir;
-      return this.controllerForWorkspace(workspace.id, controllerEnvironmentId, controllerCwd, effective.environmentProject).create(effective);
+      return this.controllerForWorkspace(workspaceId, controllerEnvironmentId, controllerCwd, effective.environmentProject).create(effective);
     };
     if (options.sessionId === undefined) return create();
     return this.serializeLifecycle(options.sessionId, create);

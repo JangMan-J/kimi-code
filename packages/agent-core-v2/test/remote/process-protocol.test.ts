@@ -10,6 +10,7 @@ import {
   RawClient,
   throttleClientPipe,
 } from './helpers/loopback';
+import { ProcessManager } from '#/remote/server/processManager';
 import { RemoteExecConnection } from '#/remote/client/connection';
 
 function b64(text: string): string {
@@ -201,7 +202,7 @@ describe('process protocol semantics', () => {
     await loopback.host.done;
   });
 
-  it('terminateAll kills detached descendants after the leader closes its output', async () => {
+  it.each(['shutdown', 'terminate'] as const)('retains background groups beyond five seconds for %s', async (operation) => {
     const loopback = createInProcessLoopback();
     const raw = new RawClient(loopback);
     await raw.handshake();
@@ -229,8 +230,46 @@ describe('process protocol semantics', () => {
       expect(raw.notifications('process/closed')).toHaveLength(1);
     });
     expect(isAlive(childPid)).toBe(true);
-    loopback.clientInput.end();
-    await loopback.host.done;
-    await waitForDeath(childPid);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5_500));
+      if (operation === 'terminate') {
+        raw.send({ id: 2, method: 'process/signal', params: { processId: 'daemonizer', signal: 'terminate' } });
+        expect((await raw.nextResponse(2))['result']).toEqual({});
+      } else {
+        loopback.clientInput.end();
+        await loopback.host.done;
+      }
+      await waitForDeath(childPid);
+    } finally {
+      loopback.clientInput.end();
+      await loopback.host.done;
+      if (isAlive(childPid)) process.kill(childPid, 'SIGKILL');
+    }
   }, 15_000);
+});
+
+describe('finished process-group ownership', () => {
+  it('does not evict live groups at the former cache limit and reaps missing groups', async () => {
+    vi.useFakeTimers();
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const manager = new ProcessManager(() => {});
+    const internals = manager as unknown as {
+      processes: Map<string, unknown>;
+      exitedGroups: Map<string, unknown>;
+      maybeClose(entry: unknown): void;
+    };
+    try {
+      for (let id = 1; id <= 4097; id += 1) {
+        const entry = { processId: String(id), pid: id, exitCode: 0, openStreams: 0, closed: false };
+        internals.processes.set(entry.processId, entry);
+        internals.maybeClose(entry);
+      }
+      expect(internals.exitedGroups.size).toBe(4097);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(internals.exitedGroups.size).toBe(4097);
+      kill.mockImplementation(() => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(internals.exitedGroups.size).toBe(0);
+    } finally { manager.dispose(); kill.mockRestore(); vi.useRealTimers(); }
+  });
 });
