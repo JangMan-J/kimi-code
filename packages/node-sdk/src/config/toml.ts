@@ -280,7 +280,7 @@ export function transformTomlData(data: Record<string, unknown>): Record<string,
     } else if (targetKey === 'experimental' && isPlainObject(value)) {
       result[targetKey] = cloneRecord(value);
     } else if (targetKey === 'environments' && isPlainObject(value)) {
-      result[targetKey] = transformPlainObject(value);
+      result[targetKey] = transformRecord(value, transformPlainObject);
     } else if (targetKey === 'subagent' && isPlainObject(value)) {
       result[targetKey] = transformPlainObject(value);
     } else if (targetKey === 'secondaryModel' && isPlainObject(value)) {

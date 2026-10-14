@@ -95,6 +95,27 @@ env = { SANDBOX_TOKEN = "x" }
     });
   });
 
+  it('preserves underscored environment ids and camel-cases entry fields', () => {
+    const text = `
+[environments]
+default = "dev_box"
+
+[environments.dev_box]
+type = "ssh"
+host = "dev-box"
+default_cwd = "/remote/dev"
+remote_bin = "~/.kimi-code/bin/kimi"
+`;
+    const config = parseConfigString(text);
+    expect(config.environments?.default).toBe('dev_box');
+    expect(config.environments?.['dev_box']).toEqual({
+      type: 'ssh',
+      host: 'dev-box',
+      defaultCwd: '/remote/dev',
+      remoteBin: '~/.kimi-code/bin/kimi',
+    });
+  });
+
   it('preserves and removes model upgrade metadata', () => {
     const config = parseConfigString(`
 [models."acme/current"]
