@@ -1476,6 +1476,19 @@ export const WIRE_RENDERERS: RendererMap = {
     }),
   },
 
+  'runtime.set_binding': {
+    tone: 'meta',
+    label: 'runtime',
+    headline: (r) => ({
+      main: (
+        <span className="flex items-center gap-2 min-w-0">
+          <Mono>{r.runtimeId}</Mono>
+          <Dim className="truncate">{r.workspaceId}</Dim>
+        </span>
+      ),
+    }),
+  },
+
   'staleGuard.recorded': {
     tone: 'meta',
     label: 'stale',

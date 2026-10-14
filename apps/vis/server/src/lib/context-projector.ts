@@ -567,6 +567,7 @@ export function projectContext(
       case 'plan.revision':
       case 'plugin.session_start':
       case 'environment.set_binding':
+      case 'runtime.set_binding':
       case 'staleGuard.recorded':
       case 'staleGuard.cleared':
       case 'interruptionReminder.recorded':
