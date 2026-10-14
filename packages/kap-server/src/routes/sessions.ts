@@ -18,6 +18,7 @@ import {
   SessionCreated,
   IWorkspaceAliases,
   ISessionManager,
+  IDefaultWorkspace,
   IWorkspaceService,
   getLiveSessionById,
   programForSession,
@@ -186,15 +187,32 @@ export function registerSessionsRoutes(
         [ErrorCode.VALIDATION_FAILED]: { detailsSchema },
         [ErrorCode.WORKSPACE_NOT_FOUND]: {},
         [ErrorCode.FS_PATH_NOT_FOUND]: {},
+        [ErrorCode.FS_PERMISSION_DENIED]: {},
       },
-      description: 'Create a new session',
+      description:
+        'Create a new session. default_workspace=true places it in the default workspace under the Documents folder and must not carry workspace_id or metadata.cwd.',
       tags: ['sessions'],
     },
     async (req, reply) => {
       const body = req.body;
       const callerCwd = typeof body.metadata?.cwd === 'string' ? body.metadata.cwd : undefined;
       const workspaceId = body.workspace_id;
-      if (workspaceId === undefined && callerCwd === undefined) {
+      const useDefault = body.default_workspace === true;
+      if (useDefault && (workspaceId !== undefined || callerCwd !== undefined)) {
+        reply.send(
+          buildValidationEnvelope(
+            [
+              {
+                path: 'default_workspace',
+                message: 'default_workspace cannot be combined with workspace_id or metadata.cwd',
+              },
+            ],
+            req.id,
+          ),
+        );
+        return;
+      }
+      if (!useDefault && workspaceId === undefined && callerCwd === undefined) {
         reply.send(
           buildValidationEnvelope(
             [{ path: 'metadata.cwd', message: 'either workspace_id or metadata.cwd is required' }],
@@ -205,7 +223,7 @@ export function registerSessionsRoutes(
       }
 
       const registry = core.accessor.get(IWorkspaceService);
-      let workDir: string;
+      let workDir: string | undefined;
       if (workspaceId !== undefined) {
         const workspace = await registry.get(workspaceId);
         if (workspace === undefined) {
@@ -234,10 +252,11 @@ export function registerSessionsRoutes(
         }
         workDir = workspace.root;
       } else {
-        workDir = callerCwd as string;
+        workDir = callerCwd;
       }
 
       try {
+        workDir ??= await core.accessor.get(IDefaultWorkspace).ensure();
         const touched = await registry.createOrTouch(workDir);
         const handle = await core.accessor.get(ISessionManager).create({
           workspaceId: touched.id,
@@ -1206,6 +1225,9 @@ function sendMappedError(
         return;
       case ErrorCodes.FS_PATH_NOT_FOUND:
         reply.send(errEnvelope(ErrorCode.FS_PATH_NOT_FOUND, err.message, requestId, err.stack));
+        return;
+      case ErrorCodes.OS_FS_PERMISSION_DENIED:
+        reply.send(errEnvelope(ErrorCode.FS_PERMISSION_DENIED, err.message, requestId, err.stack));
         return;
       case 'request.invalid':
       case 'validation.failed':
