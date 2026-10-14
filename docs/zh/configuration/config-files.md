@@ -523,6 +523,8 @@ api_key = "sk-xxx"
 
 也可以在 `[permission]` 下设置 `dangerous_command_guard = false` 完全关闭内置危险命令策略（"Always Ask" 和 "Ask When Needed" 模式下不再触发危险命令审批；"Never Ask" 模式本就不启用该策略），默认 `true`。环境变量 `KIMI_CODE_DANGEROUS_COMMAND_GUARD=false` 会覆盖文件设置并恢复策略引入前的行为。此开关只适用于已经在 Agent 之外统一命令限权的环境。
 
+另有两个开关以同样方式门控其他内置访问确认：`sensitive_file_guard = false` 跳过访问疑似秘密文件路径（如 `.env`、SSH 私钥）时的确认，`git_control_path_guard = false` 跳过访问 Git 控制路径（如 `.git/`）时的确认；两者默认均为 `true`，环境变量 `KIMI_CODE_SENSITIVE_FILE_GUARD=false` 与 `KIMI_CODE_GIT_CONTROL_PATH_GUARD=false` 会覆盖文件设置。这些开关只跳过确认提示：在任何模式下直接读写秘密文件仍会被阻止。与敏感文件仅同名的目录（例如名为 `credentials/` 的源码目录）不会触发该确认。
+
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `decision` | `string` | 是 | 匹配后的处置：`allow`（直接放行）、`deny`（直接拒绝）、`ask`（每次询问） |

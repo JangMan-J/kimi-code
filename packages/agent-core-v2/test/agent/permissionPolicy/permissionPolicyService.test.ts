@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
@@ -53,7 +53,7 @@ describe('AgentPermissionPolicyService chain', () => {
   let sessionApprovalRulePatterns: string[];
   let workspace: ReturnType<typeof workspaceStub>;
   let hostArgs: HostArgs;
-  let dangerousCommandGuardEnabled: boolean;
+  let guards: { dangerousCommand: boolean; sensitiveFile: boolean; gitControlPath: boolean };
 
   beforeEach(() => {
     disposables = new DisposableStore();
@@ -62,7 +62,7 @@ describe('AgentPermissionPolicyService chain', () => {
     sessionApprovalRulePatterns = [];
     workspace = workspaceStub('/workspace');
     hostArgs = { requestHeaders: {}, nonInteractive: false };
-    dangerousCommandGuardEnabled = true;
+    guards = { dangerousCommand: true, sensitiveFile: true, gitControlPath: true };
     ix = createServices(disposables, {
       additionalServices: (reg) => {
         reg.defineInstance(IAgentPermissionModeService, stubPermissionModeService(() => mode));
@@ -72,10 +72,14 @@ describe('AgentPermissionPolicyService chain', () => {
           },
         });
         reg.definePartialInstance(IConfigService, {
-          get: ((section: string) =>
-            section === PERMISSION_SECTION && !dangerousCommandGuardEnabled
-              ? { dangerousCommandGuard: false }
-              : undefined) as IConfigService['get'],
+          get: ((section: string) => {
+            if (section !== PERMISSION_SECTION) return undefined;
+            const config: Record<string, boolean> = {};
+            if (!guards.dangerousCommand) config['dangerousCommandGuard'] = false;
+            if (!guards.sensitiveFile) config['sensitiveFileGuard'] = false;
+            if (!guards.gitControlPath) config['gitControlPathGuard'] = false;
+            return Object.keys(config).length > 0 ? config : undefined;
+          }) as IConfigService['get'],
           onDidSectionChange: (() => ({ dispose: () => {} })) as IConfigService['onDidSectionChange'],
         });
         reg.defineInstance(
@@ -102,6 +106,7 @@ describe('AgentPermissionPolicyService chain', () => {
               onDidChangeStatus: () => ({ dispose: () => {} }),
               dispose: () => {},
               environment: { pathClass: 'posix' } as never,
+              fs: hostFs,
               path: {
                 separator: '/',
                 delimiter: ':',
@@ -410,9 +415,9 @@ describe('AgentPermissionPolicyService chain', () => {
     });
   });
 
-  it('does not load the dangerous command policy when disabled by config', async () => {
-    dangerousCommandGuardEnabled = false;
+  it('does not load guarded ask policies when disabled by config', async () => {
     mode = 'yolo';
+    guards.dangerousCommand = false;
 
     await expect(evaluate({
       toolName: 'Bash',
@@ -420,6 +425,29 @@ describe('AgentPermissionPolicyService chain', () => {
     })).resolves.toMatchObject({
       policyName: 'yolo-mode-approve',
       result: { kind: 'approve' },
+    });
+
+    mode = 'manual';
+    guards.sensitiveFile = false;
+
+    await expect(evaluate({
+      toolName: 'Write',
+      args: { path: '.env', content: 'SECRET=1' },
+      accesses: ToolAccesses.writeFile('/workspace/.env'),
+    })).resolves.toMatchObject({
+      policyName: 'fallback-ask',
+      result: { kind: 'ask' },
+    });
+
+    guards.gitControlPath = false;
+
+    await expect(evaluate({
+      toolName: 'Write',
+      args: { path: '.git/config', content: 'x' },
+      accesses: ToolAccesses.writeFile('/workspace/.git/config'),
+    })).resolves.toMatchObject({
+      policyName: 'fallback-ask',
+      result: { kind: 'ask' },
     });
   });
 
@@ -508,6 +536,7 @@ describe('AgentPermissionPolicyService git cwd write approval', () => {
               onDidChangeStatus: () => ({ dispose: () => {} }),
               dispose: () => {},
               environment: { pathClass: 'posix' } as never,
+              fs: hostFs,
               path: {
                 separator: '/',
                 delimiter: ':',
@@ -607,7 +636,8 @@ describe('AgentPermissionPolicyService git cwd write approval', () => {
     });
   });
 
-  it('asks for sensitive files before git-cwd approval', async () => {
+  it('asks for sensitive files but not sensitive-named directories before git-cwd approval', async () => {
+    await writeFile(join(workspaceDir, '.env'), 'SECRET=1');
     await expect(evaluate({
       toolName: 'Write',
       args: { path: '.env', content: 'SECRET=1' },
@@ -615,6 +645,26 @@ describe('AgentPermissionPolicyService git cwd write approval', () => {
     })).resolves.toMatchObject({
       policyName: 'sensitive-file-access-ask',
       result: { kind: 'ask' },
+    });
+
+    await expect(evaluate({
+      toolName: 'Write',
+      args: { path: '.env.local', content: 'SECRET=1' },
+      accesses: ToolAccesses.writeFile(join(workspaceDir, '.env.local')),
+    })).resolves.toMatchObject({
+      policyName: 'sensitive-file-access-ask',
+      result: { kind: 'ask' },
+    });
+
+    const credentialsDir = join(workspaceDir, 'credentials');
+    await mkdir(credentialsDir, { recursive: true });
+    await expect(evaluate({
+      toolName: 'Grep',
+      args: { pattern: 'token', path: credentialsDir },
+      accesses: ToolAccesses.searchTree(credentialsDir),
+    })).resolves.toMatchObject({
+      policyName: 'default-tool-approve',
+      result: { kind: 'approve' },
     });
   });
 

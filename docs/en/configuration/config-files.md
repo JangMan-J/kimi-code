@@ -524,6 +524,8 @@ api_key = "sk-xxx"
 
 You can also set `dangerous_command_guard = false` under `[permission]` to turn off the built-in dangerous-command policy entirely (no dangerous-command confirmation in Always Ask and Ask When Needed mode; the policy is never active in Never Ask mode); the default is `true`. An environment variable `KIMI_CODE_DANGEROUS_COMMAND_GUARD=false` overrides the file setting and restores the behavior before the policy was introduced. Use this switch only for environments that already gate commands outside the agent.
 
+Two sibling switches gate the other built-in access prompts the same way: `sensitive_file_guard = false` skips the confirmation for accessing paths named like secret files (such as `.env` or SSH private keys), and `git_control_path_guard = false` skips the confirmation for accessing Git control paths such as `.git/`; both default to `true`, and the environment variables `KIMI_CODE_SENSITIVE_FILE_GUARD=false` and `KIMI_CODE_GIT_CONTROL_PATH_GUARD=false` override the file settings. These switches only skip the confirmation prompts: directly reading or writing a secret file stays blocked in every mode. A directory that merely shares its name with a sensitive file, such as a `credentials/` source directory, never triggers this prompt.
+
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
 | `decision` | `string` | Yes | Action on match: `allow` (permit immediately), `deny` (reject immediately), `ask` (prompt each time) |

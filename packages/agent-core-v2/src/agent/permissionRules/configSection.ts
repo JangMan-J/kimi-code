@@ -38,13 +38,17 @@ export const PermissionRuleSchema = z.object({
 export const PermissionConfigSchema = z.object({
   rules: z.array(PermissionRuleSchema).optional(),
   dangerousCommandGuard: z.boolean().optional(),
+  sensitiveFileGuard: z.boolean().optional(),
+  gitControlPathGuard: z.boolean().optional(),
 });
 
 export type PermissionConfig = z.infer<typeof PermissionConfigSchema>;
 
 export const DANGEROUS_COMMAND_GUARD_ENV = 'KIMI_CODE_DANGEROUS_COMMAND_GUARD';
+export const SENSITIVE_FILE_GUARD_ENV = 'KIMI_CODE_SENSITIVE_FILE_GUARD';
+export const GIT_CONTROL_PATH_GUARD_ENV = 'KIMI_CODE_GIT_CONTROL_PATH_GUARD';
 
-function parseDangerousCommandGuardEnv(raw: string): boolean | undefined {
+function parseGuardEnv(raw: string): boolean | undefined {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
   return undefined;
@@ -55,7 +59,15 @@ export const permissionEnvBindings: EnvBindings<PermissionConfig> = envBindings(
   {
     dangerousCommandGuard: {
       env: DANGEROUS_COMMAND_GUARD_ENV,
-      parse: parseDangerousCommandGuardEnv,
+      parse: parseGuardEnv,
+    },
+    sensitiveFileGuard: {
+      env: SENSITIVE_FILE_GUARD_ENV,
+      parse: parseGuardEnv,
+    },
+    gitControlPathGuard: {
+      env: GIT_CONTROL_PATH_GUARD_ENV,
+      parse: parseGuardEnv,
     },
   },
 );
@@ -66,6 +78,14 @@ export function isDangerousCommandGuardEnabled(config: IConfigService): boolean 
   return (
     config.get<PermissionConfig | undefined>(PERMISSION_SECTION)?.dangerousCommandGuard ?? true
   );
+}
+
+export function isSensitiveFileGuardEnabled(config: IConfigService): boolean {
+  return config.get<PermissionConfig | undefined>(PERMISSION_SECTION)?.sensitiveFileGuard ?? true;
+}
+
+export function isGitControlPathGuardEnabled(config: IConfigService): boolean {
+  return config.get<PermissionConfig | undefined>(PERMISSION_SECTION)?.gitControlPathGuard ?? true;
 }
 
 function isValidPermissionPattern(pattern: string): boolean {
@@ -89,6 +109,12 @@ export const permissionFromToml = (rawSnake: unknown): unknown => {
   if (rules.length > 0) out['rules'] = rules;
   if (raw['dangerousCommandGuard'] !== undefined) {
     out['dangerousCommandGuard'] = raw['dangerousCommandGuard'];
+  }
+  if (raw['sensitiveFileGuard'] !== undefined) {
+    out['sensitiveFileGuard'] = raw['sensitiveFileGuard'];
+  }
+  if (raw['gitControlPathGuard'] !== undefined) {
+    out['gitControlPathGuard'] = raw['gitControlPathGuard'];
   }
   return out;
 };
