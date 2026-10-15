@@ -25,7 +25,6 @@ import { isMonitorTaskId } from '#/agent/tools/task/monitor/monitor';
 import { IWaitForTool, WaitForInputSchema, type WaitForInput } from './task-wait';
 import WAIT_FOR_DESCRIPTION from './task-wait.md?raw';
 import WAIT_FOR_MONITOR_GUIDANCE from './task-wait-monitor.md?raw';
-import WAIT_FOR_SUBAGENT_GUIDANCE from './task-wait-subagent.md?raw';
 
 const OUTPUT_PREVIEW_BYTES = 32 * 1024;
 
@@ -140,9 +139,8 @@ export class WaitForTool implements IWaitForTool {
     @IAgentScopeContext scopeContext: IAgentScopeContext,
   ) {
     this.isSubagent = scopeContext.agentId !== MAIN_AGENT_ID;
-    this.description = this.isSubagent
-      ? `${WAIT_FOR_DESCRIPTION.trimEnd()}\n${WAIT_FOR_SUBAGENT_GUIDANCE}`
-      : flags.enabled(MONITOR_FLAG_ID)
+    this.description =
+      !this.isSubagent && flags.enabled(MONITOR_FLAG_ID)
         ? `${WAIT_FOR_DESCRIPTION.trimEnd()}\n${WAIT_FOR_MONITOR_GUIDANCE}`
         : WAIT_FOR_DESCRIPTION;
   }
