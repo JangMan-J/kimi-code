@@ -1,5 +1,4 @@
-import { workspaceRootKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
-import type { SessionSummary } from '@moonshot-ai/kimi-code-sdk';
+import { workspaceRootKey, type SessionSummary } from '@moonshot-ai/kimi-code-sdk';
 
 import type { SessionRow } from '#/tui/components/dialogs/session-picker';
 

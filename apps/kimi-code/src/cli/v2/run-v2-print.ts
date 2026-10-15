@@ -117,7 +117,7 @@ import { createKimiCodeHostIdentity } from '../version';
 
 import { resolveOutputFormat } from '../options';
 import type { CLIOptions, PromptOutputFormat } from '../options';
-import { resolveStartupWorkDir } from '../startup-work-dir';
+import { resolveStartupWorkDir, resumeCommand } from '../startup-work-dir';
 import {
   type PromptOutput,
   PromptJsonWriter,
@@ -329,7 +329,13 @@ export async function runV2Print(
         stderr,
       );
     }
-    writeResumeHint(resolved.session.id, outputFormat, stdout, stderr);
+    writeResumeHint(
+      resolved.session.id,
+      resumeCommand(opts, resolved.session.id),
+      outputFormat,
+      stdout,
+      stderr,
+    );
 
     telemetryService.withContext({ session_id: resolved.session.id }).track2('exit', {
       duration_ms: Date.now() - startedAt,

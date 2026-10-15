@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { writeResumeHint } from '#/cli/prompt-render';
 import { resolveStartupWorkDir, resumeCommand } from '#/cli/startup-work-dir';
 
 describe('resolveStartupWorkDir', () => {
@@ -54,4 +55,31 @@ describe('resumeCommand', () => {
     );
     expect(resumeCommand({}, 'ses_1')).toBe('kimi -r ses_1');
   });
+
+  it('is what print mode tells the user in both output formats', () => {
+    const command = resumeCommand({ defaultWorkspace: true }, 'ses_1');
+    const text = { stdout: '', stderr: '' };
+    writeResumeHint('ses_1', command, 'text', sink(text, 'stdout'), sink(text, 'stderr'));
+    const json = { stdout: '', stderr: '' };
+    writeResumeHint('ses_1', command, 'stream-json', sink(json, 'stdout'), sink(json, 'stderr'));
+
+    expect(text).toEqual({
+      stdout: '',
+      stderr: 'To resume this session: kimi --default-workspace -r ses_1\n',
+    });
+    expect(JSON.parse(json.stdout)).toMatchObject({
+      type: 'session.resume_hint',
+      session_id: 'ses_1',
+      command: 'kimi --default-workspace -r ses_1',
+    });
+  });
 });
+
+function sink(target: { stdout: string; stderr: string }, key: 'stdout' | 'stderr') {
+  return {
+    write: (chunk: string) => {
+      target[key] += chunk;
+      return true;
+    },
+  };
+}

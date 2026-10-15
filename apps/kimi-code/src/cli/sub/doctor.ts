@@ -3,15 +3,12 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 
 import {
-  bootstrap,
+  createKimiHarness,
   DEFAULT_WORKSPACE_PROBLEM_MESSAGES,
-  IDefaultWorkspace,
-  logSeed,
-  resolveKimiHome,
-  resolveLoggingConfig,
+  resolveConfigPath,
   type DefaultWorkspaceStatus,
-} from '@moonshot-ai/agent-core-v2';
-import { resolveConfigPath, type KimiConfigValidationIssue } from '@moonshot-ai/kimi-code-sdk';
+  type KimiConfigValidationIssue,
+} from '@moonshot-ai/kimi-code-sdk';
 import type { Command } from 'commander';
 import { z } from 'zod';
 
@@ -131,14 +128,11 @@ async function runDoctorCommand(
 }
 
 async function readDefaultWorkspaceStatus(): Promise<DefaultWorkspaceStatus> {
-  const homeDir = resolveKimiHome();
-  const { app } = bootstrap({ homeDir, clientIdentity: createKimiCodeHostIdentity() }, [
-    ...logSeed(resolveLoggingConfig({ homeDir, env: process.env })),
-  ]);
+  const harness = createKimiHarness({ identity: createKimiCodeHostIdentity() });
   try {
-    return await app.accessor.get(IDefaultWorkspace).status();
+    return await harness.getDefaultWorkspaceStatus();
   } finally {
-    app.dispose();
+    await harness.close();
   }
 }
 
