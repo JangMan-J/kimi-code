@@ -1,3 +1,4 @@
+import type { IDisposable } from '#/_base/di/lifecycle';
 import { IAgentTaskService } from '#/agent/task/task';
 import { TASK_EVENT_MAX_LINES_PER_WINDOW } from '#/agent/task/taskEvents';
 import { IAgentRuntimeService } from '#/agent/runtimeBinding/agentRuntime';
@@ -93,61 +94,67 @@ export class MonitorTool implements IMonitorTool {
       return { isError: true, output: 'description cannot be empty.' };
     }
 
+    let reservation: IDisposable;
     try {
-      this.tasks.assertCanRegister(true);
+      reservation = this.tasks.reserveTaskSlot();
     } catch (error) {
       return { isError: true, output: error instanceof Error ? error.message : String(error) };
     }
 
-    const lease = this.runtime.acquire(['process']);
-    const view = new RuntimeWorkspaceView(lease.runtime, this.workspaceCtx);
-    const env = lease.runtime.environment;
-    const command = shellCommandFor(env, args.command);
-    let proc: IHostProcess;
     try {
-      proc = lease.track(await spawnShellCommand(lease.runtime.process!, env, view.workDir, command, false));
-    } catch (error) {
-      lease.dispose();
-      return { isError: true, output: error instanceof Error ? error.message : String(error) };
-    }
-    if (signal.aborted) {
-      await killSpawnedProcess(proc);
-      lease.dispose();
-      return { isError: true, output: 'Aborted before the monitor started.' };
-    }
-    closeProcessStdin(proc);
-
-    const timeoutS = args.persistent === true ? undefined : (args.timeout ?? MONITOR_DEFAULT_TIMEOUT_S);
-    let taskId: string;
-    try {
-      const release = (): void => {
+      const lease = this.runtime.acquire(['process']);
+      const view = new RuntimeWorkspaceView(lease.runtime, this.workspaceCtx);
+      const env = lease.runtime.environment;
+      const command = shellCommandFor(env, args.command);
+      let proc: IHostProcess;
+      try {
+        proc = lease.track(await spawnShellCommand(lease.runtime.process!, env, view.workDir, command, false));
+      } catch (error) {
         lease.dispose();
-      };
-      taskId = this.tasks.registerTask(
-        new MonitorProcessTask(proc, command, description, undefined, release, toolCallId),
-        { detached: true, timeoutMs: timeoutS === undefined ? undefined : timeoutS * 1000 },
-      );
-    } catch (error) {
-      await killSpawnedProcess(proc);
-      lease.dispose();
-      return { isError: true, output: error instanceof Error ? error.message : String(error) };
-    }
+        return { isError: true, output: error instanceof Error ? error.message : String(error) };
+      }
+      if (signal.aborted) {
+        await killSpawnedProcess(proc);
+        lease.dispose();
+        return { isError: true, output: 'Aborted before the monitor started.' };
+      }
+      closeProcessStdin(proc);
 
-    const result: ExecutableToolResult & { readonly brief: string } = {
-      isError: false,
-      output: [
-        `task_id: ${taskId}`,
-        `pid: ${String(proc.pid)}`,
-        `description: ${description}`,
-        'status: running',
-        timeoutS === undefined ? 'timeout: none (persistent)' : `timeout: ${String(timeoutS)}s`,
-        'automatic_notification: true',
-        'next_step: Each stdout line reaches you as a notification; continue with your current work instead of waiting.',
-        'next_step: Stop the monitor with TaskStop when you no longer need it.',
-      ].join('\n'),
-      brief: `Started ${taskId}`,
-    };
-    return result;
+      const timeoutS = args.persistent === true ? undefined : (args.timeout ?? MONITOR_DEFAULT_TIMEOUT_S);
+      let taskId: string;
+      try {
+        const release = (): void => {
+          lease.dispose();
+        };
+        reservation.dispose();
+        taskId = this.tasks.registerTask(
+          new MonitorProcessTask(proc, command, description, undefined, release, toolCallId),
+          { detached: true, timeoutMs: timeoutS === undefined ? undefined : timeoutS * 1000 },
+        );
+      } catch (error) {
+        await killSpawnedProcess(proc);
+        lease.dispose();
+        return { isError: true, output: error instanceof Error ? error.message : String(error) };
+      }
+
+      const result: ExecutableToolResult & { readonly brief: string } = {
+        isError: false,
+        output: [
+          `task_id: ${taskId}`,
+          `pid: ${String(proc.pid)}`,
+          `description: ${description}`,
+          'status: running',
+          timeoutS === undefined ? 'timeout: none (persistent)' : `timeout: ${String(timeoutS)}s`,
+          'automatic_notification: true',
+          'next_step: Each stdout line reaches you as a notification; continue with your current work instead of waiting.',
+          'next_step: Stop the monitor with TaskStop when you no longer need it.',
+        ].join('\n'),
+        brief: `Started ${taskId}`,
+      };
+      return result;
+    } finally {
+      reservation.dispose();
+    }
   }
 }
 

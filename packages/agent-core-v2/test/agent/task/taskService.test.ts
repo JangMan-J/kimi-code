@@ -185,6 +185,21 @@ describe('AgentTaskService', () => {
   });
   afterEach(() => disposables.dispose());
 
+  it('counts reserved slots against registrations and releases each reservation once', () => {
+    ix.stub(IConfigService, {
+      get: ((section: string) => section === 'task' ? { maxRunningTasks: 1 } : undefined) as IConfigService['get'],
+    });
+    const svc = ix.get(IAgentTaskService);
+    const reservation = svc.reserveTaskSlot();
+    expect(() => svc.reserveTaskSlot()).toThrow('Too many background tasks');
+    expect(() => svc.registerTask(fakeProcessTask())).toThrow('Too many background tasks');
+    expect(() => svc.assertCanRegister(false)).not.toThrow();
+    reservation.dispose();
+    reservation.dispose();
+    svc.registerTask(fakeProcessTask());
+    expect(() => svc.reserveTaskSlot()).toThrow('Too many background tasks');
+  });
+
   it('registerTask / list / readOutput / stop', async () => {
     const svc = ix.get(IAgentTaskService);
     const id = svc.registerTask(fakeProcessTask());

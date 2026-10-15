@@ -140,7 +140,7 @@ export class WaitForTool implements IWaitForTool {
   ) {
     this.isSubagent = scopeContext.agentId !== MAIN_AGENT_ID;
     this.description =
-      !this.isSubagent && flags.enabled(MONITOR_FLAG_ID)
+      flags.enabled(MONITOR_FLAG_ID)
         ? `${WAIT_FOR_DESCRIPTION.trimEnd()}\n${WAIT_FOR_MONITOR_GUIDANCE}`
         : WAIT_FOR_DESCRIPTION;
   }
@@ -193,7 +193,11 @@ export class WaitForTool implements IWaitForTool {
       return { isError: true, output: this.withRepeatWarning(`Task not found: ${args.task_id}`, tally) };
     }
 
-    if (args.task_id !== undefined && this.tasks.hasQueuedEvent(args.task_id)) {
+    if (
+      args.task_id !== undefined &&
+      !TERMINAL_STATUSES.has(this.tasks.getTask(args.task_id)!.status) &&
+      this.tasks.hasQueuedEvent(args.task_id)
+    ) {
       this.track(args, startedAt, timeoutMs, 'event', 0);
       return {
         output: this.withRepeatWarning(this.formatEvent(args, args.task_id, startedAt, timeoutMs), tally),
@@ -233,15 +237,19 @@ export class WaitForTool implements IWaitForTool {
         };
       }
       if (!ctx.signal.aborted && eventTaskId !== undefined) {
-        this.track(args, startedAt, timeoutMs, 'event', 0);
-        tally.waitedMs += Date.now() - startedAt;
-        return {
-          output: this.withRepeatWarning(this.formatEvent(args, eventTaskId, startedAt, timeoutMs), tally),
-          isError: false,
-        };
+        waited = this.tasks.getTask(eventTaskId);
+        if (waited === undefined || !TERMINAL_STATUSES.has(waited.status)) {
+          this.track(args, startedAt, timeoutMs, 'event', 0);
+          tally.waitedMs += Date.now() - startedAt;
+          return {
+            output: this.withRepeatWarning(this.formatEvent(args, eventTaskId, startedAt, timeoutMs), tally),
+            isError: false,
+          };
+        }
+      } else {
+        this.track(args, startedAt, timeoutMs, 'aborted', 0);
+        throw error;
       }
-      this.track(args, startedAt, timeoutMs, 'aborted', 0);
-      throw error;
     } finally {
       eventSubscription.dispose();
       progress.stop();

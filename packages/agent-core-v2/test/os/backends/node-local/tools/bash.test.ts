@@ -1,3 +1,4 @@
+import { toDisposable } from '#/_base/di/lifecycle';
 import { PassThrough, Readable, type Writable } from 'node:stream';
 
 import { describe, expect, it, vi } from 'vitest';
@@ -462,8 +463,9 @@ function createFakeTaskService(
     return entryToInfo(entry);
   };
 
+  let reservedSlots = 0;
   const activeDetachedCount = (): number => {
-    let count = 0;
+    let count = reservedSlots;
     for (const entry of tasks.values()) {
       if (entry.startedDetached && !isTerminal(entry.status)) count += 1;
     }
@@ -476,6 +478,12 @@ function createFakeTaskService(
     hasQueuedEvent: () => false,
     track(): never {
       throw new Error('fake IAgentTaskService.track is not implemented');
+    },
+
+    reserveTaskSlot() {
+      service.assertCanRegister(true);
+      reservedSlots++;
+      return toDisposable(() => { reservedSlots--; });
     },
 
     assertCanRegister(detached: boolean): void {
@@ -2024,6 +2032,35 @@ describe('MonitorTool', () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  it('reserves the last slot before concurrent monitor spawns', async () => {
+    const { service, tasks } = createFakeTaskService({ maxRunningTasks: 1 });
+    const { proc } = pendingProcess();
+    let resolveSpawn!: (proc: IHostProcess) => void;
+    const spawned = new Promise<IHostProcess>((resolve) => { resolveSpawn = resolve; });
+    const { runner, exec } = createTestRunner(vi.fn(() => spawned));
+    const tool = monitorTool(runner, service);
+    const args = { command: 'tail -F app.log', description: 'app log' };
+    const first = startMonitor(tool, args);
+    await vi.waitFor(() => { expect(exec).toHaveBeenCalledTimes(1); });
+    const second = await startMonitor(tool, args);
+    expect(second).toEqual({ isError: true, output: 'Too many background tasks are already running.' });
+    expect(exec).toHaveBeenCalledTimes(1);
+    resolveSpawn(proc);
+    expect((await first).isError).toBe(false);
+    expect(tasks.size).toBe(1);
+  });
+
+  it('releases the reserved slot after spawn failure', async () => {
+    const { service } = createFakeTaskService({ maxRunningTasks: 1 });
+    const { proc } = pendingProcess();
+    const { runner, exec } = createTestRunner(vi.fn().mockRejectedValueOnce(new Error('spawn failed')).mockResolvedValue(proc));
+    const tool = monitorTool(runner, service);
+    const args = { command: 'tail -F app.log', description: 'app log' };
+    expect(await startMonitor(tool, args)).toEqual({ isError: true, output: 'spawn failed' });
+    expect((await startMonitor(tool, args)).isError).toBe(false);
+    expect(exec).toHaveBeenCalledTimes(2);
+  });
+
   it('kills the command instead of registering it when the call is aborted during spawn', async () => {
     const { proc } = pendingProcess();
     const controller = new AbortController();
@@ -2032,7 +2069,7 @@ describe('MonitorTool', () => {
       return proc;
     });
     const { runner } = createTestRunner(exec);
-    const { service, tasks } = createFakeTaskService();
+    const { service, tasks } = createFakeTaskService({ maxRunningTasks: 1 });
     const execution = monitorTool(runner, service).resolveExecution(
       MonitorInputSchema.parse({ command: 'tail -F app.log', description: 'app log' }),
     );
@@ -2047,6 +2084,7 @@ describe('MonitorTool', () => {
     expect(result).toEqual({ isError: true, output: 'Aborted before the monitor started.' });
     expect(tasks.size).toBe(0);
     expect(proc.kill).toHaveBeenCalled();
+    expect(() => { service.reserveTaskSlot().dispose(); }).not.toThrow();
   });
 
   it('caps the timeout at an hour', () => {

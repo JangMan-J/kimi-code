@@ -151,6 +151,10 @@ class FakeTaskService implements IAgentTaskService {
 
   assertCanRegister(): void {}
 
+  reserveTaskSlot() {
+    return { dispose() {} };
+  }
+
   add(
     info: AgentTaskInfo,
     output: AgentTaskOutputSnapshot = outputSnapshot(),
@@ -1026,6 +1030,39 @@ describe('WaitForTool', () => {
 
     expect(outputString(result)).toContain('wait_status: event');
     expect(tasks.waitCalls).toHaveLength(0);
+  });
+
+  it.each(['completed', 'failed', 'killed', 'timed_out'] as const)(
+    'reports %s instead of an event when a monitor has already terminated', async (status) => {
+      const tasks = new FakeTaskService();
+      tasks.add(processTask({ taskId: 'monitor-done1', status }));
+      tasks.queueEvent('monitor-done1');
+      const result = await executeTool(
+        new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope()),
+        context('wait_done', { timeout: 60, task_id: 'monitor-done1' }),
+      );
+      expect(outputString(result)).toContain('wait_status: completed');
+      expect(outputString(result)).not.toContain('monitor keeps running');
+      expect(tasks.waitDeliveries).toEqual([[{ taskId: 'monitor-done1', status }]]);
+      expect(tasks.hasQueuedEvent('monitor-done1')).toBe(true);
+    },
+  );
+
+  it('reports completion when the monitor exits as its event interrupts the wait', async () => {
+    const tasks = new FakeTaskService();
+    tasks.add(processTask({ taskId: 'monitor-race1' }));
+    tasks.waitDelegate = (_taskId, _timeoutMs, waitSignal) => new Promise((_resolve, reject) => {
+      waitSignal?.addEventListener('abort', () => { reject(abortError()); }, { once: true });
+    });
+    const pending = executeTool(
+      new WaitForTool(tasks, recordingTelemetry([]), stubFlag(true), stubGoal(), agentScope()),
+      context('wait_race', { timeout: 60, task_id: 'monitor-race1' }),
+    );
+    await vi.waitFor(() => { expect(tasks.waitCalls).toHaveLength(1); });
+    tasks.queueEvent('monitor-race1');
+    tasks.settle('monitor-race1');
+    expect(outputString(await pending)).toContain('wait_status: completed');
+    expect(tasks.waitDeliveries).toEqual([[{ taskId: 'monitor-race1', status: 'completed' }]]);
   });
 
   it('without a task_id, waits for the other tasks and is not ended by monitor events', async () => {

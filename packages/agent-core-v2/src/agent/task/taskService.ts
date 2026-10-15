@@ -5,7 +5,7 @@ import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 
 import type { ContentPart } from '#human/llm/message';
 
-import { Disposable } from '#/_base/di/lifecycle';
+import { Disposable, toDisposable, type IDisposable } from '#/_base/di/lifecycle';
 import { Emitter, type Event } from '#/_base/event';
 import { ILogService } from '#/_base/log/log';
 import { defineState } from '#/state/state';
@@ -218,6 +218,7 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
 
   private readonly tasks = new Map<string, ManagedTask>();
   private exitSuppressionArmed = false;
+  private reservedTaskSlots = 0;
   private readonly buildingNotificationKeys = new Set<string>();
   private readonly pendingNotificationRequests = new Map<string, LoopNotifyHandle>();
   private readonly persistence: AgentTaskPersistence;
@@ -936,6 +937,14 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
     return reason;
   }
 
+  reserveTaskSlot(): IDisposable {
+    this.assertCanRegister(true);
+    this.reservedTaskSlots++;
+    return toDisposable(() => {
+      this.reservedTaskSlots--;
+    });
+  }
+
   assertCanRegister(detached: boolean): void {
     const maxRunningTasks = resolveAgentTaskConfig(this.config)?.maxRunningTasks;
     if (maxRunningTasks === undefined) return;
@@ -947,7 +956,7 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
   }
 
   private activeTaskCount(): number {
-    let count = 0;
+    let count = this.reservedTaskSlots;
     for (const entry of this.tasks.values()) {
       if (!TERMINAL_STATUSES.has(entry.status) && this.startsDetached(entry)) count++;
     }

@@ -1,3 +1,4 @@
+import type { IDisposable } from '#/_base/di/lifecycle';
 import { createDecorator } from '#/_base/di/instantiation';
 import type { Event } from '#/_base/event';
 import type { ITaskHandle } from '#/app/task/task';
@@ -79,6 +80,7 @@ export interface IAgentTaskService {
 
   track(handle: ITaskHandle, options: AgentTaskTrackOptions): IAgentTaskEntry;
   assertCanRegister(detached: boolean): void;
+  reserveTaskSlot(): IDisposable;
   registerTask(task: AgentTask, options?: RegisterAgentTaskOptions): string;
   getTask(taskId: string): AgentTaskInfo | undefined;
   list(activeOnly?: boolean, limit?: number): readonly AgentTaskInfo[];
