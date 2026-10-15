@@ -1759,7 +1759,7 @@ On success, `data` is:
 
 #### `PATCH /api/v1/default-workspace`
 
-Sets a custom default workspace location, or clears it with `null` (or an empty string) to return to the system location. The path must be absolute or start with `~`; it is checked for writability but not created. Existing files and workspaces are never moved.
+Sets a custom default workspace location, or clears it with `null` (or an empty string) to return to the system location. The path must be absolute or start with `~/` (the home folder); it is checked for writability but not created. Existing files and workspaces are never moved.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
