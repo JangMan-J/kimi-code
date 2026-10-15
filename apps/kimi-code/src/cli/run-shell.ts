@@ -168,11 +168,13 @@ export async function runShell(
   // never be resolved by name through PATH: a `.` or empty PATH segment would
   // let an untrusted checkout plant an `stty` executable and run it pre-trust.
   // resolveCommandPath returns an absolute path and refuses hits inside the
-  // cwd; when it cannot resolve stty, skip the save/restore entirely — it is
+  // cwd and the launch directory (they differ under --default-workspace);
+  // when it cannot resolve stty, skip the save/restore entirely — it is
   // best-effort terminal hygiene, not required for startup.
   // stty is also POSIX-only, so skip it on Windows instead of relying on the
   // catch below.
-  const sttyPath = process.platform === 'win32' ? undefined : resolveCommandPath('stty');
+  const sttyPath =
+    process.platform === 'win32' ? undefined : resolveCommandPath('stty', [process.cwd(), launchDir]);
   if (sttyPath !== undefined) {
     try {
       // stty operates on the terminal behind stdin, so stdin must be the TTY —
