@@ -336,8 +336,9 @@ async function fetchRgArchive(archive: RgArchive, archivePath: string): Promise<
 }
 
 async function extractRgArchive(archive: RgArchive, target: string, archivePath: string, tmp: string): Promise<string> {
+  const binName = archive.isWindows ? 'rg.exe' : 'rg';
   if (archive.isWindows) {
-    const destination = join(tmp, rgBinaryName());
+    const destination = join(tmp, binName);
     await extractRgFromZip(archivePath, destination);
     return destination;
   }
@@ -347,9 +348,9 @@ async function extractRgArchive(archive: RgArchive, target: string, archivePath:
     file: archivePath,
     cwd: extractDir,
     gzip: true,
-    filter: (entryPath: string) => entryPath.endsWith(`/${rgBinaryName()}`),
+    filter: (entryPath: string) => entryPath.endsWith(`/${binName}`),
   });
-  const extracted = join(extractDir, `ripgrep-${RG_VERSION}-${target}`, rgBinaryName());
+  const extracted = join(extractDir, `ripgrep-${RG_VERSION}-${target}`, binName);
   if (!existsSync(extracted)) {
     throw new Error2(
       ErrorCodes.OS_FS_UNAVAILABLE,
@@ -433,7 +434,7 @@ export async function verifyArchiveChecksum(
 
 export async function extractRgFromZip(archivePath: string, destination: string): Promise<void> {
   const buf = await readFile(archivePath);
-  const binName = rgBinaryName();
+  const binName = 'rg.exe';
   await new Promise<void>((resolve, reject) => {
     yauzlFromBuffer(buf, { lazyEntries: true }, (openErr, zipfile) => {
       if (openErr !== null || zipfile === undefined) {

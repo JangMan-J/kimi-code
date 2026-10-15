@@ -1,7 +1,8 @@
 import { promises as fs } from 'node:fs';
+import nodePath from 'node:path';
 import path from 'pathe';
 
-import { findUpwardRoot } from '#/_base/utils/paths';
+import { findUpwardRoot, isWindowsAbsolutePath } from '#/_base/utils/paths';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
 
 import type { SkillRoot, SkillSource } from './types';
@@ -84,7 +85,10 @@ export async function configuredRoots(
 }
 
 async function findProjectRoot(fs: SkillRootsFs, workDir: string): Promise<string> {
-  return findUpwardRoot(workDir, '.git', (p) => exists(fs, p));
+  const pathApi = isWindowsAbsolutePath(workDir) ? nodePath.win32
+    : nodePath.posix.isAbsolute(workDir) ? nodePath.posix
+      : nodePath;
+  return findUpwardRoot(workDir, '.git', (p) => exists(fs, p), pathApi);
 }
 
 async function pushFirstExisting(
