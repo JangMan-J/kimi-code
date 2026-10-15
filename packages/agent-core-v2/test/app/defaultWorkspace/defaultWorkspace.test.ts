@@ -1,10 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import { join } from 'node:path';
 
-import { LifecycleScope } from '#/app/scopes';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import {
   ScopeActivation,
   _clearScopedRegistryForTests,
@@ -13,14 +12,16 @@ import {
 import { createScopedTestHost, stubPair } from '#/_base/di/test';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { IDefaultWorkspace } from '#/app/defaultWorkspace/defaultWorkspace';
-import { DefaultWorkspaceService } from '#/app/defaultWorkspace/defaultWorkspaceService';
 import {
   parseWindowsDocumentsOutput,
   parseXdgDocumentsDir,
 } from '#/app/defaultWorkspace/defaultWorkspacePaths';
+import { DefaultWorkspaceService } from '#/app/defaultWorkspace/defaultWorkspaceService';
+import { LifecycleScope } from '#/app/scopes';
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IHostProcessService } from '#/os/interface/hostProcess';
+
 import { stubBootstrap } from '../bootstrap/stubs';
 
 describe('default workspace paths', () => {
@@ -77,6 +78,7 @@ describe('DefaultWorkspaceService', () => {
     windows?: { spawn: IHostProcessService['spawn'] },
   ): IDefaultWorkspace {
     const bootstrap = stubBootstrap('/tmp/kimi-home', env, {}, osHomeDir);
+    currentHost?.dispose();
     currentHost = createScopedTestHost([
       stubPair(
         IBootstrapService,
@@ -110,6 +112,24 @@ describe('DefaultWorkspaceService', () => {
     const root = await build({}, { spawn: documentsReply(documentsDir) }).ensure();
 
     expect(root).toBe(join(documentsDir, 'KimiCode', 'Default'));
+  });
+
+  it('starts Windows PowerShell by absolute path instead of searching PATH', async () => {
+    const documentsDir = join(osHomeDir, 'Docs');
+    await fsp.mkdir(documentsDir, { recursive: true });
+    const commands: string[] = [];
+    const spawn = ((...args: Parameters<IHostProcessService['spawn']>) => {
+      commands.push(args[0]);
+      return documentsReply(documentsDir)(...args);
+    }) as IHostProcessService['spawn'];
+
+    await build({ SystemRoot: 'D:\\Windows' }, { spawn }).ensure();
+    await build({ SystemRoot: 'Windows' }, { spawn }).ensure();
+
+    expect(commands).toEqual([
+      'D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+    ]);
   });
 
   it('fails instead of falling back when the Windows documents folder cannot be resolved', async () => {

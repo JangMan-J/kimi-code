@@ -1,9 +1,9 @@
 import { join } from 'pathe';
 
-import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { workspaceRootKey } from '#/_base/utils/workdir-slug';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
+import { LifecycleScope } from '#/app/scopes';
 import { ErrorCodes, Error2 } from '#/errors';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { HostFsError, OsFsErrors } from '#/os/interface/hostFsErrors';
@@ -16,6 +16,7 @@ import {
   defaultDocumentsDir,
   parseWindowsDocumentsOutput,
   parseXdgDocumentsDir,
+  windowsPowerShellPath,
 } from './defaultWorkspacePaths';
 
 const WINDOWS_DOCUMENTS_TIMEOUT_MS = 15_000;
@@ -97,7 +98,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
 
   private async queryWindowsDocumentsDir(): Promise<string | undefined> {
     const proc = await this.processes.spawn(
-      'powershell.exe',
+      windowsPowerShellPath(this.bootstrap.getEnv('SystemRoot') ?? this.bootstrap.getEnv('windir')),
       ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_DOCUMENTS_COMMAND],
       { windowsHide: true, timeout: WINDOWS_DOCUMENTS_TIMEOUT_MS },
     );
