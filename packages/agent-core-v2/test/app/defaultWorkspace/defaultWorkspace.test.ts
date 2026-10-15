@@ -1,6 +1,6 @@
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -447,6 +447,30 @@ describe('DefaultWorkspaceService', () => {
       }
       const sections: Record<string, unknown> = {};
       const service = build({}, undefined, sections, new NoMkdirFileSystem());
+
+      await expect(service.setCustomPath(join(osHomeDir, 'Chats'))).rejects.toMatchObject(
+        unavailable('permission_denied'),
+      );
+      expect(sections['defaultWorkspace']).toBeUndefined();
+      expect(await fsp.readdir(osHomeDir)).toEqual([]);
+    });
+
+    it('refuses to save a missing folder whose new subfolders deny file creation', async () => {
+      class NoFilesInNewFoldersFileSystem extends HostFileSystem {
+        private readonly created = new Set<string>();
+        override async mkdir(path: string, options?: { readonly recursive?: boolean }) {
+          await super.mkdir(path, options);
+          this.created.add(path);
+        }
+        override async createExclusive(path: string, data: Uint8Array): Promise<boolean> {
+          if (this.created.has(dirname(path))) {
+            throw new HostFsError(OsFsErrors.codes.OS_FS_PERMISSION_DENIED, 'permission denied');
+          }
+          return super.createExclusive(path, data);
+        }
+      }
+      const sections: Record<string, unknown> = {};
+      const service = build({}, undefined, sections, new NoFilesInNewFoldersFileSystem());
 
       await expect(service.setCustomPath(join(osHomeDir, 'Chats'))).rejects.toMatchObject(
         unavailable('permission_denied'),

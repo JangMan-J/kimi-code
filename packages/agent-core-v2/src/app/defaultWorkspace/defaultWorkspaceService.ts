@@ -167,18 +167,23 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     entry: 'file' | 'folder' = 'file',
   ): Promise<DefaultWorkspaceUnavailableReason | undefined> {
     const probe = join(dir, `.kimi-code-write-test-${randomUUID()}`);
+    let problem: DefaultWorkspaceUnavailableReason | undefined;
     try {
-      if (entry === 'folder') await this.fs.mkdir(probe);
-      else await this.fs.createExclusive(probe, new Uint8Array());
+      if (entry === 'folder') {
+        await this.fs.mkdir(probe);
+        await this.fs.createExclusive(join(probe, 'probe'), new Uint8Array());
+      } else {
+        await this.fs.createExclusive(probe, new Uint8Array());
+      }
     } catch (error) {
-      return reasonOf(error);
+      problem = reasonOf(error);
     }
     try {
       await this.fs.remove(probe);
     } catch (error) {
-      if (!isNotFound(error)) return reasonOf(error);
+      if (!isNotFound(error)) problem ??= reasonOf(error);
     }
-    return undefined;
+    return problem;
   }
 
   private async documentsDir(): Promise<string> {
