@@ -8,6 +8,7 @@ import type { WorkspaceStatus } from "shared/types";
 const INPUT_HISTORY_KEY = "kimi.inputHistory";
 const MAX_HISTORY_SIZE = 100;
 const LINUX_OPENER_OBSERVATION_MS = 1000;
+const DESKTOP_PROTOCOL = "kimi-code";
 
 const checkWorkspace: Handler<void, WorkspaceStatus> = async (_, ctx) => {
   return {
@@ -54,7 +55,7 @@ function openDesktopApp(workDir: string): Promise<boolean> {
   const env = { ...process.env };
   delete env["ELECTRON_RUN_AS_NODE"];
 
-  const url = `kimi-code://open?root=${encodeURIComponent(resolvePath(workDir))}&new=1`;
+  const url = `${DESKTOP_PROTOCOL}://open?root=${encodeURIComponent(resolvePath(workDir))}&new=1`;
   if (process.platform !== "darwin" && process.platform !== "win32") {
     return openDesktopUrlOnLinux(url, env);
   }
@@ -69,7 +70,8 @@ function openDesktopApp(workDir: string): Promise<boolean> {
             "-NonInteractive",
             "-EncodedCommand",
             Buffer.from(
-              `try { Start-Process -FilePath '${url.replaceAll("'", "''")}' -ErrorAction Stop } catch { exit 1 }`,
+              `if (-not (Test-Path 'Registry::HKEY_CLASSES_ROOT\\${DESKTOP_PROTOCOL}\\shell\\open\\command')) { exit 1 } ` +
+                `try { Start-Process -FilePath '${url.replaceAll("'", "''")}' -ErrorAction Stop } catch { exit 1 }`,
               "utf16le",
             ).toString("base64"),
           ],

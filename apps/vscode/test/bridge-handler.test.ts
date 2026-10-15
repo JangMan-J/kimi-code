@@ -558,7 +558,8 @@ describe("Desktop links", () => {
     const args = host.execFile.mock.calls[0]?.[1] as string[];
     expect(args.slice(0, 3)).toEqual(["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
     expect(Buffer.from(args[3]!, "base64").toString("utf16le")).toBe(
-      `try { Start-Process -FilePath '${url.replaceAll("'", "''")}' -ErrorAction Stop } catch { exit 1 }`,
+      `if (-not (Test-Path 'Registry::HKEY_CLASSES_ROOT\\kimi-code\\shell\\open\\command')) { exit 1 } ` +
+        `try { Start-Process -FilePath '${url.replaceAll("'", "''")}' -ErrorAction Stop } catch { exit 1 }`,
     );
     expect(host.execFile).toHaveBeenCalledWith("powershell.exe", args, expect.objectContaining({ windowsHide: true }), expect.any(Function));
     expect(host.execFile.mock.calls[0]?.[2].env.ELECTRON_RUN_AS_NODE).toBeUndefined();
