@@ -11,6 +11,7 @@ import {
 } from '#/_base/di/scope';
 import { createScopedTestHost, stubPair } from '#/_base/di/test';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
+import { IConfigService } from '#/app/config/config';
 import { IDefaultWorkspace } from '#/app/defaultWorkspace/defaultWorkspace';
 import {
   parseWindowsDocumentsOutput,
@@ -76,6 +77,7 @@ describe('DefaultWorkspaceService', () => {
   function build(
     env: NodeJS.ProcessEnv = {},
     windows?: { spawn: IHostProcessService['spawn'] },
+    sections: Record<string, unknown> = {},
   ): IDefaultWorkspace {
     const bootstrap = stubBootstrap('/tmp/kimi-home', env, {}, osHomeDir);
     currentHost?.dispose();
@@ -86,9 +88,29 @@ describe('DefaultWorkspaceService', () => {
       ),
       stubPair(IHostFileSystem, new HostFileSystem()),
       stubPair(IHostProcessService, (windows ?? {}) as IHostProcessService),
+      stubPair(IConfigService, memoryConfig(sections)),
     ]);
     return currentHost.app.accessor.get(IDefaultWorkspace);
   }
+
+  function memoryConfig(sections: Record<string, unknown>): IConfigService {
+    return {
+      _serviceBrand: undefined,
+      ready: Promise.resolve(),
+      get: (domain: string) => sections[domain],
+      set: async (domain: string, value: Record<string, unknown>) => {
+        sections[domain] = { ...(sections[domain] as object | undefined), ...value };
+      },
+      replace: async (domain: string, value: unknown) => {
+        sections[domain] = value;
+      },
+    } as unknown as IConfigService;
+  }
+
+  const unavailable = (reason: string) => ({
+    code: 'default_workspace.unavailable',
+    details: expect.objectContaining({ reason }),
+  });
 
   function documentsReply(documentsDir: string): IHostProcessService['spawn'] {
     const output = `${documentsDir}\r\n`;
@@ -135,7 +157,7 @@ describe('DefaultWorkspaceService', () => {
   it('fails instead of falling back when the Windows documents folder cannot be resolved', async () => {
     const service = build({}, { spawn: shellUnavailable });
 
-    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
     expect(await service.isDefault(join(osHomeDir, 'Documents', 'KimiCode', 'Default'))).toBe(
       false,
     );
@@ -148,7 +170,7 @@ describe('DefaultWorkspaceService', () => {
     const reported = join(osHomeDir, 'ÎÄµµ');
     const service = build({}, { spawn: documentsReply(reported) });
 
-    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
     await expect(fsp.stat(reported)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -162,7 +184,7 @@ describe('DefaultWorkspaceService', () => {
     }) as IHostProcessService['spawn'];
     const service = build({}, { spawn });
 
-    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
     expect(await service.ensure()).toBe(join(documentsDir, 'KimiCode', 'Default'));
   });
 
@@ -217,17 +239,108 @@ describe('DefaultWorkspaceService', () => {
     await fsp.mkdir(join(blocked, '..'), { recursive: true });
     await fsp.writeFile(blocked, 'not a folder', 'utf8');
 
-    await expect(build().ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    const service = build();
+
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('blocked_by_file'));
+    expect(await service.status()).toMatchObject({ exists: false, problem: 'blocked_by_file' });
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-    'reports a permission failure as is',
+    'reports a permission failure',
     async () => {
       const documents = join(osHomeDir, 'Documents');
       await fsp.mkdir(documents, { recursive: true });
       await fsp.chmod(documents, 0o500);
 
-      await expect(build().ensure()).rejects.toMatchObject({ code: 'os.fs.permission_denied' });
+      await expect(build().ensure()).rejects.toMatchObject(unavailable('permission_denied'));
     },
   );
+
+  describe('custom location', () => {
+    it('creates sessions in the configured folder and treats it as the default', async () => {
+      const custom = join(osHomeDir, 'Projects', 'Chats');
+      const service = build({}, undefined, { defaultWorkspace: { path: custom } });
+
+      expect(await service.ensure()).toBe(custom);
+      expect(await service.isDefault(custom)).toBe(true);
+      expect(await service.isDefault(join(osHomeDir, 'Documents', 'KimiCode', 'Default'))).toBe(
+        false,
+      );
+    });
+
+    it('expands a leading tilde against the user home', async () => {
+      const service = build({}, undefined, { defaultWorkspace: { path: '~/Chats' } });
+
+      expect(await service.ensure()).toBe(join(osHomeDir, 'Chats'));
+    });
+
+    it('rejects a relative path found in the config file', async () => {
+      const service = build({}, undefined, { defaultWorkspace: { path: 'Chats' } });
+
+      await expect(service.ensure()).rejects.toMatchObject(unavailable('invalid_path'));
+      expect(await service.status()).toMatchObject({ path: undefined, problem: 'invalid_path' });
+    });
+
+    it('saves the trimmed path and reports both locations', async () => {
+      const sections: Record<string, unknown> = {};
+      const service = build({}, undefined, sections);
+
+      const status = await service.setCustomPath('  ~/Chats  ');
+
+      expect(sections['defaultWorkspace']).toEqual({ path: '~/Chats' });
+      expect(status).toEqual({
+        path: join(osHomeDir, 'Chats'),
+        customPath: '~/Chats',
+        systemPath: join(osHomeDir, 'Documents', 'KimiCode', 'Default'),
+        exists: false,
+        problem: undefined,
+      });
+      await expect(fsp.stat(join(osHomeDir, 'Chats'))).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
+    it('returns to the system location when cleared', async () => {
+      const sections: Record<string, unknown> = { defaultWorkspace: { path: '/somewhere' } };
+      const service = build({}, undefined, sections);
+
+      const status = await service.setCustomPath('   ');
+
+      expect(sections['defaultWorkspace']).toEqual({});
+      expect(status.path).toBe(join(osHomeDir, 'Documents', 'KimiCode', 'Default'));
+      expect(status.customPath).toBeUndefined();
+    });
+
+    it('refuses an unusable folder and keeps the saved location', async () => {
+      await fsp.writeFile(join(osHomeDir, 'note.txt'), 'x', 'utf8');
+      const sections: Record<string, unknown> = { defaultWorkspace: { path: '~/Kept' } };
+      const service = build({}, undefined, sections);
+
+      await expect(service.setCustomPath('relative')).rejects.toMatchObject(
+        unavailable('invalid_path'),
+      );
+      await expect(service.setCustomPath(join(osHomeDir, 'note.txt', 'Chats'))).rejects.toMatchObject(
+        unavailable('blocked_by_file'),
+      );
+      expect(sections['defaultWorkspace']).toEqual({ path: '~/Kept' });
+    });
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'refuses a folder it cannot write to and leaves no probe file behind',
+      async () => {
+        const locked = join(osHomeDir, 'Locked');
+        await fsp.mkdir(locked);
+        await fsp.chmod(locked, 0o500);
+        const service = build();
+
+        try {
+          await expect(service.setCustomPath(join(locked, 'Chats'))).rejects.toMatchObject(
+            unavailable('permission_denied'),
+          );
+        } finally {
+          await fsp.chmod(locked, 0o755);
+        }
+        await service.setCustomPath(locked);
+        expect(await fsp.readdir(locked)).toEqual([]);
+      },
+    );
+  });
 });

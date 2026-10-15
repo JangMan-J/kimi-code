@@ -1,4 +1,4 @@
-import { isAbsolute, join } from 'pathe';
+import { isAbsolute, join, normalize } from 'pathe';
 
 export const DEFAULT_WORKSPACE_RELATIVE_ROOT = ['KimiCode', 'Default'] as const;
 
@@ -34,4 +34,9 @@ export function parseWindowsDocumentsOutput(output: string): string | undefined 
 
 export function defaultDocumentsDir(osHomeDir: string): string {
   return join(osHomeDir, 'Documents');
+}
+
+export function resolveCustomRoot(raw: string, osHomeDir: string): string | undefined {
+  const expanded = /^~(?=$|[\\/])/.test(raw) ? osHomeDir + raw.slice(1) : raw;
+  return isAbsolute(expanded) ? normalize(expanded) : undefined;
 }
