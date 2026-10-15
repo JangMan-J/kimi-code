@@ -54,6 +54,8 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     } catch (error) {
       throw unavailable(root, reasonOf(error), error);
     }
+    const problem = await this.writeProblem(root);
+    if (problem !== undefined) throw unavailable(root, problem);
     return root;
   }
 

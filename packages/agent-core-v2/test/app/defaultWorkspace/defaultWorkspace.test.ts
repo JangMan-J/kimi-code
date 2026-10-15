@@ -380,5 +380,23 @@ describe('DefaultWorkspaceService', () => {
         expect(await fsp.readdir(locked)).toEqual([]);
       },
     );
+
+    it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+      'refuses to hand out a saved folder that is no longer writable',
+      async () => {
+        const custom = join(osHomeDir, 'Chats');
+        await fsp.mkdir(custom);
+        const service = build({}, undefined, { defaultWorkspace: { path: custom } });
+        await fsp.chmod(custom, 0o500);
+
+        try {
+          await expect(service.ensure()).rejects.toMatchObject(unavailable('permission_denied'));
+        } finally {
+          await fsp.chmod(custom, 0o755);
+        }
+        expect(await service.ensure()).toBe(custom);
+        expect(await fsp.readdir(custom)).toEqual([]);
+      },
+    );
   });
 });
