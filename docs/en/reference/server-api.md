@@ -1745,7 +1745,7 @@ On success, `data` is `{ project_root, config_path, additional_dirs, persisted }
 
 #### `GET /api/v1/default-workspace`
 
-Reads where sessions created with `default_workspace` go. The location is `<Documents>/KimiCode/Default` unless `default_workspace.path` is set in `config.toml`. The folder is not created here.
+Reads where sessions created with `default_workspace` go. The location is `<Documents>/KimiCode/Default` unless `default_workspace.path` is set in `config.toml`. The folder is not created here. The setting is not part of `GET /api/v1/config`, and `POST /api/v1/config` rejects it with `40001`. Whenever the location changes, through `PATCH` or an edit to `config.toml`, every registered workspace broadcasts `event.workspace.updated` with its current `is_default`.
 
 On success, `data` is:
 
@@ -1759,7 +1759,7 @@ On success, `data` is:
 
 #### `PATCH /api/v1/default-workspace`
 
-Sets a custom default workspace location, or clears it with `null` (or an empty string) to return to the system location. The path must be absolute or start with `~`; it is checked for writability but not created. Registered workspaces whose `is_default` flips broadcast `event.workspace.updated`. Existing files and workspaces are never moved.
+Sets a custom default workspace location, or clears it with `null` (or an empty string) to return to the system location. The path must be absolute or start with `~`; it is checked for writability but not created. Existing files and workspaces are never moved.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |

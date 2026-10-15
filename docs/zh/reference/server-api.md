@@ -1745,7 +1745,7 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 
 #### `GET /api/v1/default-workspace`
 
-读取以 `default_workspace` 创建的会话所在位置。未在 `config.toml` 中设置 `default_workspace.path` 时为 `<文稿目录>/KimiCode/Default`。该接口不会创建目录。
+读取以 `default_workspace` 创建的会话所在位置。未在 `config.toml` 中设置 `default_workspace.path` 时为 `<文稿目录>/KimiCode/Default`。该接口不会创建目录。该设置不在 `GET /api/v1/config` 中返回，`POST /api/v1/config` 带上它会返回 `40001`。位置一旦变化（无论经 `PATCH` 还是直接编辑 `config.toml`），所有已注册工作区都会广播 `event.workspace.updated`，携带最新的 `is_default`。
 
 成功时 `data` 为：
 
@@ -1759,7 +1759,7 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 
 #### `PATCH /api/v1/default-workspace`
 
-设置自定义默认工作区位置；传 `null`（或空字符串）清除，回到系统位置。路径须为绝对路径或以 `~` 开头；会检查是否可写，但不会创建目录。`is_default` 因此变化的已注册工作区会广播 `event.workspace.updated`。已有文件和工作区不会被移动。
+设置自定义默认工作区位置；传 `null`（或空字符串）清除，回到系统位置。路径须为绝对路径或以 `~` 开头；会检查是否可写，但不会创建目录。已有文件和工作区不会被移动。
 
 | 参数 | 位置 | 类型 | 说明 |
 | --- | --- | --- | --- |
