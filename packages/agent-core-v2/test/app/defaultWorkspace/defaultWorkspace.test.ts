@@ -1,6 +1,6 @@
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -504,5 +504,30 @@ describe('DefaultWorkspaceService', () => {
         message: expect.stringContaining('too long'),
       });
     });
+  });
+
+  it('leaves an existing entry alone when the probe name is already taken', async () => {
+    const removed: string[] = [];
+    class TakenProbeFileSystem extends HostFileSystem {
+      override async createExclusive(): Promise<boolean> {
+        return false;
+      }
+      override async mkdir(path: string, options?: { readonly recursive?: boolean }) {
+        if (basename(path).startsWith('.kimi-code-write-test-')) {
+          throw new HostFsError(OsFsErrors.codes.OS_FS_ALREADY_EXISTS, 'already exists');
+        }
+        await super.mkdir(path, options);
+      }
+      override async remove(path: string): Promise<void> {
+        removed.push(path);
+      }
+    }
+    const service = build({}, undefined, {}, new TakenProbeFileSystem());
+
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('unknown'));
+    await expect(service.setCustomPath(join(osHomeDir, 'Chats'))).rejects.toMatchObject(
+      unavailable('unknown'),
+    );
+    expect(removed).toEqual([]);
   });
 });
