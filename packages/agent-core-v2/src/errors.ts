@@ -200,6 +200,7 @@ export type KimiErrorCode =
   | 'prompt.not_found'
   | 'session.busy'
   | 'shell.git_bash_not_found'
+  | 'default_workspace.unavailable'
   | 'workspace.not_found'
   | 'terminal.not_found'
   | 'file.not_found'
