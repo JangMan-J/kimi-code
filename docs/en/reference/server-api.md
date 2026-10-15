@@ -671,9 +671,9 @@ Creates a session and returns it. The target directory comes from `workspace_id`
 On success, `data` is [the session object](#the-session-object) of the new session.
 
 - `40001`: none of `workspace_id`, `metadata.cwd`, and `default_workspace` given, `default_workspace` combined with either of the others, or `metadata.cwd` does not match the workspace root (`details` lists the field)
-- `40409`: the working directory does not exist or is not a directory, the default workspace path is blocked by a file, or the Windows Documents folder cannot be located
+- `40409`: the working directory does not exist or is not a directory
 - `40410`: no registered workspace with that `workspace_id`
-- `40411`: permission denied while creating the default workspace directory
+- `40930`: the default workspace folder cannot be created or used. `data` is `{ path, reason }`, where `reason` is one of `blocked_by_file` (a file sits where a folder is needed), `permission_denied`, `missing_parent` (a parent folder is unavailable), `no_space`, `read_only`, `invalid_path` (the path is too long), `documents_unavailable` (the system Documents folder cannot be located; `path` is `null`), or `unknown`
 
 #### `GET /api/v1/sessions`
 

@@ -1,10 +1,11 @@
+import { randomUUID } from 'node:crypto';
+
 import { join } from 'pathe';
 
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { workspaceRootKey } from '#/_base/utils/workdir-slug';
 import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { LifecycleScope } from '#/app/scopes';
-import { ErrorCodes, Error2 } from '#/errors';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { HostFsError, OsFsErrors } from '#/os/interface/hostFsErrors';
 import { IHostProcessService } from '#/os/interface/hostProcess';
@@ -18,13 +19,13 @@ import {
   parseXdgDocumentsDir,
   windowsPowerShellPath,
 } from './defaultWorkspacePaths';
+import {
+  DEFAULT_WORKSPACE_PROBLEM_MESSAGES,
+  DefaultWorkspaceUnavailableError,
+  type DefaultWorkspaceUnavailableReason,
+} from './errors';
 
 const WINDOWS_DOCUMENTS_TIMEOUT_MS = 15_000;
-
-const BLOCKED_PATH_CODES: ReadonlySet<string> = new Set([
-  OsFsErrors.codes.OS_FS_ALREADY_EXISTS,
-  OsFsErrors.codes.OS_FS_NOT_DIRECTORY,
-]);
 
 export class DefaultWorkspaceService implements IDefaultWorkspace {
   declare readonly _serviceBrand: undefined;
@@ -42,15 +43,10 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     try {
       await this.fs.mkdir(root, { recursive: true });
     } catch (error) {
-      if (error instanceof HostFsError && BLOCKED_PATH_CODES.has(error.code)) {
-        throw new Error2(
-          ErrorCodes.FS_PATH_NOT_FOUND,
-          `default workspace ${root} is not a usable directory`,
-          { cause: error },
-        );
-      }
-      throw error;
+      throw unavailable(root, reasonOf(error), error);
     }
+    const problem = await this.writeProblem(root);
+    if (problem !== undefined) throw unavailable(root, problem);
     return root;
   }
 
@@ -72,6 +68,22 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     return this.rootPromise;
   }
 
+  private async writeProblem(dir: string): Promise<DefaultWorkspaceUnavailableReason | undefined> {
+    const probe = join(dir, `.kimi-code-write-test-${randomUUID()}`);
+    let problem: DefaultWorkspaceUnavailableReason | undefined;
+    try {
+      await this.fs.createExclusive(probe, new Uint8Array());
+    } catch (error) {
+      problem = reasonOf(error);
+    }
+    try {
+      await this.fs.remove(probe);
+    } catch (error) {
+      if (!isNotFound(error)) problem ??= reasonOf(error);
+    }
+    return problem;
+  }
+
   private async documentsDir(): Promise<string> {
     if (this.bootstrap.platform === 'win32') return this.windowsDocumentsDir();
     const fallback = defaultDocumentsDir(this.bootstrap.osHomeDir);
@@ -89,9 +101,11 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
       cause = error;
     }
     if (dir === undefined) {
-      throw new Error2(ErrorCodes.FS_PATH_NOT_FOUND, 'cannot locate the Windows Documents folder', {
+      throw new DefaultWorkspaceUnavailableError(
+        { path: undefined, reason: 'documents_unavailable' },
+        'cannot locate the Windows Documents folder',
         cause,
-      });
+      );
     }
     return dir;
   }
@@ -129,6 +143,47 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
       return undefined;
     }
   }
+}
+
+function unavailable(
+  path: string | undefined,
+  reason: DefaultWorkspaceUnavailableReason,
+  cause?: unknown,
+): DefaultWorkspaceUnavailableError {
+  const where = path === undefined ? '' : ` ${path}`;
+  return new DefaultWorkspaceUnavailableError(
+    { path, reason },
+    `default workspace${where} is unavailable: ${DEFAULT_WORKSPACE_PROBLEM_MESSAGES[reason]}`,
+    cause,
+  );
+}
+
+const REASON_BY_FS_CODE: ReadonlyMap<string, DefaultWorkspaceUnavailableReason> = new Map([
+  [OsFsErrors.codes.OS_FS_ALREADY_EXISTS, 'blocked_by_file'],
+  [OsFsErrors.codes.OS_FS_NOT_DIRECTORY, 'blocked_by_file'],
+  [OsFsErrors.codes.OS_FS_PERMISSION_DENIED, 'permission_denied'],
+  [OsFsErrors.codes.OS_FS_NOT_FOUND, 'missing_parent'],
+]);
+
+const REASON_BY_ERRNO: ReadonlyMap<unknown, DefaultWorkspaceUnavailableReason> = new Map([
+  ['ENOSPC', 'no_space'],
+  ['EDQUOT', 'no_space'],
+  ['EROFS', 'read_only'],
+  ['ENAMETOOLONG', 'invalid_path'],
+]);
+
+function reasonOf(error: unknown): DefaultWorkspaceUnavailableReason {
+  if (error instanceof DefaultWorkspaceUnavailableError) return error.details.reason;
+  if (!(error instanceof HostFsError)) return 'unknown';
+  return (
+    REASON_BY_FS_CODE.get(error.code) ??
+    REASON_BY_ERRNO.get(error.details?.['errno']) ??
+    'unknown'
+  );
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof HostFsError && error.code === OsFsErrors.codes.OS_FS_NOT_FOUND;
 }
 
 async function collect(stream: AsyncIterable<Uint8Array | string>): Promise<string> {

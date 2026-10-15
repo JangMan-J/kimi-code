@@ -671,9 +671,9 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 成功时，`data` 为新会话的 [session 对象](#session-对象)。
 
 - `40001`：`workspace_id`、`metadata.cwd`、`default_workspace` 都未提供，`default_workspace` 与另外两者之一同时提供，或 `metadata.cwd` 与工作区根目录不一致（`details` 会列出该字段）
-- `40409`：工作目录不存在或不是目录、默认工作区路径被同名文件占用，或无法定位 Windows 文稿目录
+- `40409`：工作目录不存在或不是目录
 - `40410`：没有以该 `workspace_id` 注册的工作区
-- `40411`：创建默认工作区目录时权限不足
+- `40930`：默认工作区目录无法创建或使用。`data` 为 `{ path, reason }`，`reason` 取值：`blocked_by_file`（需要目录的位置被文件占用）、`permission_denied`、`missing_parent`（父目录不可用）、`no_space`、`read_only`、`invalid_path`（路径过长）、`documents_unavailable`（无法定位系统文稿目录，此时 `path` 为 `null`）、`unknown`
 
 #### `GET /api/v1/sessions`
 

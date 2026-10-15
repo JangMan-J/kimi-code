@@ -562,6 +562,7 @@ export * from '#/app/hostFolderBrowser/hostFolderBrowser';
 export * from '#/app/hostFolderBrowser/hostFolderBrowserService';
 export * from '#/app/defaultWorkspace/defaultWorkspace';
 export * from '#/app/defaultWorkspace/defaultWorkspaceService';
+export * from '#/app/defaultWorkspace/errors';
 export * from '#/persistence/interface/storage';
 export * from '#/persistence/interface/appendLogStore';
 export * from '#/persistence/interface/atomicDocumentStore';

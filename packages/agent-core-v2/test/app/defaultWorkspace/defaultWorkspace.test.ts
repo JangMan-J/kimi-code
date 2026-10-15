@@ -19,6 +19,7 @@ import {
 import { DefaultWorkspaceService } from '#/app/defaultWorkspace/defaultWorkspaceService';
 import { LifecycleScope } from '#/app/scopes';
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
+import { HostFsError, OsFsErrors } from '#/os/interface/hostFsErrors';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IHostProcessService } from '#/os/interface/hostProcess';
 
@@ -76,6 +77,7 @@ describe('DefaultWorkspaceService', () => {
   function build(
     env: NodeJS.ProcessEnv = {},
     windows?: { spawn: IHostProcessService['spawn'] },
+    fs: IHostFileSystem = new HostFileSystem(),
   ): IDefaultWorkspace {
     const bootstrap = stubBootstrap('/tmp/kimi-home', env, {}, osHomeDir);
     currentHost?.dispose();
@@ -84,11 +86,16 @@ describe('DefaultWorkspaceService', () => {
         IBootstrapService,
         windows === undefined ? bootstrap : { ...bootstrap, platform: 'win32' },
       ),
-      stubPair(IHostFileSystem, new HostFileSystem()),
+      stubPair(IHostFileSystem, fs),
       stubPair(IHostProcessService, (windows ?? {}) as IHostProcessService),
     ]);
     return currentHost.app.accessor.get(IDefaultWorkspace);
   }
+
+  const unavailable = (reason: string) => ({
+    code: 'default_workspace.unavailable',
+    details: expect.objectContaining({ reason }),
+  });
 
   function documentsReply(documentsDir: string): IHostProcessService['spawn'] {
     const output = `${documentsDir}\r\n`;
@@ -135,7 +142,7 @@ describe('DefaultWorkspaceService', () => {
   it('fails instead of falling back when the Windows documents folder cannot be resolved', async () => {
     const service = build({}, { spawn: shellUnavailable });
 
-    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
     expect(await service.isDefault(join(osHomeDir, 'Documents', 'KimiCode', 'Default'))).toBe(
       false,
     );
@@ -148,7 +155,7 @@ describe('DefaultWorkspaceService', () => {
     const reported = join(osHomeDir, 'ÎÄµµ');
     const service = build({}, { spawn: documentsReply(reported) });
 
-    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
     await expect(fsp.stat(reported)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -162,7 +169,7 @@ describe('DefaultWorkspaceService', () => {
     }) as IHostProcessService['spawn'];
     const service = build({}, { spawn });
 
-    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
     expect(await service.ensure()).toBe(join(documentsDir, 'KimiCode', 'Default'));
   });
 
@@ -217,17 +224,57 @@ describe('DefaultWorkspaceService', () => {
     await fsp.mkdir(join(blocked, '..'), { recursive: true });
     await fsp.writeFile(blocked, 'not a folder', 'utf8');
 
-    await expect(build().ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    await expect(build().ensure()).rejects.toMatchObject(unavailable('blocked_by_file'));
   });
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-    'reports a permission failure as is',
+    'reports a permission failure',
     async () => {
       const documents = join(osHomeDir, 'Documents');
       await fsp.mkdir(documents, { recursive: true });
       await fsp.chmod(documents, 0o500);
 
-      await expect(build().ensure()).rejects.toMatchObject({ code: 'os.fs.permission_denied' });
+      await expect(build().ensure()).rejects.toMatchObject(unavailable('permission_denied'));
     },
   );
+
+  it.skipIf(process.platform === 'win32')(
+    'reports a dangling symlink in the path as blocked',
+    async () => {
+      const documents = join(osHomeDir, 'Documents');
+      await fsp.mkdir(documents, { recursive: true });
+      await fsp.symlink(join(osHomeDir, 'gone'), join(documents, 'KimiCode'));
+
+      await expect(build().ensure()).rejects.toMatchObject(unavailable('blocked_by_file'));
+    },
+  );
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'refuses to hand out a folder that is no longer writable and leaves no probe file behind',
+    async () => {
+      const service = build();
+      const root = await service.ensure();
+      await fsp.chmod(root, 0o500);
+
+      try {
+        await expect(service.ensure()).rejects.toMatchObject(unavailable('permission_denied'));
+      } finally {
+        await fsp.chmod(root, 0o755);
+      }
+      expect(await service.ensure()).toBe(root);
+      expect(await fsp.readdir(root)).toEqual([]);
+    },
+  );
+
+  it('reports a folder where files can be created but not removed', async () => {
+    class NoRemoveFileSystem extends HostFileSystem {
+      override async remove(): Promise<void> {
+        throw new HostFsError(OsFsErrors.codes.OS_FS_PERMISSION_DENIED, 'permission denied');
+      }
+    }
+
+    await expect(build({}, undefined, new NoRemoveFileSystem()).ensure()).rejects.toMatchObject(
+      unavailable('permission_denied'),
+    );
+  });
 });
