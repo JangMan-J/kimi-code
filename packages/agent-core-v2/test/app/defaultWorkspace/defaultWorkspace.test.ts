@@ -277,4 +277,21 @@ describe('DefaultWorkspaceService', () => {
       unavailable('permission_denied'),
     );
   });
+
+  it('leaves an existing entry alone when the probe name is already taken', async () => {
+    const removed: string[] = [];
+    class TakenProbeFileSystem extends HostFileSystem {
+      override async createExclusive(): Promise<boolean> {
+        return false;
+      }
+      override async remove(path: string): Promise<void> {
+        removed.push(path);
+      }
+    }
+
+    await expect(build({}, undefined, new TakenProbeFileSystem()).ensure()).rejects.toMatchObject(
+      unavailable('unknown'),
+    );
+    expect(removed).toEqual([]);
+  });
 });

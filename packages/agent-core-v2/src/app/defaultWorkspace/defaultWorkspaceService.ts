@@ -72,7 +72,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     const probe = join(dir, `.kimi-code-write-test-${randomUUID()}`);
     let problem: DefaultWorkspaceUnavailableReason | undefined;
     try {
-      await this.fs.createExclusive(probe, new Uint8Array());
+      if (!(await this.fs.createExclusive(probe, new Uint8Array()))) return 'unknown';
     } catch (error) {
       problem = reasonOf(error);
     }
