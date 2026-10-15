@@ -18,6 +18,7 @@ describe('resolveStartupWorkDir', () => {
 
   afterEach(async () => {
     process.chdir(launchDir);
+    vi.unstubAllEnvs();
     await rm(target, { recursive: true, force: true });
   });
 
@@ -30,10 +31,13 @@ describe('resolveStartupWorkDir', () => {
   });
 
   it('moves into the default workspace with the flag', async () => {
+    vi.stubEnv('PWD', launchDir);
+
     expect(await resolveStartupWorkDir({ defaultWorkspace: true }, async () => target)).toBe(
       target,
     );
     expect(process.cwd()).toBe(target);
+    expect(process.env['PWD']).toBe(target);
   });
 
   it('stays put when the default workspace cannot be prepared', async () => {

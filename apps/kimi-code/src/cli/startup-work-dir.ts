@@ -7,6 +7,7 @@ export async function resolveStartupWorkDir(
   if (opts.defaultWorkspace !== true) return process.cwd();
   const workDir = await ensureDefaultWorkspace();
   process.chdir(workDir);
+  process.env['PWD'] = workDir;
   return workDir;
 }
 

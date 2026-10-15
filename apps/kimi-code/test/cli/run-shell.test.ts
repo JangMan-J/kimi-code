@@ -373,6 +373,7 @@ describe('runShell', () => {
     const launchDir = process.cwd();
     const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'kimi-run-shell-default-')));
     mocks.harnessEnsureDefaultWorkspace.mockResolvedValue(workspace);
+    vi.stubEnv('PWD', launchDir);
     try {
       await runShell({ ...minimalCliOptions, defaultWorkspace: true }, '1.2.3-test');
       expect(mocks.resolveCommandPath).toHaveBeenCalledWith('stty', [workspace, launchDir]);
