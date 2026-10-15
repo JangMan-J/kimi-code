@@ -980,15 +980,20 @@ export function foldWireRecordFacts(
               : undefined;
         for (const promptId of promptIds) {
           if (promptDrafts.has(promptId)) continue;
+          const steerOriginKind = (payload.origin as { readonly kind?: unknown } | undefined)?.kind;
+          const userSteerOrigin = steerOriginKind === undefined || steerOriginKind === 'user';
           promptDrafts.set(promptId, {
             promptId,
             content:
-              promptIds.length === 1
+              userSteerOrigin && promptIds.length === 1
                 ? projectPromptContent(payload.input, payload.origin)
                 : undefined,
-            clientMetadata: readClientMetadata(payload.origin),
+            clientMetadata: userSteerOrigin ? readClientMetadata(payload.origin) : undefined,
             createdAt: recordTimeIso(record),
-            userMessageId: typeof payload.messageId === 'string' ? payload.messageId : undefined,
+            userMessageId:
+              promptIds.length === 1 && typeof payload.messageId === 'string'
+                ? payload.messageId
+                : promptId,
             rawTurnId: steerRawTurnId,
           });
         }
@@ -1283,7 +1288,10 @@ export function foldWireRecordFacts(
             steer.promptIds.length === 1
               ? projectPromptContent(steer.content, undefined)
               : undefined,
-          userMessageId: steer.messageId,
+          userMessageId:
+            steer.promptIds.length === 1 && steer.messageId !== undefined
+              ? steer.messageId
+              : promptId,
           createdAt: submittedAt ?? steer.steeredAt,
           rawTurnId: steer.rawTurnId,
           status: 'completed',

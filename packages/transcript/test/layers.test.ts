@@ -3199,4 +3199,60 @@ describe('foldWireRecordFacts (cold facts)', () => {
     const undone = foldWireRecordFacts(records(true), base);
     expect(undone.prompts).toEqual([]);
   });
+
+  it('keeps each steered child identity for merged steers instead of the synthetic message id', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'p1', role: 'user', content: [{ type: 'text', text: 'run' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'working' }], toolCalls: [] },
+    ]);
+    const folded = foldWireRecordFacts(
+      [
+        { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: 'run' }], origin: { kind: 'user' }, promptId: 'p1', time: 1000 },
+        { type: 'prompt.steered', activePromptId: 'p1', promptIds: ['p2', 'p3'], steeredAt: '2026-01-01T00:00:01.500Z', time: 1400 },
+        { type: 'turn.steer', turnId: 0, promptIds: ['p2', 'p3'], messageId: 'merged-msg', input: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }], origin: { kind: 'user' }, time: 1500 },
+        { type: 'turn.ended', turnId: 0, reason: 'completed', time: 2000 },
+      ],
+      base,
+    );
+    expect(folded.prompts.map((entry) => [entry.promptId, entry.userMessageId])).toEqual([
+      ['p1', 'p1'],
+      ['p2', 'p2'],
+      ['p3', 'p3'],
+    ]);
+  });
+
+  it('keeps steered non-user prompts content-free while retaining the terminal steer fact', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'p1', role: 'user', content: [{ type: 'text', text: 'run' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'working' }], toolCalls: [] },
+    ]);
+    const folded = foldWireRecordFacts(
+      [
+        { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: 'run' }], origin: { kind: 'user' }, promptId: 'p1', time: 1000 },
+        { type: 'prompt.steered', activePromptId: 'p1', promptIds: ['skill-child'], steeredAt: '2026-01-01T00:00:01.500Z', time: 1400 },
+        {
+          type: 'turn.steer',
+          turnId: 0,
+          promptIds: ['skill-child'],
+          messageId: 'skill-child',
+          input: [{ type: 'text', text: 'expanded command content' }],
+          origin: { kind: 'skill_activation', trigger: 'user-slash', clientMetadata: [{ composer: { version: 1 } }] },
+          time: 1500,
+        },
+        { type: 'turn.ended', turnId: 0, reason: 'completed', time: 2000 },
+      ],
+      base,
+    );
+    expect(folded.prompts).toEqual([
+      expect.objectContaining({ promptId: 'p1' }),
+      {
+        promptId: 'skill-child',
+        status: 'completed',
+        userMessageId: 'skill-child',
+        createdAt: new Date(1500).toISOString(),
+        finishedAt: '2026-01-01T00:00:01.500Z',
+        steeredAt: '2026-01-01T00:00:01.500Z',
+      },
+    ]);
+  });
 });
