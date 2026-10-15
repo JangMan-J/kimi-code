@@ -61,6 +61,7 @@ export function registerDefaultWorkspaceRoutes(app: DefaultWorkspaceRouteHost, c
       body: updateDefaultWorkspaceRequestSchema,
       success: { data: defaultWorkspaceStatusSchema },
       errors: {
+        [ErrorCode.VALIDATION_FAILED]: {},
         [ErrorCode.DEFAULT_WORKSPACE_UNAVAILABLE]: {
           dataSchema: defaultWorkspaceUnavailableDataSchema,
         },

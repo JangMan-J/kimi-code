@@ -7,11 +7,16 @@ import {
   type Scope,
 } from '@moonshot-ai/agent-core-v2';
 
+import type { ServerLogger } from '../pinoLoggerService';
+
 export interface DefaultWorkspacePublisher {
   close(): void;
 }
 
-export function startDefaultWorkspacePublisher(core: Scope): DefaultWorkspacePublisher {
+export function startDefaultWorkspacePublisher(
+  core: Scope,
+  logger: Pick<ServerLogger, 'warn'>,
+): DefaultWorkspacePublisher {
   const config = core.accessor.get(IConfigService);
   const workspaces = core.accessor.get(IWorkspaceService);
   const events = core.accessor.get(IEventService);
@@ -27,7 +32,12 @@ export function startDefaultWorkspacePublisher(core: Scope): DefaultWorkspacePub
 
   const subscription = config.onDidSectionChange((event) => {
     if (closed || event.domain !== DEFAULT_WORKSPACE_SECTION) return;
-    void announceAll().catch(() => undefined);
+    void announceAll().catch((error: unknown) => {
+      logger.warn(
+        { err: error instanceof Error ? error.message : String(error) },
+        'default workspace changed but workspace updates could not be broadcast',
+      );
+    });
   });
 
   return {
