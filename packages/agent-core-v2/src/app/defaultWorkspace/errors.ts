@@ -35,7 +35,7 @@ export const DEFAULT_WORKSPACE_PROBLEM_MESSAGES: Readonly<
   missing_parent: 'a parent folder is unavailable',
   no_space: 'the disk is full',
   read_only: 'the file system is read-only',
-  invalid_path: 'the path must be absolute',
+  invalid_path: 'the path is not absolute or is too long',
   documents_unavailable: 'the Documents folder cannot be located',
   unknown: 'the folder cannot be created',
 };

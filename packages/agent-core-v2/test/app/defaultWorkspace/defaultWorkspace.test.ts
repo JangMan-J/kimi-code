@@ -419,5 +419,32 @@ describe('DefaultWorkspaceService', () => {
       await expect(service.ensure()).rejects.toMatchObject(unavailable('permission_denied'));
       expect(await service.status()).toMatchObject({ problem: 'permission_denied' });
     });
+
+    it('refuses to save a missing folder where files can be created but folders cannot', async () => {
+      class NoMkdirFileSystem extends HostFileSystem {
+        override async mkdir(): Promise<void> {
+          throw new HostFsError(OsFsErrors.codes.OS_FS_PERMISSION_DENIED, 'permission denied');
+        }
+      }
+      const sections: Record<string, unknown> = {};
+      const service = build({}, undefined, sections, new NoMkdirFileSystem());
+
+      await expect(service.setCustomPath(join(osHomeDir, 'Chats'))).rejects.toMatchObject(
+        unavailable('permission_denied'),
+      );
+      expect(sections['defaultWorkspace']).toBeUndefined();
+      expect(await fsp.readdir(osHomeDir)).toEqual([]);
+    });
+
+    it('explains that an overlong path is too long', async () => {
+      const service = build();
+
+      await expect(
+        service.setCustomPath(join(osHomeDir, 'a'.repeat(300))),
+      ).rejects.toMatchObject({
+        ...unavailable('invalid_path'),
+        message: expect.stringContaining('too long'),
+      });
+    });
   });
 });
