@@ -397,10 +397,20 @@ describe('server-v2 /api/v1/sessions', () => {
         return root;
       },
     ): ScopeSeed {
+      const status = {
+        path: root,
+        customPath: undefined,
+        systemPath: root,
+        exists: true,
+        problem: undefined,
+      };
       const stub: IDefaultWorkspace = {
         _serviceBrand: undefined,
         ensure,
+        path: async () => root,
         isDefault: async (candidate) => candidate === root,
+        status: async () => status,
+        setCustomPath: async () => status,
       };
       return [[IDefaultWorkspace, stub]];
     }

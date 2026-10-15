@@ -15,3 +15,17 @@ export const defaultWorkspaceUnavailableDataSchema = z.object({
   path: z.string().nullable(),
   reason: defaultWorkspaceUnavailableReasonSchema,
 });
+
+export const defaultWorkspaceStatusSchema = z.object({
+  path: z.string().nullable(),
+  custom_path: z.string().nullable(),
+  system_path: z.string().nullable(),
+  exists: z.boolean(),
+  problem: defaultWorkspaceUnavailableReasonSchema.nullable(),
+});
+
+export type DefaultWorkspaceStatusWire = z.infer<typeof defaultWorkspaceStatusSchema>;
+
+export const updateDefaultWorkspaceRequestSchema = z.object({
+  path: z.string().nullable(),
+});

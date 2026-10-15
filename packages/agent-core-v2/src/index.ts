@@ -560,6 +560,8 @@ export * from '#/workspace/workspaceTrust/workspaceTrust';
 export * from '#/workspace/workspaceTrust/workspaceTrustService';
 export * from '#/app/hostFolderBrowser/hostFolderBrowser';
 export * from '#/app/hostFolderBrowser/hostFolderBrowserService';
+import '#/app/defaultWorkspace/configSection';
+export * from '#/app/defaultWorkspace/configSection';
 export * from '#/app/defaultWorkspace/defaultWorkspace';
 export * from '#/app/defaultWorkspace/defaultWorkspaceService';
 export * from '#/app/defaultWorkspace/errors';
