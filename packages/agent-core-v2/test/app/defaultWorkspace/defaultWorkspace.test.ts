@@ -128,7 +128,7 @@ describe('DefaultWorkspaceService', () => {
     const reported = join(osHomeDir, 'ÎÄµµ');
     const service = build({}, { spawn: documentsReply(reported) });
 
-    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
+    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
     await expect(fsp.stat(reported)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
