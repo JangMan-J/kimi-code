@@ -249,7 +249,13 @@ export async function runShell(
     process.stdout.write(`${gutter}Bye!\n`);
     const hints: string[] = [];
     if (sessionId !== '' && hasContent) {
-      hints.push(`${gutter}To resume this session: ${resumeCommand(opts, sessionId)}`);
+      const defaultWorkspacePath =
+        opts.defaultWorkspace === true
+          ? await harness.getDefaultWorkspacePath().catch(() => undefined)
+          : undefined;
+      hints.push(
+        `${gutter}To resume this session: ${resumeCommand(opts, sessionId, workDir, defaultWorkspacePath)}`,
+      );
     }
     if (tui.exitOpenUrl !== undefined) {
       hints.push(`${gutter}open ${toTerminalHyperlink(tui.exitOpenUrl, tui.exitOpenUrl)}`);
