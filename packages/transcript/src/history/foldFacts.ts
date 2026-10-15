@@ -85,6 +85,7 @@ interface TurnPromptPayload {
   readonly promptId?: unknown;
   readonly turnId?: unknown;
   readonly input?: unknown;
+  readonly createdAt?: unknown;
 }
 interface AgentTurnStartedPayload {
   readonly turnId?: unknown;
@@ -119,6 +120,7 @@ interface PromptSteeredPayload {
   readonly steeredAt?: unknown;
   readonly content?: unknown;
   readonly messageId?: unknown;
+  readonly createdAts?: unknown;
 }
 interface StepTimeRecords {
   begin?: HistoryWireRecord;
@@ -342,7 +344,6 @@ function isVacuousLoopContentPart(part: unknown): boolean {
     readonly text?: unknown;
     readonly think?: unknown;
     readonly encrypted?: unknown;
-    readonly hidden?: unknown;
   };
   if (candidate.type === 'text') {
     return typeof candidate.text === 'string' && candidate.text.trim().length === 0;
@@ -350,7 +351,6 @@ function isVacuousLoopContentPart(part: unknown): boolean {
   if (candidate.type === 'think') {
     return (
       candidate.encrypted === undefined &&
-      candidate.hidden !== true &&
       typeof candidate.think === 'string' &&
       candidate.think.trim().length === 0
     );
@@ -460,6 +460,7 @@ export function foldWireRecordFacts(
     readonly content?: unknown;
     readonly messageId?: string;
     readonly rawTurnId?: number;
+    readonly createdAts?: Readonly<Record<string, string>>;
   }[] = [];
   const interruptedSteps = new Map<number, Map<number, HistoryWireRecord>>();
   const turnPromptIds = new Map<number, string>();
@@ -882,7 +883,10 @@ export function foldWireRecordFacts(
             promptId: payload.promptId,
             content: projectPromptContent(payload.input, payload.origin),
             clientMetadata: readClientMetadata(payload.origin),
-            createdAt: recordTimeIso(record),
+            createdAt:
+              typeof payload.createdAt === 'string' && payload.createdAt.length > 0
+                ? payload.createdAt
+                : recordTimeIso(record),
             userMessageId: payload.promptId,
             rawTurnId: turnId,
           });
@@ -1019,6 +1023,14 @@ export function foldWireRecordFacts(
           content: payload.content,
           messageId: typeof payload.messageId === 'string' ? payload.messageId : undefined,
           rawTurnId: nextTurnId > 0 ? nextTurnId - 1 : undefined,
+          createdAts:
+            typeof payload.createdAts === 'object' && payload.createdAts !== null
+              ? Object.fromEntries(
+                  Object.entries(payload.createdAts as Record<string, unknown>).filter(
+                    (entry): entry is [string, string] => typeof entry[1] === 'string',
+                  ),
+                )
+              : undefined,
         });
         break;
       }
@@ -1193,12 +1205,13 @@ export function foldWireRecordFacts(
                   });
             if (interrupted === undefined) return timed;
             const hitOrdinals = new Set<number>();
-            const patched = timed.map((step) => {
-              const hit = interrupted.get(step.ordinal);
+            const patched = timed.map((step, index) => {
+              const wireOrdinal = keptSteps?.[index] ?? step.ordinal;
+              const hit = interrupted.get(wireOrdinal);
               if (hit === undefined) return step;
               const stepPayload = hit as TurnStepInterruptedPayload;
               if (typeof stepPayload.reason !== 'string') return step;
-              hitOrdinals.add(step.ordinal);
+              hitOrdinals.add(wireOrdinal);
               return {
                 ...step,
                 state: 'interrupted' as const,
@@ -1252,6 +1265,7 @@ export function foldWireRecordFacts(
       if (active !== undefined) active.steeredAt = steer.steeredAt;
     }
     for (const promptId of steer.promptIds) {
+      const submittedAt = steer.createdAts?.[promptId];
       const child = promptDrafts.get(promptId);
       if (child === undefined) {
         promptDrafts.set(promptId, {
@@ -1261,7 +1275,7 @@ export function foldWireRecordFacts(
               ? projectPromptContent(steer.content, undefined)
               : undefined,
           userMessageId: steer.messageId,
-          createdAt: steer.steeredAt,
+          createdAt: submittedAt ?? steer.steeredAt,
           rawTurnId: steer.rawTurnId,
           status: 'completed',
           finishedAt: steer.steeredAt,
@@ -1269,6 +1283,7 @@ export function foldWireRecordFacts(
         });
         continue;
       }
+      if (submittedAt !== undefined) child.createdAt = submittedAt;
       child.status = 'completed';
       child.finishedAt = steer.steeredAt;
       child.steeredAt = steer.steeredAt;

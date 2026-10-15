@@ -3069,4 +3069,80 @@ describe('foldWireRecordFacts (cold facts)', () => {
       endedAt: new Date(1900).toISOString(),
     });
   });
+
+  it('restores prompt submission times from the durable createdAt fields', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'p1', role: 'user', content: [{ type: 'text', text: 'run' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'working' }], toolCalls: [] },
+    ]);
+    const folded = foldWireRecordFacts(
+      [
+        { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: 'run' }], origin: { kind: 'user' }, promptId: 'p1', createdAt: '2026-01-01T00:00:00.500Z', time: 1000 },
+        { type: 'turn.steer', turnId: 0, promptIds: ['p2'], messageId: 'p2', input: [{ type: 'text', text: 'also this' }], origin: { kind: 'user' }, time: 1500 },
+        { type: 'prompt.steered', activePromptId: 'p1', promptIds: ['p2'], createdAts: { p2: '2026-01-01T00:00:01.200Z' }, steeredAt: '2026-01-01T00:00:01.500Z', time: 1500 },
+        { type: 'turn.ended', turnId: 0, reason: 'completed', time: 2000 },
+      ],
+      base,
+    );
+    expect(folded.prompts.map((entry) => [entry.promptId, entry.createdAt])).toEqual([
+      ['p1', '2026-01-01T00:00:00.500Z'],
+      ['p2', '2026-01-01T00:00:01.200Z'],
+    ]);
+  });
+
+  it('treats a hidden empty thinking part as vacuous when aligning step times', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'p1', role: 'user', content: [{ type: 'text', text: 'hi' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'recovered' }], toolCalls: [] },
+    ]);
+    const folded = foldWireRecordFacts(
+      [
+        { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: 'hi' }], origin: { kind: 'user' }, promptId: 'p1', time: 1000 },
+        { type: 'context.append_loop_event', event: { type: 'step.begin', uuid: 's1', turnId: '0', step: 1 }, time: 1100 },
+        { type: 'context.append_loop_event', event: { type: 'content.part', uuid: 'c1', turnId: '0', step: 1, stepUuid: 's1', part: { type: 'think', think: '', hidden: true } }, time: 1150 },
+        { type: 'context.append_loop_event', event: { type: 'step.end', uuid: 's1', turnId: '0', step: 1, finishReason: 'error' }, time: 1300 },
+        { type: 'context.append_loop_event', event: { type: 'step.begin', uuid: 's2', turnId: '0', step: 2 }, time: 1400 },
+        { type: 'context.append_loop_event', event: { type: 'content.part', uuid: 'c2', turnId: '0', step: 2, stepUuid: 's2', part: { type: 'text', text: 'recovered' } }, time: 1500 },
+        { type: 'context.append_loop_event', event: { type: 'step.end', uuid: 's2', turnId: '0', step: 2, finishReason: 'end_turn' }, time: 1900 },
+        { type: 'turn.ended', turnId: 0, reason: 'completed', time: 2000 },
+      ],
+      base,
+    );
+    const turn = folded.items[0];
+    if (turn?.kind !== 'turn') throw new Error('expected turn');
+    expect(turn.steps).toHaveLength(1);
+    expect(turn.steps[0]).toMatchObject({
+      startedAt: new Date(1400).toISOString(),
+      endedAt: new Date(1900).toISOString(),
+    });
+  });
+
+  it('remaps interrupted steps through the kept wire ordinals after a vacuous retry', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'p1', role: 'user', content: [{ type: 'text', text: 'hi' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }], toolCalls: [] },
+    ]);
+    const folded = foldWireRecordFacts(
+      [
+        { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: 'hi' }], origin: { kind: 'user' }, promptId: 'p1', time: 1000 },
+        { type: 'context.append_loop_event', event: { type: 'step.begin', uuid: 's1', turnId: '0', step: 1 }, time: 1100 },
+        { type: 'context.append_loop_event', event: { type: 'step.end', uuid: 's1', turnId: '0', step: 1, finishReason: 'error' }, time: 1300 },
+        { type: 'context.append_loop_event', event: { type: 'step.begin', uuid: 's2', turnId: '0', step: 2 }, time: 1400 },
+        { type: 'context.append_loop_event', event: { type: 'content.part', uuid: 'c2', turnId: '0', step: 2, stepUuid: 's2', part: { type: 'text', text: 'partial answer' } }, time: 1500 },
+        { type: 'turn.step.interrupted', turnId: 0, step: 2, reason: 'user_cancelled', time: 1800 },
+        { type: 'turn.ended', turnId: 0, reason: 'cancelled', time: 2000 },
+      ],
+      base,
+    );
+    const turn = folded.items[0];
+    if (turn?.kind !== 'turn') throw new Error('expected turn');
+    expect(turn.steps).toHaveLength(1);
+    expect(turn.steps[0]).toMatchObject({
+      ordinal: 1,
+      state: 'interrupted',
+      startedAt: new Date(1400).toISOString(),
+      endedAt: new Date(1800).toISOString(),
+      endReason: 'user_cancelled',
+    });
+  });
 });

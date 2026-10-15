@@ -1202,6 +1202,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
         origin: prompt.origin,
         promptId: prompt.promptId,
         turnId: id,
+        createdAt: prompt.createdAt === '' ? undefined : prompt.createdAt,
       }),
     );
     turn.state = 'running';
@@ -1373,6 +1374,11 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
             messageId,
             content: children.flatMap((child) =>
               stripBundledSkillBlocks(child.projection.message),
+            ),
+            createdAts: Object.fromEntries(
+              children
+                .filter((child) => child.projection.createdAt !== '')
+                .map((child) => [child.waiter.id, child.projection.createdAt]),
             ),
             steeredAt: new Date().toISOString(),
           }),

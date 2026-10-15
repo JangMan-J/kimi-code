@@ -84,6 +84,7 @@ export interface PromptSteeredPayload {
   readonly content: ContentPart[];
   readonly steeredAt: string;
   readonly messageId?: string;
+  readonly createdAts?: Record<string, string>;
 }
 
 const promptSteeredSchema = z.object({
@@ -93,6 +94,7 @@ const promptSteeredSchema = z.object({
   content: z.custom<ContentPart[]>(),
   steeredAt: z.string(),
   messageId: z.string().optional(),
+  createdAts: z.record(z.string(), z.string()).optional(),
 });
 
 export class PromptSteered extends AgentEvent2<z.infer<typeof promptSteeredSchema>> {
