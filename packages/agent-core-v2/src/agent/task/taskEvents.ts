@@ -23,8 +23,7 @@ export class TaskEventStream {
   private seq = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private inFlight = 0;
-  private windowStartedAt = 0;
-  private windowLines = 0;
+  private readonly lineTimestamps: number[] = [];
   private closed = false;
 
   constructor(
@@ -96,12 +95,15 @@ export class TaskEventStream {
 
   private withinRate(): boolean {
     const now = this.now();
-    if (now - this.windowStartedAt >= TASK_EVENT_RATE_WINDOW_MS) {
-      this.windowStartedAt = now;
-      this.windowLines = 0;
+    while (
+      this.lineTimestamps.length > 0 &&
+      now - this.lineTimestamps[0]! >= TASK_EVENT_RATE_WINDOW_MS
+    ) {
+      this.lineTimestamps.shift();
     }
-    this.windowLines += 1;
-    return this.windowLines <= TASK_EVENT_MAX_LINES_PER_WINDOW;
+    if (this.lineTimestamps.length >= TASK_EVENT_MAX_LINES_PER_WINDOW) return false;
+    this.lineTimestamps.push(now);
+    return true;
   }
 
   private schedule(): void {

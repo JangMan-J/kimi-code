@@ -1509,6 +1509,33 @@ describe('TaskEventStream', () => {
     expect(batches[0]!.lines[1]).toBe('next line');
   });
 
+  it('counts recent lines across the old fixed-window boundary', () => {
+    vi.useFakeTimers();
+    const { stream, overflow } = eventStream();
+    stream.append('first\n');
+    vi.advanceTimersByTime(59_999);
+    stream.append('burst\n'.repeat(TASK_EVENT_MAX_LINES_PER_WINDOW - 1));
+    expect(overflow).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    stream.append('one expired line can be replaced\n');
+    expect(overflow).not.toHaveBeenCalled();
+    stream.append('recent burst still counts\n');
+    expect(overflow).toHaveBeenCalledTimes(1);
+    stream.dispose();
+  });
+
+  it('allows a new full burst once all earlier lines are a minute old', () => {
+    vi.useFakeTimers();
+    const { stream, overflow } = eventStream();
+    stream.append('burst\n'.repeat(TASK_EVENT_MAX_LINES_PER_WINDOW));
+    vi.advanceTimersByTime(60_000);
+    stream.append('next burst\n'.repeat(TASK_EVENT_MAX_LINES_PER_WINDOW));
+    expect(overflow).not.toHaveBeenCalled();
+    stream.append('one too many\n');
+    expect(overflow).toHaveBeenCalledTimes(1);
+    stream.dispose();
+  });
+
   it('delivers what it has and reports an overflow once the per-minute line limit is passed', () => {
     vi.useFakeTimers();
     const { stream, batches, overflow } = eventStream();
