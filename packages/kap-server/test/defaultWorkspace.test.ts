@@ -2,9 +2,16 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { IConfigService, IEventService, WorkspaceUpdated } from '@moonshot-ai/agent-core-v2';
+import {
+  IConfigService,
+  IEventService,
+  IWorkspaceService,
+  WorkspaceUpdated,
+  type Scope,
+} from '@moonshot-ai/agent-core-v2';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { startDefaultWorkspacePublisher } from '../src/services/defaultWorkspace/defaultWorkspacePublisher';
 import { type RunningServer, startServer } from '../src/start';
 import { authHeaders } from './helpers/auth';
 import { TEST_HOST_IDENTITY } from './helpers/hostIdentity';
@@ -162,5 +169,41 @@ describe('server-v2 /api/v1/default-workspace', () => {
     expect(rejected.data.reason).toBe(reason);
     const status = await request<StatusWire>('GET', '/api/v1/default-workspace');
     expect(status.data.custom_path).toBe(kept);
+  });
+});
+
+describe('default workspace publisher', () => {
+  it('logs a warning when workspace updates cannot be broadcast', async () => {
+    let onSectionChange: ((event: { domain: string }) => void) | undefined;
+    const services = new Map<unknown, unknown>([
+      [
+        IConfigService,
+        {
+          onDidSectionChange: (listener: (event: { domain: string }) => void) => {
+            onSectionChange = listener;
+            return { dispose: () => undefined };
+          },
+        },
+      ],
+      [
+        IWorkspaceService,
+        {
+          list: async () => {
+            throw new Error('catalog unavailable');
+          },
+        },
+      ],
+      [IEventService, { publish: vi.fn() }],
+    ]);
+    const core = { accessor: { get: (id: unknown) => services.get(id) } } as unknown as Scope;
+    const warn = vi.fn();
+    const publisher = startDefaultWorkspacePublisher(core, { warn });
+
+    onSectionChange?.({ domain: 'defaultWorkspace' });
+
+    await vi.waitFor(() => {
+      expect(warn).toHaveBeenCalledWith({ err: 'catalog unavailable' }, expect.any(String));
+    });
+    publisher.close();
   });
 });

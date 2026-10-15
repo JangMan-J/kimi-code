@@ -390,7 +390,7 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
   };
   const configWarningSubscription = configService.onDidChangeDiagnostics(publishConfigWarnings);
   const configChangedPublisher = startConfigChangedPublisher(core);
-  const defaultWorkspacePublisher = startDefaultWorkspacePublisher(core);
+  const defaultWorkspacePublisher = startDefaultWorkspacePublisher(core, logger);
 
   const pluginService = core.accessor.get(IPluginService);
   const pluginChangeSubscription = pluginService.onDidReload(() => {

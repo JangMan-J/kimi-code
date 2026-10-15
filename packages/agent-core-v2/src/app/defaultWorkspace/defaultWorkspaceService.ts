@@ -169,12 +169,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     const probe = join(dir, `.kimi-code-write-test-${randomUUID()}`);
     let problem: DefaultWorkspaceUnavailableReason | undefined;
     try {
-      if (entry === 'folder') {
-        await this.fs.mkdir(probe);
-        await this.fs.createExclusive(join(probe, 'probe'), new Uint8Array());
-      } else {
-        await this.fs.createExclusive(probe, new Uint8Array());
-      }
+      if (!(await this.createProbe(probe, entry))) return 'unknown';
     } catch (error) {
       problem = reasonOf(error);
     }
@@ -184,6 +179,20 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
       if (!isNotFound(error)) problem ??= reasonOf(error);
     }
     return problem;
+  }
+
+  private async createProbe(probe: string, entry: 'file' | 'folder'): Promise<boolean> {
+    if (entry === 'file') return this.fs.createExclusive(probe, new Uint8Array());
+    try {
+      await this.fs.mkdir(probe);
+    } catch (error) {
+      if (error instanceof HostFsError && error.code === OsFsErrors.codes.OS_FS_ALREADY_EXISTS) {
+        return false;
+      }
+      throw error;
+    }
+    await this.fs.createExclusive(join(probe, 'probe'), new Uint8Array());
+    return true;
   }
 
   private async documentsDir(): Promise<string> {
