@@ -167,6 +167,8 @@ import {
   IAgentTowerService,
   IBootstrapService,
   IConfigService,
+  IDefaultWorkspace,
+  type DefaultWorkspaceStatus,
   IEventService,
   IFlagService,
   IHostEnvironment,
@@ -724,6 +726,14 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
       .get(IWorkspaceInstanceManager)
       .getOrCreate({ root: workDir });
     await handler.program.trust.trust();
+  }
+
+  override async ensureDefaultWorkspace(): Promise<string> {
+    return this.engineAccessor.get(IDefaultWorkspace).ensure();
+  }
+
+  override async getDefaultWorkspaceStatus(): Promise<DefaultWorkspaceStatus> {
+    return this.engineAccessor.get(IDefaultWorkspace).status();
   }
 
   /**

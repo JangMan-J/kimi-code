@@ -22,7 +22,11 @@ import {
   resolveCustomRoot,
   windowsPowerShellPath,
 } from './defaultWorkspacePaths';
-import { DefaultWorkspaceUnavailableError, type DefaultWorkspaceUnavailableReason } from './errors';
+import {
+  DEFAULT_WORKSPACE_PROBLEM_MESSAGES,
+  DefaultWorkspaceUnavailableError,
+  type DefaultWorkspaceUnavailableReason,
+} from './errors';
 
 const WINDOWS_DOCUMENTS_TIMEOUT_MS = 15_000;
 
@@ -210,17 +214,6 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
   }
 }
 
-const UNAVAILABLE_MESSAGES: Record<DefaultWorkspaceUnavailableReason, string> = {
-  blocked_by_file: 'a file is in the way',
-  permission_denied: 'permission denied',
-  missing_parent: 'a parent folder is unavailable',
-  no_space: 'the disk is full',
-  read_only: 'the file system is read-only',
-  invalid_path: 'the path must be absolute',
-  documents_unavailable: 'the Documents folder cannot be located',
-  unknown: 'the folder cannot be created',
-};
-
 function unavailable(
   path: string | undefined,
   reason: DefaultWorkspaceUnavailableReason,
@@ -229,7 +222,7 @@ function unavailable(
   const where = path === undefined ? '' : ` ${path}`;
   return new DefaultWorkspaceUnavailableError(
     { path, reason },
-    `default workspace${where} is unavailable: ${UNAVAILABLE_MESSAGES[reason]}`,
+    `default workspace${where} is unavailable: ${DEFAULT_WORKSPACE_PROBLEM_MESSAGES[reason]}`,
     cause,
   );
 }

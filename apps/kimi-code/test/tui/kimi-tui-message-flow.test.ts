@@ -332,6 +332,10 @@ function makeHarness(session = makeSession(), overrides: Record<string, unknown>
       return interactiveAgentScope.run(agentId, fn);
     }),
     getExperimentalFeatures: vi.fn(async () => []),
+    getDefaultWorkspaceStatus: vi.fn(async () => ({
+      path: '/tmp/default-workspace',
+      exists: true,
+    })),
     auth: {
       status: vi.fn(async () => ({
         providers: [{ providerName: 'managed:kimi-code', hasToken: true }],

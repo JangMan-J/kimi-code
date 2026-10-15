@@ -27,6 +27,19 @@ export type DefaultWorkspaceUnavailableReason =
   | 'documents_unavailable'
   | 'unknown';
 
+export const DEFAULT_WORKSPACE_PROBLEM_MESSAGES: Readonly<
+  Record<DefaultWorkspaceUnavailableReason, string>
+> = {
+  blocked_by_file: 'a file is in the way',
+  permission_denied: 'permission denied',
+  missing_parent: 'a parent folder is unavailable',
+  no_space: 'the disk is full',
+  read_only: 'the file system is read-only',
+  invalid_path: 'the path must be absolute',
+  documents_unavailable: 'the Documents folder cannot be located',
+  unknown: 'the folder cannot be created',
+};
+
 export type DefaultWorkspaceUnavailableDetails = {
   readonly path: string | undefined;
   readonly reason: DefaultWorkspaceUnavailableReason;

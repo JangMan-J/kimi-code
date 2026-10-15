@@ -223,6 +223,10 @@ function makeHarness(session = makeSession(), overrides: Record<string, unknown>
     getExperimentalFeatures: vi.fn(async () => []),
     getWorkspaceTrustInfo: vi.fn(async () => ({ trusted: true, gatedMcpServers: [], gatedAdditionalDirs: [], additionalDirSources: [], warnings: [], instructionSources: { agentsMdPaths: [], skills: [], agentProfiles: [], paths: [] } })),
     refreshProviderModels: vi.fn(async () => ({ changed: [], unchanged: [], failed: [] })),
+    getDefaultWorkspaceStatus: vi.fn(async () => ({
+      path: '/tmp/default-workspace',
+      exists: true,
+    })),
     auth: {
       status: vi.fn(async () => ({ providers: [] })),
       login: vi.fn(async () => {}),

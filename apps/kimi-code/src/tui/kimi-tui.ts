@@ -2712,15 +2712,20 @@ export class KimiTUI {
     this.state.sessionsNextCursor = undefined;
     this.state.sessionsLoadingMore = false;
     try {
-      const page = await this.harness.listSessionsPage({
-        workDir: scope === 'all' ? undefined : this.state.appState.workDir,
-        limit: SESSION_LIST_PAGE_SIZE,
-      });
+      const [page, defaultWorkspace] = await Promise.all([
+        this.harness.listSessionsPage({
+          workDir: scope === 'all' ? undefined : this.state.appState.workDir,
+          limit: SESSION_LIST_PAGE_SIZE,
+        }),
+        this.harness.getDefaultWorkspaceStatus().catch(() => undefined),
+      ]);
+      this.pickerDefaultWorkspacePath = defaultWorkspace?.path;
       this.state.sessionsNextCursor = page.nextCursor;
       this.state.sessions = sessionRowsForPicker(
         page.items,
         this.state.appState.sessionId,
         this.hasSessionContent(),
+        this.pickerDefaultWorkspacePath,
       );
     } catch (error) {
       // The picker must keep working (it renders the empty state), but a
@@ -2775,6 +2780,7 @@ export class KimiTUI {
         page.items,
         this.state.appState.sessionId,
         this.hasSessionContent(),
+        this.pickerDefaultWorkspacePath,
       );
       this.state.sessions = [...this.state.sessions, ...rows];
       this.sessionPickerComponent?.appendSessions(rows);
@@ -2837,7 +2843,10 @@ export class KimiTUI {
 
   private async showResumeOtherWorkDirHint(session: SessionRow): Promise<void> {
     this.hideSessionPicker();
-    const command = `cd ${quoteShellArg(session.work_dir)} && kimi --resume ${quoteShellArg(session.id)}`;
+    const command =
+      session.in_default_workspace === true
+        ? `kimi --default-workspace --resume ${quoteShellArg(session.id)}`
+        : `cd ${quoteShellArg(session.work_dir)} && kimi --resume ${quoteShellArg(session.id)}`;
     const message = `Current session is in a different working directory.\n  To resume, run: ${command}`;
     try {
       await copyTextToClipboard(command);
@@ -4220,6 +4229,7 @@ export class KimiTUI {
   private sessionPickerScopeRequestToken = 0;
   private sessionPickerComponent: SessionPickerComponent | undefined;
   private sessionsPageFetchInFlight: Promise<boolean> | undefined;
+  private pickerDefaultWorkspacePath: string | undefined;
 
   async showSessionPicker(): Promise<void> {
     await this.openSessionPicker({

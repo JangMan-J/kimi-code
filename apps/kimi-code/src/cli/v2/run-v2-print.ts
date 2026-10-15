@@ -27,6 +27,7 @@ import {
   IAuthSummaryService,
   IBootstrapService,
   IConfigService,
+  IDefaultWorkspace,
   IEventBus,
   IEventDispatcher,
   IHostFileSystem,
@@ -116,6 +117,7 @@ import { createKimiCodeHostIdentity } from '../version';
 
 import { resolveOutputFormat } from '../options';
 import type { CLIOptions, PromptOutputFormat } from '../options';
+import { resolveStartupWorkDir } from '../startup-work-dir';
 import {
   type PromptOutput,
   PromptJsonWriter,
@@ -147,7 +149,6 @@ export async function runV2Print(
   const stderr = io.stderr ?? process.stderr;
   const promptProcess = io.process ?? process;
   const outputFormat = resolveOutputFormat(opts);
-  const workDir = process.cwd();
 
   writeExperimentalVersion(version, outputFormat, stdout, stderr);
 
@@ -276,6 +277,10 @@ export async function runV2Print(
         onUnexpectedError: (error) => console.error('[unexpected]', error),
       });
     }
+
+    const workDir = await resolveStartupWorkDir(opts, () =>
+      app.accessor.get(IDefaultWorkspace).ensure(),
+    );
 
     // Print mode has no trust prompt, so the engine's workspace-trust gate
     // would silently drop project-level MCP servers — say so on stderr.
@@ -423,9 +428,12 @@ async function resolveNativeSession(
       throw new Error(`Session "${opts.session}" not found.`);
     }
     if (target.cwd !== undefined && resolve(target.cwd) !== resolve(workDir)) {
+      const inDefaultWorkspace = await app.accessor.get(IDefaultWorkspace).isDefault(target.cwd);
+      const command = inDefaultWorkspace
+        ? `kimi --default-workspace -r ${opts.session}`
+        : `cd "${target.cwd}" && kimi -r ${opts.session}`;
       stderr.write(
-        `Session "${opts.session}" was created under a different directory.\n` +
-          `  cd "${target.cwd}" && kimi -r ${opts.session}\n\n`,
+        `Session "${opts.session}" was created under a different directory.\n  ${command}\n\n`,
       );
       throw new Error(`Session "${opts.session}" was created under a different directory.`);
     }
