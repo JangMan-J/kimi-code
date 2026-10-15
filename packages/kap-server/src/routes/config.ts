@@ -58,6 +58,16 @@ export function registerConfigRoutes(app: ConfigRouteHost, core: Scope): void {
       tags: ['config'],
     },
     async (req, reply) => {
+      if (req.body.default_workspace !== undefined) {
+        reply.send(
+          errEnvelope(
+            ErrorCode.VALIDATION_FAILED,
+            'default_workspace cannot be changed here; use PATCH /api/v1/default-workspace',
+            req.id,
+          ),
+        );
+        return;
+      }
       try {
         const config = core.accessor.get(IConfigService);
         await config.ready;
