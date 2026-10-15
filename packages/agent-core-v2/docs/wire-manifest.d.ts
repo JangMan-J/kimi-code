@@ -542,6 +542,7 @@ interface PromptAbortedPayload {
   agentId: string;
   promptId: string;
   abortedAt: string;
+  createdAt?: string;
 }
 
 /**
@@ -554,6 +555,7 @@ interface PromptCompletedPayload {
   promptId: string;
   finishedAt: string;
   reason: 'completed' | 'failed' | 'blocked';
+  createdAt?: string;
 }
 
 /**

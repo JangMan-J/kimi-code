@@ -113,6 +113,7 @@ interface PromptCompletionPayload {
   readonly finishedAt?: unknown;
   readonly abortedAt?: unknown;
   readonly reason?: unknown;
+  readonly createdAt?: unknown;
 }
 interface PromptSteeredPayload {
   readonly activePromptId?: unknown;
@@ -451,7 +452,11 @@ export function foldWireRecordFacts(
   const promptDrafts = new Map<string, PromptDraft>();
   const promptCompletions = new Map<
     string,
-    { readonly status: TranscriptPromptStatus; readonly finishedAt?: string }
+    {
+      readonly status: TranscriptPromptStatus;
+      readonly finishedAt?: string;
+      readonly createdAt?: string;
+    }
   >();
   const promptSteers: {
     readonly activePromptId?: string;
@@ -1005,7 +1010,11 @@ export function foldWireRecordFacts(
             : typeof payload.abortedAt === 'string'
               ? payload.abortedAt
               : recordTimeIso(record);
-        promptCompletions.set(payload.promptId, { status, finishedAt });
+        const createdAt =
+          typeof payload.createdAt === 'string' && payload.createdAt.length > 0
+            ? payload.createdAt
+            : undefined;
+        promptCompletions.set(payload.promptId, { status, finishedAt, createdAt });
         break;
       }
       case 'prompt.steered': {
@@ -1289,11 +1298,17 @@ export function foldWireRecordFacts(
       child.steeredAt = steer.steeredAt;
     }
   }
+  const rawTurnIdByPromptId = new Map<string, number>();
+  for (const [turnId, promptId] of turnPromptIds) {
+    if (!rawTurnIdByPromptId.has(promptId)) rawTurnIdByPromptId.set(promptId, turnId);
+  }
   for (const [promptId, completion] of promptCompletions) {
     const draft = promptDrafts.get(promptId);
     if (draft === undefined) {
       promptDrafts.set(promptId, {
         promptId,
+        createdAt: completion.createdAt,
+        rawTurnId: rawTurnIdByPromptId.get(promptId),
         status: completion.status,
         finishedAt: completion.finishedAt,
       });

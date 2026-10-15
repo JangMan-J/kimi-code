@@ -3145,4 +3145,58 @@ describe('foldWireRecordFacts (cold facts)', () => {
       endReason: 'user_cancelled',
     });
   });
+
+  it('restores submission times for prompts terminated before launch', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'p1', role: 'user', content: [{ type: 'text', text: 'run' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'working' }], toolCalls: [] },
+    ]);
+    const folded = foldWireRecordFacts(
+      [
+        { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: 'run' }], origin: { kind: 'user' }, promptId: 'p1', createdAt: '2026-01-01T00:00:00.500Z', time: 1000 },
+        { type: 'turn.ended', turnId: 0, reason: 'completed', time: 2000 },
+        { type: 'prompt.completed', promptId: 'q-gated', createdAt: '2026-01-01T00:00:01.200Z', finishedAt: '2026-01-01T00:00:02.500Z', reason: 'blocked', time: 2500 },
+        { type: 'prompt.aborted', promptId: 'q-cancelled', createdAt: '2026-01-01T00:00:01.300Z', abortedAt: '2026-01-01T00:00:02.600Z', time: 2600 },
+      ],
+      base,
+    );
+    expect(folded.prompts).toEqual([
+      expect.objectContaining({ promptId: 'p1', createdAt: '2026-01-01T00:00:00.500Z' }),
+      {
+        promptId: 'q-gated',
+        status: 'blocked',
+        createdAt: '2026-01-01T00:00:01.200Z',
+        finishedAt: '2026-01-01T00:00:02.500Z',
+      },
+      {
+        promptId: 'q-cancelled',
+        status: 'aborted',
+        createdAt: '2026-01-01T00:00:01.300Z',
+        finishedAt: '2026-01-01T00:00:02.600Z',
+      },
+    ]);
+  });
+
+  it('hides terminal non-user prompts when their owning turn is undone', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'sp1', role: 'user', content: [{ type: 'text', text: '/pdf summarize' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'done' }], toolCalls: [] },
+    ]);
+    const records = (withUndo: boolean): HistoryWireRecord[] => [
+      { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: '/pdf summarize' }], origin: { kind: 'skill_activation', trigger: 'user-slash' }, promptId: 'sp1', time: 1 },
+      { type: 'context.append_message', message: { id: 'sp1', role: 'user', origin: { kind: 'skill_activation', trigger: 'user-slash' } }, time: 2 },
+      { type: 'turn.ended', turnId: 0, reason: 'completed', time: 3 },
+      { type: 'prompt.completed', promptId: 'sp1', finishedAt: '2026-01-01T00:00:03.000Z', reason: 'completed', time: 3 },
+      ...(withUndo ? [{ type: 'context.undo', count: 1, time: 4 }] : []),
+    ];
+    const kept = foldWireRecordFacts(records(false), base);
+    expect(kept.prompts.map((entry) => entry.promptId)).toEqual(['sp1']);
+    expect(kept.prompts[0]).toMatchObject({
+      status: 'completed',
+      finishedAt: '2026-01-01T00:00:03.000Z',
+    });
+    expect(kept.prompts[0]?.content).toBeUndefined();
+    const undone = foldWireRecordFacts(records(true), base);
+    expect(undone.prompts).toEqual([]);
+  });
 });

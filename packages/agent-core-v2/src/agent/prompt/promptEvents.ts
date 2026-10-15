@@ -11,6 +11,7 @@ export interface PromptCompletedPayload {
   readonly promptId: string;
   readonly finishedAt: string;
   readonly reason: 'completed' | 'failed' | 'blocked';
+  readonly createdAt?: string;
 }
 
 const promptCompletedSchema = z.object({
@@ -18,6 +19,7 @@ const promptCompletedSchema = z.object({
   promptId: z.string().min(1),
   finishedAt: z.string(),
   reason: z.union([z.literal('completed'), z.literal('failed'), z.literal('blocked')]),
+  createdAt: z.string().optional(),
 });
 
 export class PromptCompleted extends AgentEvent2<z.infer<typeof promptCompletedSchema>> {
@@ -39,12 +41,14 @@ export interface PromptAbortedPayload {
   readonly agentId: string;
   readonly promptId: string;
   readonly abortedAt: string;
+  readonly createdAt?: string;
 }
 
 const promptAbortedSchema = z.object({
   agentId: z.string(),
   promptId: z.string().min(1),
   abortedAt: z.string(),
+  createdAt: z.string().optional(),
 });
 
 export class PromptAborted extends AgentEvent2<z.infer<typeof promptAbortedSchema>> {
