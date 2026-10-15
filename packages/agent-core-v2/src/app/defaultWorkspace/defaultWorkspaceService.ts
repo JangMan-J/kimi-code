@@ -75,7 +75,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     const path =
       customPath === undefined
         ? systemPath
-        : resolveCustomRoot(customPath, this.bootstrap.osHomeDir);
+        : resolveCustomRoot(customPath, this.bootstrap.osHomeDir, this.bootstrap.platform);
     if (path === undefined) {
       const problem = customPath === undefined ? 'documents_unavailable' : 'invalid_path';
       return { path, customPath, systemPath, exists: false, problem };
@@ -92,7 +92,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
       await this.config.replace(DEFAULT_WORKSPACE_SECTION, {});
       return this.status();
     }
-    const root = resolveCustomRoot(trimmed, this.bootstrap.osHomeDir);
+    const root = resolveCustomRoot(trimmed, this.bootstrap.osHomeDir, this.bootstrap.platform);
     if (root === undefined) {
       throw unavailable(trimmed, 'invalid_path');
     }
@@ -116,7 +116,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     await this.config.ready;
     const customPath = this.customPath();
     if (customPath === undefined) return this.systemRoot();
-    const root = resolveCustomRoot(customPath, this.bootstrap.osHomeDir);
+    const root = resolveCustomRoot(customPath, this.bootstrap.osHomeDir, this.bootstrap.platform);
     if (root === undefined) throw unavailable(customPath, 'invalid_path');
     return root;
   }

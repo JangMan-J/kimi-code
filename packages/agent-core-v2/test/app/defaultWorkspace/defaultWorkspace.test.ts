@@ -16,6 +16,7 @@ import { IDefaultWorkspace } from '#/app/defaultWorkspace/defaultWorkspace';
 import {
   parseWindowsDocumentsOutput,
   parseXdgDocumentsDir,
+  resolveCustomRoot,
 } from '#/app/defaultWorkspace/defaultWorkspacePaths';
 import { DefaultWorkspaceService } from '#/app/defaultWorkspace/defaultWorkspaceService';
 import { LifecycleScope } from '#/app/scopes';
@@ -49,6 +50,14 @@ describe('default workspace paths', () => {
     );
     expect(parseWindowsDocumentsOutput('\r\n')).toBeUndefined();
     expect(parseWindowsDocumentsOutput('Documents')).toBeUndefined();
+  });
+
+  it('judges custom paths by the host platform', () => {
+    expect(resolveCustomRoot('C:\\Chats', '/home/alice', 'linux')).toBeUndefined();
+    expect(resolveCustomRoot('/srv/chats', '/home/alice', 'linux')).toBe('/srv/chats');
+    expect(resolveCustomRoot('C:\\Chats', 'C:\\Users\\alice', 'win32')).toBe('C:/Chats');
+    expect(resolveCustomRoot('~\\Chats', 'C:\\Users\\alice', 'win32')).toBe('C:/Users/alice/Chats');
+    expect(resolveCustomRoot('Chats', 'C:\\Users\\alice', 'win32')).toBeUndefined();
   });
 });
 
@@ -298,6 +307,16 @@ describe('DefaultWorkspaceService', () => {
 
       await expect(service.ensure()).rejects.toMatchObject(unavailable('invalid_path'));
       expect(await service.status()).toMatchObject({ path: undefined, problem: 'invalid_path' });
+    });
+
+    it('rejects a Windows drive path on a POSIX host', async () => {
+      const sections: Record<string, unknown> = {};
+      const service = build({}, undefined, sections);
+
+      await expect(service.setCustomPath('C:\\Chats')).rejects.toMatchObject(
+        unavailable('invalid_path'),
+      );
+      expect(sections['defaultWorkspace']).toBeUndefined();
     });
 
     it('saves the trimmed path and reports both locations', async () => {
