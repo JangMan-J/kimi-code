@@ -1,5 +1,4 @@
 import type { ILogger } from '#/_base/log/log';
-import type { IGitService } from '#/app/git/git';
 import type { IHostProcessService } from '#/os/interface/hostProcess';
 
 export const DEFAULT_AGENT_PROFILE_NAME = 'agent';
@@ -8,7 +7,6 @@ export interface AgentProfilePromptPrefixContext {
   readonly cwd: string;
   readonly process: IHostProcessService;
   readonly log?: ILogger;
-  readonly git?: IGitService;
 }
 
 export interface AgentProfileContext {
@@ -25,6 +23,7 @@ export interface AgentProfileContext {
   readonly productName?: string;
   readonly replyStyleGuide?: string;
   readonly notifyUserActive?: boolean;
+  readonly todoListActive?: boolean;
   readonly [key: string]: unknown;
 }
 
