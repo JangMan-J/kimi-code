@@ -50,8 +50,9 @@ export class ProcessTask implements AgentTask {
   ) {}
 
   async start(sink: AgentTaskSink): Promise<void> {
+    const stdoutDrained = observeProcessStream(this.proc.stdout, 'stdout', sink, this.onOutput, this.stdoutEvents);
     const streamDrained = Promise.all([
-      observeProcessStream(this.proc.stdout, 'stdout', sink, this.onOutput, this.stdoutEvents),
+      stdoutDrained,
       observeProcessStream(this.proc.stderr, 'stderr', sink, this.onOutput, false),
     ]).then(() => undefined);
     void streamDrained.catch(() => {});
@@ -68,7 +69,7 @@ export class ProcessTask implements AgentTask {
     let settlement: AgentTaskSettlement;
     try {
       const exitCode = await this.proc.wait();
-      if (this.stdoutEvents) await waitForStreamEndOrAbort(streamDrained, sink.signal);
+      if (this.stdoutEvents) await waitForStreamEndOrAbort(stdoutDrained, sink.signal);
       await waitForStreamDrain(streamDrained);
       this.exitCode = exitCode;
       settlement = {

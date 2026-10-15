@@ -1672,6 +1672,27 @@ describe('AgentTaskService monitor events', () => {
     await fixture.ctx.dispose();
   });
 
+  it('settles a monitor after stdout closes even if a descendant keeps stderr open', async () => {
+    const fixture = createAgentTaskService();
+    const notes = captureNotifications(fixture);
+    const { proc, stdout, stderr } = controllableProcess();
+    const taskId = fixture.manager.registerTask(
+      new MonitorProcessTask({ ...proc, wait: async () => 0 }, 'watch &', 'watch app log'),
+    );
+    stdout.end('final line\n');
+    stderr.write('diagnostic output\n');
+    await waitForTerminal(fixture.manager, taskId);
+    expect(fixture.manager.getTask(taskId)?.status).toBe('completed');
+    expect(stderr.readableEnded).toBe(false);
+    expect(proc.dispose).toHaveBeenCalled();
+    await vi.waitFor(() => { expect(notes).toHaveLength(2); });
+    expect(noteText(notes[0]!)).toContain('final line');
+    expect(noteText(notes[0]!)).not.toContain('diagnostic output');
+    expect(noteText(notes[1]!)).toContain('type="task.completed"');
+    stderr.end();
+    await fixture.ctx.dispose();
+  });
+
   it('stops a monitor whose shell exited while its stdout is still open', async () => {
     const fixture = createAgentTaskService();
     captureNotifications(fixture);

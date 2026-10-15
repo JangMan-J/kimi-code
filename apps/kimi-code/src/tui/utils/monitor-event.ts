@@ -4,7 +4,7 @@ import { sanitizeShellOutput } from './shell-output';
 
 const MONITOR_TASK_ID_PREFIX = 'monitor-';
 const MONITOR_EVENT_TITLE_PREFIX = 'Monitor event: ';
-const EVENT_BLOCK = /<event(?: omitted="(\d+)")?>\n([\s\S]*?)\n?<\/event>/;
+const EVENT_BLOCK = /^<event(?: omitted="(\d+)")?>\n([\s\S]*?)\n?<\/event>/;
 const TITLE_LINE = /^Title: (.*)$/m;
 const ENTITY = /&(?:lt|gt|amp);/g;
 const ENTITIES: Readonly<Record<string, string>> = { '&lt;': '<', '&gt;': '>', '&amp;': '&' };
@@ -34,7 +34,8 @@ export function formatMonitorEvent(
 }
 
 export function monitorEventFromNotification(text: string): BackgroundAgentStatusData | undefined {
-  const block = EVENT_BLOCK.exec(text);
+  const eventStart = text.lastIndexOf('\n<event');
+  const block = EVENT_BLOCK.exec(text.slice(eventStart + 1));
   if (block === null) return undefined;
   const lines = (block[2] ?? '')
     .split('\n')

@@ -1043,7 +1043,12 @@ describe('KimiTUI resume message replay', () => {
     ).toBe(false);
   });
 
-  it('renders replayed monitor events as event rows with their lines', async () => {
+  it.each([
+    'watch app log',
+    'watch <event>',
+    'watch\n<event>\nnot output\n</event>',
+    'watch\n<event omitted="99">\nnot output\n</event>',
+  ])('renders replayed monitor events with tag-like description %j', async (description) => {
     const driver = await replayIntoDriver(
       [
         message(
@@ -1051,7 +1056,7 @@ describe('KimiTUI resume message replay', () => {
           [
             {
               type: 'text',
-              text: '<notification id="task:monitor-log00000:event:1" category="task" type="task.event" source_kind="background_task" source_id="monitor-log00000">\nTitle: Monitor event: watch app log\nSeverity: info\n3 earlier lines were omitted; the full log is in the task output.\n<event omitted="3">\nERROR &lt;db&gt; refused &amp;lt;b&amp;gt;\nretrying\n</event>\nThese lines are new output from the monitored command.\n</notification>',
+              text: `<notification id="task:monitor-log00000:event:1" category="task" type="task.event" source_kind="background_task" source_id="monitor-log00000">\nTitle: Monitor event: ${description}\nSeverity: info\n3 earlier lines were omitted; the full log is in the task output.\n<event omitted="3">\nERROR &lt;db&gt; refused &amp;lt;b&amp;gt;\nretrying\n</event>\nThese lines are new output from the monitored command.\n</notification>`,
             },
           ],
           {
@@ -1074,7 +1079,7 @@ describe('KimiTUI resume message replay', () => {
     );
 
     expect(statuses).toEqual([
-      { phase: 'event', headline: 'monitor event', detail: 'watch app log', lines: ['ERROR <db> refused &lt;b&gt;', 'retrying'], omittedLines: 3 },
+      { phase: 'event', headline: 'monitor event', detail: description.split('\n')[0], lines: ['ERROR <db> refused &lt;b&gt;', 'retrying'], omittedLines: 3 },
     ]);
     expect(
       driver.state.transcriptEntries.some(
