@@ -671,7 +671,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 成功时，`data` 为新会话的 [session 对象](#session-对象)。
 
 - `40001`：`workspace_id`、`metadata.cwd`、`default_workspace` 都未提供，`default_workspace` 与另外两者之一同时提供，或 `metadata.cwd` 与工作区根目录不一致（`details` 会列出该字段）
-- `40409`：工作目录不存在或不是目录，或默认工作区路径被同名文件占用
+- `40409`：工作目录不存在或不是目录、默认工作区路径被同名文件占用，或无法定位文稿目录（Windows 注册表查询失败）
 - `40410`：没有以该 `workspace_id` 注册的工作区
 - `40411`：创建默认工作区目录时权限不足
 

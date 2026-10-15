@@ -75,14 +75,69 @@ describe('DefaultWorkspaceService', () => {
     await fsp.rm(osHomeDir, { recursive: true, force: true });
   });
 
-  function build(env: NodeJS.ProcessEnv = {}): IDefaultWorkspace {
+  function build(
+    env: NodeJS.ProcessEnv = {},
+    windows?: { spawn: IHostProcessService['spawn'] },
+  ): IDefaultWorkspace {
+    const bootstrap = stubBootstrap('/tmp/kimi-home', env, {}, osHomeDir);
     currentHost = createScopedTestHost([
-      stubPair(IBootstrapService, stubBootstrap('/tmp/kimi-home', env, {}, osHomeDir)),
+      stubPair(
+        IBootstrapService,
+        windows === undefined ? bootstrap : { ...bootstrap, platform: 'win32' },
+      ),
       stubPair(IHostFileSystem, new HostFileSystem()),
-      stubPair(IHostProcessService, {} as IHostProcessService),
+      stubPair(IHostProcessService, (windows ?? {}) as IHostProcessService),
     ]);
     return currentHost.app.accessor.get(IDefaultWorkspace);
   }
+
+  function registryReply(documentsDir: string): IHostProcessService['spawn'] {
+    const output = `    Personal    REG_SZ    ${documentsDir}\r\n`;
+    return (async () => ({
+      stdout: (async function* () {
+        yield output;
+      })(),
+      wait: async () => 0,
+      dispose: () => undefined,
+    })) as unknown as IHostProcessService['spawn'];
+  }
+
+  const registryUnavailable = (async () => {
+    throw new Error('spawn reg ENOENT');
+  }) as unknown as IHostProcessService['spawn'];
+
+  it('places the directory under the Windows registered documents folder', async () => {
+    const documentsDir = join(osHomeDir, 'OneDrive', 'Docs');
+
+    const root = await build({}, { spawn: registryReply(documentsDir) }).ensure();
+
+    expect(root).toBe(join(documentsDir, 'KimiCode', 'Default'));
+  });
+
+  it('fails instead of falling back when the Windows documents folder cannot be resolved', async () => {
+    const service = build({}, { spawn: registryUnavailable });
+
+    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    expect(await service.isDefault(join(osHomeDir, 'Documents', 'KimiCode', 'Default'))).toBe(
+      false,
+    );
+    await expect(fsp.stat(join(osHomeDir, 'Documents'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('retries the Windows documents lookup after a failure', async () => {
+    const documentsDir = join(osHomeDir, 'Docs');
+    let attempts = 0;
+    const spawn = ((...args: Parameters<IHostProcessService['spawn']>) => {
+      attempts += 1;
+      return attempts === 1 ? registryUnavailable(...args) : registryReply(documentsDir)(...args);
+    }) as IHostProcessService['spawn'];
+    const service = build({}, { spawn });
+
+    await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
+    expect(await service.ensure()).toBe(join(documentsDir, 'KimiCode', 'Default'));
+  });
 
   it('creates the directory on first use and reuses it afterwards', async () => {
     const service = build();

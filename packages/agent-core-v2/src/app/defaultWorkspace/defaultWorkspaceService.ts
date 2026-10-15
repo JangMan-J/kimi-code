@@ -54,34 +54,58 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
   }
 
   async isDefault(root: string): Promise<boolean> {
-    return workspaceRootKey(root) === workspaceRootKey(await this.root());
+    const defaultRoot = await this.root().catch(() => undefined);
+    return defaultRoot !== undefined && workspaceRootKey(root) === workspaceRootKey(defaultRoot);
   }
 
   private root(): Promise<string> {
-    this.rootPromise ??= this.documentsDir().then((dir) =>
-      join(dir, ...DEFAULT_WORKSPACE_RELATIVE_ROOT),
-    );
+    if (this.rootPromise === undefined) {
+      const pending = this.documentsDir().then((dir) =>
+        join(dir, ...DEFAULT_WORKSPACE_RELATIVE_ROOT),
+      );
+      this.rootPromise = pending;
+      pending.catch(() => {
+        if (this.rootPromise === pending) this.rootPromise = undefined;
+      });
+    }
     return this.rootPromise;
   }
 
   private async documentsDir(): Promise<string> {
+    if (this.bootstrap.platform === 'win32') return this.windowsDocumentsDir();
     const fallback = defaultDocumentsDir(this.bootstrap.osHomeDir);
     if (this.bootstrap.platform === 'darwin') return fallback;
-    if (this.bootstrap.platform === 'win32') return (await this.windowsDocumentsDir()) ?? fallback;
     return (await this.xdgDocumentsDir()) ?? fallback;
   }
 
-  private async windowsDocumentsDir(): Promise<string | undefined> {
-    const proc = await this.processes
-      .spawn('reg', ['query', WINDOWS_SHELL_FOLDERS_KEY, '/v', 'Personal'], { windowsHide: true })
-      .catch(() => undefined);
-    if (proc === undefined) return undefined;
+  private async windowsDocumentsDir(): Promise<string> {
+    let dir: string | undefined;
+    let cause: unknown;
+    try {
+      dir = await this.queryWindowsPersonalFolder();
+    } catch (error) {
+      cause = error;
+    }
+    if (dir === undefined) {
+      throw new Error2(
+        ErrorCodes.FS_PATH_NOT_FOUND,
+        'cannot locate the Documents folder in the Windows registry',
+        { cause },
+      );
+    }
+    return dir;
+  }
+
+  private async queryWindowsPersonalFolder(): Promise<string | undefined> {
+    const proc = await this.processes.spawn(
+      'reg',
+      ['query', WINDOWS_SHELL_FOLDERS_KEY, '/v', 'Personal'],
+      { windowsHide: true },
+    );
     try {
       const [stdout, exitCode] = await Promise.all([collect(proc.stdout), proc.wait()]);
       if (exitCode !== 0) return undefined;
       return parseWindowsPersonalFolder(stdout, (name) => this.bootstrap.getEnv(name));
-    } catch {
-      return undefined;
     } finally {
       void proc.dispose();
     }
