@@ -1,4 +1,4 @@
-import { IConfigService, type Scope } from '@moonshot-ai/agent-core-v2';
+import { DEFAULT_WORKSPACE_SECTION, IConfigService, type Scope } from '@moonshot-ai/agent-core-v2';
 
 import { errEnvelope, okEnvelope } from '../envelope';
 import { requestLog } from '../lib/requestLog';
@@ -96,6 +96,7 @@ export function registerConfigRoutes(app: ConfigRouteHost, core: Scope): void {
 export function toConfigResponse(resolved: Record<string, unknown>): ConfigResponse {
   const wire: Record<string, unknown> = {};
   for (const [domain, value] of Object.entries(resolved)) {
+    if (domain === DEFAULT_WORKSPACE_SECTION) continue;
     wire[camelToSnake(domain)] =
       domain === 'providers'
         ? toProviderResponses(value)
