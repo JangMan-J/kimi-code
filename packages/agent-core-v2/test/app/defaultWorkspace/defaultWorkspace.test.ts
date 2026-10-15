@@ -55,6 +55,10 @@ describe('default workspace paths', () => {
   it('judges custom paths by the host platform', () => {
     expect(resolveCustomRoot('C:\\Chats', '/home/alice', 'linux')).toBeUndefined();
     expect(resolveCustomRoot('/srv/chats', '/home/alice', 'linux')).toBe('/srv/chats');
+    expect(resolveCustomRoot('/srv/chats\\archive', '/home/alice', 'linux')).toBe(
+      '/srv/chats\\archive',
+    );
+    expect(resolveCustomRoot('~\\Chats', '/home/alice', 'linux')).toBeUndefined();
     expect(resolveCustomRoot('C:\\Chats', 'C:\\Users\\alice', 'win32')).toBe('C:/Chats');
     expect(resolveCustomRoot('~\\Chats', 'C:\\Users\\alice', 'win32')).toBe('C:/Users/alice/Chats');
     expect(resolveCustomRoot('Chats', 'C:\\Users\\alice', 'win32')).toBeUndefined();

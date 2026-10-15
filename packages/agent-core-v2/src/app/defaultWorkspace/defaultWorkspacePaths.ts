@@ -43,7 +43,10 @@ export function resolveCustomRoot(
   osHomeDir: string,
   platform: NodeJS.Platform,
 ): string | undefined {
-  const expanded = /^~(?=$|[\\/])/.test(raw) ? osHomeDir + raw.slice(1) : raw;
-  const hostPath = platform === 'win32' ? win32 : posix;
-  return hostPath.isAbsolute(expanded) ? normalize(expanded) : undefined;
+  if (platform === 'win32') {
+    const expanded = /^~(?=$|[\\/])/.test(raw) ? osHomeDir + raw.slice(1) : raw;
+    return win32.isAbsolute(expanded) ? normalize(expanded) : undefined;
+  }
+  const expanded = /^~(?=$|\/)/.test(raw) ? osHomeDir + raw.slice(1) : raw;
+  return posix.isAbsolute(expanded) ? posix.normalize(expanded) : undefined;
 }
