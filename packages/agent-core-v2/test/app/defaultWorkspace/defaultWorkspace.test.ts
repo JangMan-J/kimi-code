@@ -69,6 +69,10 @@ describe('default workspace paths', () => {
     expect(resolveCustomRoot('\\\\server\\share\\Chats', 'C:\\Users\\alice', 'win32')).toBe(
       '//server/share/Chats',
     );
+    expect(resolveCustomRoot('C:\\..\\Chats', 'C:\\Users\\alice', 'win32')).toBe('C:/Chats');
+    expect(resolveCustomRoot('\\\\server\\share\\..\\Chats', 'C:\\Users\\alice', 'win32')).toBe(
+      '//server/share/Chats',
+    );
   });
 });
 

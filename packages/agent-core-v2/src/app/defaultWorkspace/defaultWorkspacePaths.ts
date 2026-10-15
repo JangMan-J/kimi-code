@@ -1,4 +1,4 @@
-import { posix } from 'node:path';
+import { posix, win32 } from 'node:path';
 
 import { isAbsolute, join, normalize } from 'pathe';
 
@@ -47,7 +47,9 @@ export function resolveCustomRoot(
 ): string | undefined {
   if (platform === 'win32') {
     const expanded = /^~(?=$|[\\/])/.test(raw) ? osHomeDir + raw.slice(1) : raw;
-    return FULLY_QUALIFIED_WIN32_PATH.test(expanded) ? normalize(expanded) : undefined;
+    if (!FULLY_QUALIFIED_WIN32_PATH.test(expanded)) return undefined;
+    const resolved = win32.normalize(expanded);
+    return FULLY_QUALIFIED_WIN32_PATH.test(resolved) ? normalize(resolved) : undefined;
   }
   const expanded = /^~(?=$|\/)/.test(raw) ? osHomeDir + raw.slice(1) : raw;
   return posix.isAbsolute(expanded) ? posix.normalize(expanded) : undefined;
