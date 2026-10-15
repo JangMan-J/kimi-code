@@ -3255,4 +3255,32 @@ describe('foldWireRecordFacts (cold facts)', () => {
       },
     ]);
   });
+
+  it('synthesizes the active prompt from steer records when its turn.prompt created no draft', () => {
+    const base = groupMessagesIntoSnapshot([
+      { id: 'cmd1', role: 'user', content: [{ type: 'text', text: '/review run' }], toolCalls: [], origin: { kind: 'user' } },
+      { role: 'assistant', content: [{ type: 'text', text: 'reviewing' }], toolCalls: [] },
+    ]);
+    const folded = foldWireRecordFacts(
+      [
+        { type: 'turn.prompt', turnId: 0, input: [{ type: 'text', text: '/review run' }], origin: { kind: 'plugin_command', trigger: 'user-slash' }, promptId: 'cmd1', time: 1000 },
+        { type: 'prompt.steered', activePromptId: 'cmd1', promptIds: ['p2'], content: [{ type: 'text', text: 'add this' }], steeredAt: '2026-01-01T00:00:01.500Z', time: 1500 },
+        { type: 'turn.steer', turnId: 0, promptIds: ['p2'], messageId: 'p2', input: [{ type: 'text', text: 'add this' }], origin: { kind: 'user' }, time: 1500 },
+        { type: 'turn.ended', turnId: 0, reason: 'completed', time: 2000 },
+        { type: 'prompt.completed', promptId: 'cmd1', finishedAt: '2026-01-01T00:00:02.000Z', reason: 'completed', time: 2000 },
+      ],
+      base,
+    );
+    expect(folded.prompts).toEqual([
+      expect.objectContaining({ promptId: 'p2', status: 'completed' }),
+      {
+        promptId: 'cmd1',
+        status: 'completed',
+        content: [{ type: 'text', text: 'add this' }],
+        createdAt: '2026-01-01T00:00:01.500Z',
+        finishedAt: '2026-01-01T00:00:02.000Z',
+        steeredAt: '2026-01-01T00:00:01.500Z',
+      },
+    ]);
+  });
 });

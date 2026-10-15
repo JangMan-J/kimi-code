@@ -1273,11 +1273,11 @@ export function foldWireRecordFacts(
         })
       : base.items;
 
+  const rawTurnIdByPromptId = new Map<string, number>();
+  for (const [turnId, promptId] of turnPromptIds) {
+    if (!rawTurnIdByPromptId.has(promptId)) rawTurnIdByPromptId.set(promptId, turnId);
+  }
   for (const steer of promptSteers) {
-    if (steer.activePromptId !== undefined) {
-      const active = promptDrafts.get(steer.activePromptId);
-      if (active !== undefined) active.steeredAt = steer.steeredAt;
-    }
     for (const promptId of steer.promptIds) {
       const submittedAt = steer.createdAts?.[promptId];
       const child = promptDrafts.get(promptId);
@@ -1305,10 +1305,21 @@ export function foldWireRecordFacts(
       child.finishedAt = steer.steeredAt;
       child.steeredAt = steer.steeredAt;
     }
-  }
-  const rawTurnIdByPromptId = new Map<string, number>();
-  for (const [turnId, promptId] of turnPromptIds) {
-    if (!rawTurnIdByPromptId.has(promptId)) rawTurnIdByPromptId.set(promptId, turnId);
+    if (steer.activePromptId !== undefined) {
+      const active = promptDrafts.get(steer.activePromptId);
+      if (active !== undefined) {
+        active.steeredAt = steer.steeredAt;
+      } else {
+        promptDrafts.set(steer.activePromptId, {
+          promptId: steer.activePromptId,
+          content: projectPromptContent(steer.content, undefined),
+          createdAt: steer.steeredAt,
+          rawTurnId: rawTurnIdByPromptId.get(steer.activePromptId),
+          status: 'running',
+          steeredAt: steer.steeredAt,
+        });
+      }
+    }
   }
   for (const [promptId, completion] of promptCompletions) {
     const draft = promptDrafts.get(promptId);
