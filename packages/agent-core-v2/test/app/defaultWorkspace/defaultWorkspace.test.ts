@@ -253,6 +253,23 @@ describe('DefaultWorkspaceService', () => {
       await fsp.chmod(documents, 0o500);
 
       await expect(build().ensure()).rejects.toMatchObject(unavailable('permission_denied'));
+      expect(await build().status()).toMatchObject({ exists: false, problem: 'permission_denied' });
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'reports a dangling symlink in the path the same way creating the folder fails',
+    async () => {
+      const documents = join(osHomeDir, 'Documents');
+      await fsp.mkdir(documents, { recursive: true });
+      await fsp.symlink(join(osHomeDir, 'gone'), join(documents, 'KimiCode'));
+      const service = build();
+
+      expect(await service.status()).toMatchObject({ exists: false, problem: 'blocked_by_file' });
+      await expect(
+        service.setCustomPath(join(documents, 'KimiCode', 'Chats')),
+      ).rejects.toMatchObject(unavailable('blocked_by_file'));
+      await expect(service.ensure()).rejects.toMatchObject(unavailable('blocked_by_file'));
     },
   );
 
@@ -307,6 +324,27 @@ describe('DefaultWorkspaceService', () => {
       expect(sections['defaultWorkspace']).toEqual({});
       expect(status.path).toBe(join(osHomeDir, 'Documents', 'KimiCode', 'Default'));
       expect(status.customPath).toBeUndefined();
+    });
+
+    it('keeps the custom location when the system location is unusable', async () => {
+      await fsp.writeFile(join(osHomeDir, 'Documents'), 'not a folder', 'utf8');
+      const sections: Record<string, unknown> = { defaultWorkspace: { path: '~/Kept' } };
+      const service = build({}, undefined, sections);
+
+      await expect(service.setCustomPath(undefined)).rejects.toMatchObject(
+        unavailable('blocked_by_file'),
+      );
+      expect(sections['defaultWorkspace']).toEqual({ path: '~/Kept' });
+    });
+
+    it('keeps the custom location when the Windows documents folder cannot be located', async () => {
+      const sections: Record<string, unknown> = { defaultWorkspace: { path: 'C:\\Kept' } };
+      const service = build({}, { spawn: shellUnavailable }, sections);
+
+      await expect(service.setCustomPath(undefined)).rejects.toMatchObject(
+        unavailable('documents_unavailable'),
+      );
+      expect(sections['defaultWorkspace']).toEqual({ path: 'C:\\Kept' });
     });
 
     it('refuses an unusable folder and keeps the saved location', async () => {

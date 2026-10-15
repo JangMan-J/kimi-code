@@ -82,6 +82,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     await this.config.ready;
     const trimmed = path?.trim() ?? '';
     if (trimmed.length === 0) {
+      await this.assertUsable(await this.systemRoot());
       await this.config.replace(DEFAULT_WORKSPACE_SECTION, {});
       return this.status();
     }
@@ -89,10 +90,14 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     if (root === undefined) {
       throw unavailable(trimmed, 'invalid_path');
     }
-    const { problem } = await this.probe(root, { writable: true });
-    if (problem !== undefined) throw unavailable(root, problem);
+    await this.assertUsable(root);
     await this.config.set(DEFAULT_WORKSPACE_SECTION, { path: trimmed });
     return this.status();
+  }
+
+  private async assertUsable(root: string): Promise<void> {
+    const { problem } = await this.probe(root);
+    if (problem !== undefined) throw unavailable(root, problem);
   }
 
   private customPath(): string | undefined {
@@ -123,7 +128,7 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     return this.systemRootPromise;
   }
 
-  private async probe(root: string, options?: { writable?: boolean }): Promise<PathProbe> {
+  private async probe(root: string): Promise<PathProbe> {
     let existing = root;
     for (;;) {
       try {
@@ -132,14 +137,22 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
         break;
       } catch (error) {
         if (!isNotFound(error)) return { exists: false, problem: reasonOf(error) };
+        if (await this.isDanglingLink(existing)) return { exists: false, problem: 'blocked_by_file' };
         const parent = dirname(existing);
         if (parent === existing) return { exists: false, problem: 'missing_parent' };
         existing = parent;
       }
     }
-    const exists = existing === root;
-    const problem = options?.writable === true ? await this.writeProblem(existing) : undefined;
-    return { exists, problem };
+    return { exists: existing === root, problem: await this.writeProblem(existing) };
+  }
+
+  private async isDanglingLink(path: string): Promise<boolean> {
+    try {
+      await this.fs.lstat(path);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async writeProblem(dir: string): Promise<DefaultWorkspaceUnavailableReason | undefined> {
