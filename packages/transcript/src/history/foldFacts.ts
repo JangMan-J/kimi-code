@@ -130,9 +130,9 @@ interface PromptDraft {
   readonly promptId: string;
   readonly content?: unknown;
   readonly clientMetadata?: TranscriptPrompt['clientMetadata'];
-  readonly createdAt?: string;
   readonly rawTurnId?: number;
   userMessageId?: string;
+  createdAt?: string;
   status?: TranscriptPromptStatus;
   finishedAt?: string;
   steeredAt?: string;
