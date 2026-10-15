@@ -190,7 +190,7 @@ import { startupTrace } from '#/utils/startup-trace';
 import { REPLAY_FETCH_TURN_LIMIT } from './utils/message-replay';
 import { hasPatchChanges } from './utils/object-patch';
 import { beginScreenTakeover, endScreenTakeover, type ScreenTakeover } from './utils/screen-takeover';
-import { sessionRowsForPicker } from './utils/session-picker-rows';
+import { markDefaultWorkspaceRows, sessionRowsForPicker } from './utils/session-picker-rows';
 import { formatStepRetryDetail, formatStepRetryLabel } from './utils/step-retry';
 import { formatBashOutputForDisplay } from './utils/shell-output';
 import { lazyModelSelection } from './utils/model-switch';
@@ -2711,15 +2711,12 @@ export class KimiTUI {
     this.state.sessionsScope = scope;
     this.state.sessionsNextCursor = undefined;
     this.state.sessionsLoadingMore = false;
+    this.refreshPickerDefaultWorkspace();
     try {
-      const [page, defaultWorkspace] = await Promise.all([
-        this.harness.listSessionsPage({
-          workDir: scope === 'all' ? undefined : this.state.appState.workDir,
-          limit: SESSION_LIST_PAGE_SIZE,
-        }),
-        this.harness.getDefaultWorkspaceStatus().catch(() => undefined),
-      ]);
-      this.pickerDefaultWorkspacePath = defaultWorkspace?.path;
+      const page = await this.harness.listSessionsPage({
+        workDir: scope === 'all' ? undefined : this.state.appState.workDir,
+        limit: SESSION_LIST_PAGE_SIZE,
+      });
       this.state.sessionsNextCursor = page.nextCursor;
       this.state.sessions = sessionRowsForPicker(
         page.items,
@@ -2735,6 +2732,26 @@ export class KimiTUI {
     } finally {
       this.state.loadingSessions = false;
     }
+  }
+
+  private refreshPickerDefaultWorkspace(): void {
+    if (this.pickerDefaultWorkspaceLookup) return;
+    this.pickerDefaultWorkspaceLookup = true;
+    void this.harness
+      .getDefaultWorkspacePath()
+      .then(
+        (path) => {
+          if (path === this.pickerDefaultWorkspacePath) return;
+          this.pickerDefaultWorkspacePath = path;
+          this.state.sessions = markDefaultWorkspaceRows(this.state.sessions, path);
+          this.sessionPickerComponent?.replaceSessions(this.state.sessions);
+          this.state.ui.requestRender();
+        },
+        () => undefined,
+      )
+      .finally(() => {
+        this.pickerDefaultWorkspaceLookup = false;
+      });
   }
 
   /**
@@ -4230,6 +4247,7 @@ export class KimiTUI {
   private sessionPickerComponent: SessionPickerComponent | undefined;
   private sessionsPageFetchInFlight: Promise<boolean> | undefined;
   private pickerDefaultWorkspacePath: string | undefined;
+  private pickerDefaultWorkspaceLookup = false;
 
   async showSessionPicker(): Promise<void> {
     await this.openSessionPicker({

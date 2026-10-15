@@ -59,8 +59,12 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     return root;
   }
 
+  async path(): Promise<string | undefined> {
+    return this.root().catch(() => undefined);
+  }
+
   async isDefault(root: string): Promise<boolean> {
-    const defaultRoot = await this.root().catch(() => undefined);
+    const defaultRoot = await this.path();
     return defaultRoot !== undefined && workspaceRootKey(root) === workspaceRootKey(defaultRoot);
   }
 

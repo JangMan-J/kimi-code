@@ -170,6 +170,12 @@ export class SessionPickerComponent extends Container implements Focusable {
     );
   }
 
+  /** Swaps in refreshed copies of the loaded rows, keeping the cursor and active query. */
+  replaceSessions(rows: SessionRow[]): void {
+    this.sessions = rows;
+    this.list.setItems(this.sessions);
+  }
+
   /** Updates the backend-paging facts after an in-flight fetch settles. */
   setPaging(hasMore: boolean, loadingMore: boolean): void {
     this.hasMore = hasMore;

@@ -429,6 +429,11 @@ export class KimiHarness {
     return this.rpc.ensureDefaultWorkspace();
   }
 
+  /** Resolved default workspace location without touching the disk; undefined when it cannot be resolved. */
+  async getDefaultWorkspacePath(): Promise<string | undefined> {
+    return this.rpc.getDefaultWorkspacePath();
+  }
+
   async getDefaultWorkspaceStatus(): Promise<DefaultWorkspaceStatus> {
     return this.rpc.getDefaultWorkspaceStatus();
   }

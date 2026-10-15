@@ -208,6 +208,8 @@ export abstract class SDKRpcClientBase {
 
   abstract ensureDefaultWorkspace(): Promise<string>;
 
+  abstract getDefaultWorkspacePath(): Promise<string | undefined>;
+
   abstract getDefaultWorkspaceStatus(): Promise<DefaultWorkspaceStatus>;
 
   abstract renameSession(input: RenameSessionInput): Promise<void>;

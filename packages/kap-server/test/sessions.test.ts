@@ -407,6 +407,7 @@ describe('server-v2 /api/v1/sessions', () => {
       const stub: IDefaultWorkspace = {
         _serviceBrand: undefined,
         ensure,
+        path: async () => root,
         isDefault: async (candidate) => candidate === root,
         status: async () => status,
         setCustomPath: async () => status,

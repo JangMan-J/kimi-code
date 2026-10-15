@@ -14,6 +14,7 @@ export interface IDefaultWorkspace {
   readonly _serviceBrand: undefined;
 
   ensure(): Promise<string>;
+  path(): Promise<string | undefined>;
   isDefault(root: string): Promise<boolean>;
   status(): Promise<DefaultWorkspaceStatus>;
   setCustomPath(path: string | undefined): Promise<DefaultWorkspaceStatus>;

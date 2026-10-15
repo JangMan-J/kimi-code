@@ -732,6 +732,10 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     return this.engineAccessor.get(IDefaultWorkspace).ensure();
   }
 
+  override async getDefaultWorkspacePath(): Promise<string | undefined> {
+    return this.engineAccessor.get(IDefaultWorkspace).path();
+  }
+
   override async getDefaultWorkspaceStatus(): Promise<DefaultWorkspaceStatus> {
     return this.engineAccessor.get(IDefaultWorkspace).status();
   }
