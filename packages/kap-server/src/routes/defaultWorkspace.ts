@@ -1,9 +1,6 @@
 import {
   DefaultWorkspaceUnavailableError,
   IDefaultWorkspace,
-  IEventService,
-  IWorkspaceService,
-  WorkspaceUpdated,
   type DefaultWorkspaceStatus,
   type Scope,
 } from '@moonshot-ai/agent-core-v2';
@@ -72,25 +69,17 @@ export function registerDefaultWorkspaceRoutes(app: DefaultWorkspaceRouteHost, c
       tags: ['workspaces'],
     },
     async (req, reply) => {
-      const defaultWorkspace = core.accessor.get(IDefaultWorkspace);
-      const workspaces = await core.accessor.get(IWorkspaceService).list();
-      const before = await Promise.all(workspaces.map((ws) => defaultWorkspace.isDefault(ws.root)));
       let status: DefaultWorkspaceStatus;
       try {
-        status = await defaultWorkspace.setCustomPath(req.body.path ?? undefined);
+        status = await core.accessor
+          .get(IDefaultWorkspace)
+          .setCustomPath(req.body.path ?? undefined);
       } catch (error) {
         const envelope = defaultWorkspaceErrorEnvelope(error, req.id);
         if (envelope === undefined) throw error;
         reply.send(envelope);
         return;
       }
-      const after = await Promise.all(workspaces.map((ws) => defaultWorkspace.isDefault(ws.root)));
-      const events = core.accessor.get(IEventService);
-      workspaces.forEach((workspace, index) => {
-        if (before[index] !== after[index]) {
-          events.publish(new WorkspaceUpdated({ payload: { workspace } }));
-        }
-      });
       reply.send(okEnvelope(toWireStatus(status), req.id));
     },
   );

@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { IConfigService, IEventService, WorkspaceUpdated } from '@moonshot-ai/agent-core-v2';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { type RunningServer, startServer } from '../src/start';
 import { authHeaders } from './helpers/auth';
@@ -115,6 +116,32 @@ describe('server-v2 /api/v1/default-workspace', () => {
     expect(reset.data.path).toBe(reset.data.system_path);
     const afterReset = await request<{ items: WorkspaceWire[] }>('GET', '/api/v1/workspaces');
     expect(afterReset.data.items.find((ws) => ws.id === created.data.id)?.is_default).toBe(false);
+  });
+
+  it('announces workspace updates when config.toml moves the default location', async () => {
+    const project = join(scratch, 'edited');
+    await mkdir(project, { recursive: true });
+    const created = await request<WorkspaceWire>('POST', '/api/v1/workspaces', { root: project });
+    const updated: string[] = [];
+    const subscription = (server as RunningServer).core.accessor
+      .get(IEventService)
+      .subscribe((event) => {
+        if (event instanceof WorkspaceUpdated) updated.push(event.payload.workspace.id);
+      });
+    try {
+      await writeFile(
+        join(home, 'config.toml'),
+        `[default_workspace]\npath = ${JSON.stringify(project)}\n`,
+        'utf8',
+      );
+      await (server as RunningServer).core.accessor.get(IConfigService).reload();
+
+      await vi.waitFor(() => expect(updated).toContain(created.data.id));
+      const listed = await request<{ items: WorkspaceWire[] }>('GET', '/api/v1/workspaces');
+      expect(listed.data.items.find((ws) => ws.id === created.data.id)?.is_default).toBe(true);
+    } finally {
+      subscription.dispose();
+    }
   });
 
   it.each([
