@@ -1713,6 +1713,24 @@ describe('AgentTaskService monitor events', () => {
     await fixture.ctx.dispose();
   });
 
+  it('stops a monitor without a timeout when cumulative stderr exceeds the output cap', async () => {
+    const fixture = createAgentTaskService();
+    captureNotifications(fixture);
+    const { proc, stderr } = controllableProcess();
+    const taskId = fixture.manager.registerTask(new MonitorProcessTask(proc, 'watch', 'watch log'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    for (let i = 0; i < 16; i++) stderr.write('x'.repeat(MiB));
+    expect(fixture.manager.getTask(taskId)?.status).toBe('running');
+    stderr.write('x');
+    await waitForTerminal(fixture.manager, taskId);
+    expect(fixture.manager.getTask(taskId)).toMatchObject({
+      status: 'killed',
+      stopReason: expect.stringContaining('Output limit exceeded'),
+    });
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    await fixture.ctx.dispose();
+  });
+
   it('does not turn stdout of an ordinary background command into events', async () => {
     const fixture = createAgentTaskService();
     const notes = captureNotifications(fixture);

@@ -32,7 +32,7 @@ export const MonitorInputSchema = z.object({
   persistent: z
     .boolean()
     .optional()
-    .describe('Keep the monitor running until you stop it with TaskStop or the session ends.'),
+    .describe('Disable the timeout. Command exit, TaskStop, session end, and the event-rate and 16 MiB cumulative output limits still stop the monitor.'),
 });
 
 export type MonitorInput = z.infer<typeof MonitorInputSchema>;
