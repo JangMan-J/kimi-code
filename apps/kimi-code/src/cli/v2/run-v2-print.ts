@@ -434,12 +434,9 @@ async function resolveNativeSession(
       throw new Error(`Session "${opts.session}" not found.`);
     }
     if (target.cwd !== undefined && resolve(target.cwd) !== resolve(workDir)) {
-      const inDefaultWorkspace = await app.accessor.get(IDefaultWorkspace).isDefault(target.cwd);
-      const command = inDefaultWorkspace
-        ? `kimi --default-workspace -r ${opts.session}`
-        : `cd "${target.cwd}" && kimi -r ${opts.session}`;
       stderr.write(
-        `Session "${opts.session}" was created under a different directory.\n  ${command}\n\n`,
+        `Session "${opts.session}" was created under a different directory.\n` +
+          `  cd "${target.cwd}" && kimi -r ${opts.session}\n\n`,
       );
       throw new Error(`Session "${opts.session}" was created under a different directory.`);
     }
