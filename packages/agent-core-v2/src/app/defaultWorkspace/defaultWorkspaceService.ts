@@ -149,7 +149,8 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
         existing = parent;
       }
     }
-    return { exists: existing === root, problem: await this.writeProblem(existing) };
+    const exists = existing === root;
+    return { exists, problem: await this.writeProblem(existing, exists ? 'file' : 'folder') };
   }
 
   private async isDanglingLink(path: string): Promise<boolean> {
@@ -161,10 +162,14 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     }
   }
 
-  private async writeProblem(dir: string): Promise<DefaultWorkspaceUnavailableReason | undefined> {
+  private async writeProblem(
+    dir: string,
+    entry: 'file' | 'folder' = 'file',
+  ): Promise<DefaultWorkspaceUnavailableReason | undefined> {
     const probe = join(dir, `.kimi-code-write-test-${randomUUID()}`);
     try {
-      await this.fs.createExclusive(probe, new Uint8Array());
+      if (entry === 'folder') await this.fs.mkdir(probe);
+      else await this.fs.createExclusive(probe, new Uint8Array());
     } catch (error) {
       return reasonOf(error);
     }
