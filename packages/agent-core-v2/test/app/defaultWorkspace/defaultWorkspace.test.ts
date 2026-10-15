@@ -20,6 +20,7 @@ import {
 import { DefaultWorkspaceService } from '#/app/defaultWorkspace/defaultWorkspaceService';
 import { LifecycleScope } from '#/app/scopes';
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
+import { HostFsError, OsFsErrors } from '#/os/interface/hostFsErrors';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IHostProcessService } from '#/os/interface/hostProcess';
 
@@ -78,6 +79,7 @@ describe('DefaultWorkspaceService', () => {
     env: NodeJS.ProcessEnv = {},
     windows?: { spawn: IHostProcessService['spawn'] },
     sections: Record<string, unknown> = {},
+    fs: IHostFileSystem = new HostFileSystem(),
   ): IDefaultWorkspace {
     const bootstrap = stubBootstrap('/tmp/kimi-home', env, {}, osHomeDir);
     currentHost?.dispose();
@@ -86,7 +88,7 @@ describe('DefaultWorkspaceService', () => {
         IBootstrapService,
         windows === undefined ? bootstrap : { ...bootstrap, platform: 'win32' },
       ),
-      stubPair(IHostFileSystem, new HostFileSystem()),
+      stubPair(IHostFileSystem, fs),
       stubPair(IHostProcessService, (windows ?? {}) as IHostProcessService),
       stubPair(IConfigService, memoryConfig(sections)),
     ]);
@@ -398,5 +400,24 @@ describe('DefaultWorkspaceService', () => {
         expect(await fsp.readdir(custom)).toEqual([]);
       },
     );
+
+    it('reports a folder where files can be created but not removed', async () => {
+      const custom = join(osHomeDir, 'Chats');
+      await fsp.mkdir(custom);
+      class NoRemoveFileSystem extends HostFileSystem {
+        override async remove(): Promise<void> {
+          throw new HostFsError(OsFsErrors.codes.OS_FS_PERMISSION_DENIED, 'permission denied');
+        }
+      }
+      const service = build(
+        {},
+        undefined,
+        { defaultWorkspace: { path: custom } },
+        new NoRemoveFileSystem(),
+      );
+
+      await expect(service.ensure()).rejects.toMatchObject(unavailable('permission_denied'));
+      expect(await service.status()).toMatchObject({ problem: 'permission_denied' });
+    });
   });
 });

@@ -168,7 +168,11 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     } catch (error) {
       return reasonOf(error);
     }
-    await this.fs.remove(probe).catch(() => undefined);
+    try {
+      await this.fs.remove(probe);
+    } catch (error) {
+      if (!isNotFound(error)) return reasonOf(error);
+    }
     return undefined;
   }
 
