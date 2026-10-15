@@ -1,4 +1,4 @@
-import { join } from 'pathe';
+import { isAbsolute, join } from 'pathe';
 
 export const DEFAULT_WORKSPACE_RELATIVE_ROOT = ['KimiCode', 'Default'] as const;
 
@@ -16,22 +16,12 @@ export function parseXdgDocumentsDir(content: string, osHomeDir: string): string
   return undefined;
 }
 
-export function parseWindowsPersonalFolder(
-  regOutput: string,
-  getEnv: (name: string) => string | undefined,
-): string | undefined {
-  for (const line of regOutput.split(/\r?\n/)) {
-    const match = /^\s*Personal\s+REG_(?:EXPAND_)?SZ\s+(.+?)\s*$/.exec(line);
-    if (match === null) continue;
-    let unresolved = false;
-    const expanded = match[1]!.replaceAll(/%([^%]+)%/g, (whole, name: string) => {
-      const value = getEnv(name);
-      if (value === undefined) unresolved = true;
-      return value ?? whole;
-    });
-    return unresolved ? undefined : expanded;
-  }
-  return undefined;
+export const WINDOWS_DOCUMENTS_COMMAND =
+  "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; [Environment]::GetFolderPath('MyDocuments')";
+
+export function parseWindowsDocumentsOutput(output: string): string | undefined {
+  const dir = output.replace(/^\uFEFF/, '').trim();
+  return dir.length > 0 && isAbsolute(dir) ? dir : undefined;
 }
 
 export function defaultDocumentsDir(osHomeDir: string): string {

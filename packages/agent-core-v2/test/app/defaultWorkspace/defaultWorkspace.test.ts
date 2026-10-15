@@ -15,7 +15,7 @@ import { IBootstrapService } from '#/app/bootstrap/bootstrap';
 import { IDefaultWorkspace } from '#/app/defaultWorkspace/defaultWorkspace';
 import { DefaultWorkspaceService } from '#/app/defaultWorkspace/defaultWorkspaceService';
 import {
-  parseWindowsPersonalFolder,
+  parseWindowsDocumentsOutput,
   parseXdgDocumentsDir,
 } from '#/app/defaultWorkspace/defaultWorkspacePaths';
 import { HostFileSystem } from '#/os/backends/node-local/hostFsService';
@@ -34,21 +34,18 @@ describe('default workspace paths', () => {
     expect(parseXdgDocumentsDir('XDG_DESKTOP_DIR="$HOME/Desktop"', home)).toBeUndefined();
   });
 
-  it('expands the registered Windows documents folder and rejects unresolved variables', () => {
-    const env: Record<string, string> = { USERPROFILE: 'C:\\Users\\alice' };
-    const getEnv = (name: string): string | undefined => env[name];
-    const expandable = [
-      'HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders',
-      '    Personal    REG_EXPAND_SZ    %USERPROFILE%\\Documents',
-      '',
-    ].join('\r\n');
-    expect(parseWindowsPersonalFolder(expandable, getEnv)).toBe('C:\\Users\\alice\\Documents');
-    expect(
-      parseWindowsPersonalFolder('    Personal    REG_SZ    D:\\OneDrive\\Docs', getEnv),
-    ).toBe('D:\\OneDrive\\Docs');
-    expect(
-      parseWindowsPersonalFolder('    Personal    REG_EXPAND_SZ    %MISSING%\\Docs', getEnv),
-    ).toBeUndefined();
+  it('reads the Windows documents folder reported by the shell', () => {
+    expect(parseWindowsDocumentsOutput('C:\\Users\\alice\\Documents\r\n')).toBe(
+      'C:\\Users\\alice\\Documents',
+    );
+    expect(parseWindowsDocumentsOutput('\uFEFFC:\\Users\\张三\\OneDrive\\文档\r\n')).toBe(
+      'C:\\Users\\张三\\OneDrive\\文档',
+    );
+    expect(parseWindowsDocumentsOutput('\\\\server\\home\\alice\\Documents')).toBe(
+      '\\\\server\\home\\alice\\Documents',
+    );
+    expect(parseWindowsDocumentsOutput('\r\n')).toBeUndefined();
+    expect(parseWindowsDocumentsOutput('Documents')).toBeUndefined();
   });
 });
 
@@ -91,8 +88,8 @@ describe('DefaultWorkspaceService', () => {
     return currentHost.app.accessor.get(IDefaultWorkspace);
   }
 
-  function registryReply(documentsDir: string): IHostProcessService['spawn'] {
-    const output = `    Personal    REG_SZ    ${documentsDir}\r\n`;
+  function documentsReply(documentsDir: string): IHostProcessService['spawn'] {
+    const output = `${documentsDir}\r\n`;
     return (async () => ({
       stdout: (async function* () {
         yield output;
@@ -102,20 +99,21 @@ describe('DefaultWorkspaceService', () => {
     })) as unknown as IHostProcessService['spawn'];
   }
 
-  const registryUnavailable = (async () => {
-    throw new Error('spawn reg ENOENT');
+  const shellUnavailable = (async () => {
+    throw new Error('spawn powershell.exe ENOENT');
   }) as unknown as IHostProcessService['spawn'];
 
-  it('places the directory under the Windows registered documents folder', async () => {
+  it('places the directory under the Windows documents folder', async () => {
     const documentsDir = join(osHomeDir, 'OneDrive', 'Docs');
+    await fsp.mkdir(documentsDir, { recursive: true });
 
-    const root = await build({}, { spawn: registryReply(documentsDir) }).ensure();
+    const root = await build({}, { spawn: documentsReply(documentsDir) }).ensure();
 
     expect(root).toBe(join(documentsDir, 'KimiCode', 'Default'));
   });
 
   it('fails instead of falling back when the Windows documents folder cannot be resolved', async () => {
-    const service = build({}, { spawn: registryUnavailable });
+    const service = build({}, { spawn: shellUnavailable });
 
     await expect(service.ensure()).rejects.toMatchObject({ code: 'fs.path_not_found' });
     expect(await service.isDefault(join(osHomeDir, 'Documents', 'KimiCode', 'Default'))).toBe(
@@ -126,12 +124,21 @@ describe('DefaultWorkspaceService', () => {
     });
   });
 
+  it('rejects a Windows documents folder that does not exist', async () => {
+    const reported = join(osHomeDir, 'ÎÄµµ');
+    const service = build({}, { spawn: documentsReply(reported) });
+
+    await expect(service.ensure()).rejects.toMatchObject(unavailable('documents_unavailable'));
+    await expect(fsp.stat(reported)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('retries the Windows documents lookup after a failure', async () => {
     const documentsDir = join(osHomeDir, 'Docs');
+    await fsp.mkdir(documentsDir, { recursive: true });
     let attempts = 0;
     const spawn = ((...args: Parameters<IHostProcessService['spawn']>) => {
       attempts += 1;
-      return attempts === 1 ? registryUnavailable(...args) : registryReply(documentsDir)(...args);
+      return attempts === 1 ? shellUnavailable(...args) : documentsReply(documentsDir)(...args);
     }) as IHostProcessService['spawn'];
     const service = build({}, { spawn });
 

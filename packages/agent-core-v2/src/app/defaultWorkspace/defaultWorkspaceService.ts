@@ -12,13 +12,13 @@ import { IHostProcessService } from '#/os/interface/hostProcess';
 import { IDefaultWorkspace } from './defaultWorkspace';
 import {
   DEFAULT_WORKSPACE_RELATIVE_ROOT,
+  WINDOWS_DOCUMENTS_COMMAND,
   defaultDocumentsDir,
-  parseWindowsPersonalFolder,
+  parseWindowsDocumentsOutput,
   parseXdgDocumentsDir,
 } from './defaultWorkspacePaths';
 
-const WINDOWS_SHELL_FOLDERS_KEY =
-  'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders';
+const WINDOWS_DOCUMENTS_TIMEOUT_MS = 15_000;
 
 const BLOCKED_PATH_CODES: ReadonlySet<string> = new Set([
   OsFsErrors.codes.OS_FS_ALREADY_EXISTS,
@@ -82,32 +82,39 @@ export class DefaultWorkspaceService implements IDefaultWorkspace {
     let dir: string | undefined;
     let cause: unknown;
     try {
-      dir = await this.queryWindowsPersonalFolder();
+      dir = await this.queryWindowsDocumentsDir();
+      if (dir !== undefined && !(await this.isDirectory(dir))) dir = undefined;
     } catch (error) {
       cause = error;
     }
     if (dir === undefined) {
-      throw new Error2(
-        ErrorCodes.FS_PATH_NOT_FOUND,
-        'cannot locate the Documents folder in the Windows registry',
-        { cause },
-      );
+      throw new Error2(ErrorCodes.FS_PATH_NOT_FOUND, 'cannot locate the Windows Documents folder', {
+        cause,
+      });
     }
     return dir;
   }
 
-  private async queryWindowsPersonalFolder(): Promise<string | undefined> {
+  private async queryWindowsDocumentsDir(): Promise<string | undefined> {
     const proc = await this.processes.spawn(
-      'reg',
-      ['query', WINDOWS_SHELL_FOLDERS_KEY, '/v', 'Personal'],
-      { windowsHide: true },
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_DOCUMENTS_COMMAND],
+      { windowsHide: true, timeout: WINDOWS_DOCUMENTS_TIMEOUT_MS },
     );
     try {
       const [stdout, exitCode] = await Promise.all([collect(proc.stdout), proc.wait()]);
       if (exitCode !== 0) return undefined;
-      return parseWindowsPersonalFolder(stdout, (name) => this.bootstrap.getEnv(name));
+      return parseWindowsDocumentsOutput(stdout);
     } finally {
       void proc.dispose();
+    }
+  }
+
+  private async isDirectory(path: string): Promise<boolean> {
+    try {
+      return (await this.fs.stat(path)).isDirectory;
+    } catch {
+      return false;
     }
   }
 
