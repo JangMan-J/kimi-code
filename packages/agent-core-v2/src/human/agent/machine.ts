@@ -59,7 +59,13 @@ export type PromptGateVerdict = boolean | { block: boolean; message?: UserMessag
 export type PromptGate = (
   queueItemId: string | undefined,
   message: UserMessage,
+  options?: { readonly isSteer?: boolean; readonly entry?: UserEntry },
 ) => Promise<PromptGateVerdict>;
+
+export type SteerGateOutcome =
+  | { readonly entry: UserEntry; readonly verdict: 'passed'; readonly message?: UserMessage }
+  | { readonly entry: UserEntry; readonly verdict: 'blocked' }
+  | { readonly entry: UserEntry; readonly verdict: 'failed'; readonly error: unknown };
 
 export interface ScopeFactoryOutput {
   handle?: AgentScopeHandle;
@@ -91,6 +97,7 @@ export type AgentEvent =
   | { type: 'input.pause' }
   | { type: 'input.continue' }
   | { type: 'input.close' }
+  | { type: 'steerGate.resolved'; outcomes: readonly SteerGateOutcome[] }
   | { type: 'turn.spawn_tools'; toolCalls: ToolCall[] }
   | { type: 'turn.drain' }
   | { type: 'turn.reminders_consumed'; reminders: HistoryMessage[] }
@@ -121,6 +128,8 @@ export type AgentEmitted =
   | { type: 'prompt.blocked'; queueItemId?: string; entry?: UserEntry }
   | { type: 'prompt.gate_failed'; queueItemId?: string; error: unknown; entry?: UserEntry }
   | { type: 'prompt.steered'; queueItemIds: string[]; entries: UserEntry[] }
+  | { type: 'steerGate.requested'; entries: readonly UserEntry[] }
+  | { type: 'steerGate.dropped'; outcomes: readonly SteerGateOutcome[] }
   | { type: 'context.reset'; branchId: string }
   | { type: 'agent.attached' }
   | { type: 'agent.failed'; error: unknown };
@@ -232,6 +241,39 @@ function turnOutcomeEvent(context: AgentMachineContext, output: TurnOutput): Age
 
 function hasPendingWork(context: AgentMachineContext): boolean {
   return context.notifications.length > 0 || context.queue.length > 0;
+}
+
+function steerMergePatch(
+  context: AgentMachineContext,
+  steered: readonly UserEntry[],
+): Pick<AgentMachineContext, 'queue' | 'notifications'> {
+  const merged = mergeSteerMessages(
+    steered.map((item) => ({ content: item.message.content, origin: item.meta?.origin })),
+  );
+  const promptId = steered.length === 1 ? steered[0]?.meta?.promptId : undefined;
+  return {
+    queue: context.queue.filter((item) => !steered.includes(item)),
+    notifications: [
+      ...context.notifications,
+      createUserEntry(
+        { role: 'user', content: merged.content },
+        {
+          source: 'input',
+          promptId,
+          userMessageId: promptId,
+          origin: { ...merged.origin, inTurn: true },
+        },
+      ),
+    ],
+  };
+}
+
+function steerMergedEvent(steered: readonly UserEntry[]): AgentEmitted {
+  return {
+    type: 'prompt.steered',
+    queueItemIds: steered.map((item) => item.meta?.promptId as string),
+    entries: steered as UserEntry[],
+  };
 }
 
 function historyEndsMidToolChain(messages: readonly HistoryMessage[]): boolean {
@@ -495,30 +537,8 @@ export function createAgentMachine({
             (item) => item.meta?.promptId !== undefined && ids.includes(item.meta?.promptId),
           );
           if (steered.length === 0) return;
-          const merged = mergeSteerMessages(
-            steered.map((item) => ({ content: item.message.content, origin: item.meta?.origin })),
-          );
-          const promptId = steered.length === 1 ? steered[0]?.meta?.promptId : undefined;
-          enqueue.assign({
-            queue: context.queue.filter((item) => !steered.includes(item)),
-            notifications: [
-              ...context.notifications,
-              createUserEntry(
-                { role: 'user', content: merged.content },
-                {
-                  source: 'input',
-                  promptId,
-                  userMessageId: promptId,
-                  origin: { ...merged.origin, inTurn: true },
-                },
-              ),
-            ],
-          });
-          enqueue.emit({
-            type: 'prompt.steered' as const,
-            queueItemIds: steered.map((item) => item.meta?.promptId as string),
-            entries: steered,
-          });
+          enqueue.assign({ queue: context.queue.filter((item) => !steered.includes(item)) });
+          enqueue.emit({ type: 'steerGate.requested' as const, entries: steered });
         }),
       },
       'input.cancel': {
@@ -625,6 +645,12 @@ export function createAgentMachine({
               !hasPendingWork(context) && historyEndsMidToolChain(context.messages),
             target: 'running',
             actions: [assign({ paused: false }), 'commitPendingToHistory'],
+          },
+          'steerGate.resolved': {
+            actions: enqueueActions(({ enqueue, event }) => {
+              if (event.type !== 'steerGate.resolved') return;
+              enqueue.emit({ type: 'steerGate.dropped' as const, outcomes: event.outcomes });
+            }),
           },
         },
         states: {
@@ -823,6 +849,37 @@ export function createAgentMachine({
               enqueue.sendTo('turn', { type: 'turn.notify' as const, messages });
               if (messages.length === 0) return;
               enqueue.assign({ notifications: [], reminders: [] });
+            }),
+          },
+          'steerGate.resolved': {
+            actions: enqueueActions(({ context, enqueue, event }) => {
+              if (event.type !== 'steerGate.resolved') return;
+              const passed: UserEntry[] = [];
+              for (const outcome of event.outcomes) {
+                if (outcome.verdict === 'blocked') {
+                  enqueue.emit({
+                    type: 'prompt.blocked' as const,
+                    queueItemId: outcome.entry.meta?.promptId,
+                    entry: outcome.entry,
+                  });
+                } else if (outcome.verdict === 'failed') {
+                  enqueue.emit({
+                    type: 'prompt.gate_failed' as const,
+                    queueItemId: outcome.entry.meta?.promptId,
+                    error: outcome.error,
+                    entry: outcome.entry,
+                  });
+                } else {
+                  passed.push(
+                    outcome.message !== undefined
+                      ? { ...outcome.entry, message: outcome.message }
+                      : outcome.entry,
+                  );
+                }
+              }
+              if (passed.length === 0) return;
+              enqueue.assign(steerMergePatch(context, passed));
+              enqueue.emit(steerMergedEvent(passed));
             }),
           },
           'tool.detached': {

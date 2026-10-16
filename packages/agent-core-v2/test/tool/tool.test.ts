@@ -185,6 +185,8 @@ function captureLogs(): {
 
 function hookSlot<T>() {
   return {
+    size: 0,
+    has: () => false,
     run: vi.fn(async (_input: T) => {}),
     register: () => ({ dispose: () => {} }),
     delete: () => false,

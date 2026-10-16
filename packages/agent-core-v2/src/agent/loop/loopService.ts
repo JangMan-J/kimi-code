@@ -41,6 +41,7 @@ import { ISessionMediaStore } from '#/agent/media/sessionMediaStore';
 import { IAgentProfileService } from '#/agent/profile/profile';
 import { IAgentScopeContext } from '#/agent/scopeContext/scopeContext';
 import { IAgentStateService } from '#/agent/state/agentState';
+import { IExternalHooksRunnerService } from '#/features/externalHooks/app/externalHooksRunner';
 import { IFileService } from '#/app/file/fileService';
 import { IPluginService } from '#/app/plugin/plugin';
 import type {
@@ -58,6 +59,7 @@ import {
   PromptStarted,
   PromptSteered,
   PromptSubmitted,
+  projectPromptOriginForWire,
 } from '#/agent/prompt/promptEvents';
 import { LOOP_CONTROL_SECTION, type LoopControl } from './configSection';
 import {
@@ -117,6 +119,7 @@ import {
   type MachineEngineEvent,
   type MachineTurnOutcome,
   type PromptGateVerdict,
+  type SteerGateOutcome,
 } from './machine';
 
 export type LoopInterruptReason = 'aborted' | 'max_steps' | 'error';
@@ -217,7 +220,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
               step: this.active.gatedSteps,
             },
       gate: (signal) => this.gate(signal),
-      promptGate: (queueItemId, message) => this.runPromptGate(queueItemId, message),
+      promptGate: (queueItemId, message, options) => this.runPromptGate(queueItemId, message, options),
       onTrace: (trace) => {
         this.activeRequestTrace = trace;
       },
@@ -571,12 +574,14 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
   private async runPromptGate(
     queueItemId: string | undefined,
     message: UserMessage,
+    options?: { readonly isSteer?: boolean; readonly entry?: UserEntry },
   ): Promise<PromptGateVerdict> {
     const waiter = queueItemId === undefined ? undefined : this.promptWaiters.get(queueItemId);
     const entry =
-      queueItemId === undefined
+      options?.entry ??
+      (queueItemId === undefined
         ? undefined
-        : this.machineEngine().snapshot().queue.find((item) => item.meta?.promptId === queueItemId);
+        : this.machineEngine().snapshot().queue.find((item) => item.meta?.promptId === queueItemId));
     if (waiter === undefined || entry?.meta?.tracked !== true) {
       return false;
     }
@@ -589,7 +594,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
     };
     const ctx: PromptSubmitContext = {
       promptMessage,
-      isSteer: false,
+      isSteer: options?.isSteer ?? false,
       hookParts: [],
       block: false,
     };
@@ -636,6 +641,80 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
     this.maybeSettle();
   }
 
+  private runSteerGate(entries: readonly UserEntry[]): void {
+    if (this.steerGateSynchronous()) {
+      this.machineEngine().steerGateResolved(
+        entries.map((entry) => ({ entry, verdict: 'passed' as const })),
+      );
+      return;
+    }
+    void (async () => {
+      const outcomes: SteerGateOutcome[] = [];
+      for (const entry of entries) {
+        try {
+          const verdict = await this.runPromptGate(entry.meta?.promptId, entry.message, {
+            isSteer: true,
+            entry,
+          });
+          if (typeof verdict === 'boolean') {
+            outcomes.push(verdict ? { entry, verdict: 'blocked' } : { entry, verdict: 'passed' });
+          } else {
+            outcomes.push(
+              verdict.block
+                ? { entry, verdict: 'blocked' }
+                : { entry, verdict: 'passed', message: verdict.message },
+            );
+          }
+        } catch (error) {
+          outcomes.push({ entry, verdict: 'failed', error });
+        }
+      }
+      return outcomes;
+    })().then((outcomes) => {
+      if (this.disposing) return;
+      this.machineEngine().steerGateResolved(outcomes);
+    });
+  }
+
+  private steerGateSynchronous(): boolean {
+    const slot = this.hooks.onBeforeSubmitPrompt;
+    if (slot.size > 1) return false;
+    if (slot.size === 0) return true;
+    if (!slot.has('externalHooks')) return false;
+    const runner = this.instantiation.invokeFunction((accessor) =>
+      accessor.get(IExternalHooksRunnerService),
+    );
+    return runner.loaded && !runner.hasHooksFor('UserPromptSubmit');
+  }
+
+  private settleDroppedSteerGate(outcomes: readonly SteerGateOutcome[]): void {
+    for (const outcome of outcomes) {
+      const promptId = outcome.entry.meta?.promptId;
+      const waiter = promptId === undefined ? undefined : this.promptWaiters.get(promptId);
+      if (waiter === undefined) continue;
+      if (outcome.verdict !== 'passed') {
+        this.settleGateRejectedPrompt(
+          promptId,
+          outcome.entry,
+          outcome.verdict === 'blocked' ? 'blocked' : 'failed',
+        );
+        continue;
+      }
+      waiter.launched.resolve(undefined);
+      waiter.completion.resolve({ promptId: waiter.id, result: undefined, state: 'cancelled' });
+      if (outcome.entry.meta?.tracked === true) {
+        this.publishPromptAborted(
+          waiter.id,
+          outcome.entry.meta?.origin as PromptOrigin | undefined,
+        );
+      }
+      this.terminalStates.set(waiter.id, 'cancelled');
+      this.promptWaiters.delete(waiter.id);
+      this.steered.delete(waiter.id);
+    }
+    this.maybeSettle();
+  }
+
 
   private async deliverToolResult(ctx: ToolDidExecuteContext): Promise<void> {
     const delivery = ctx.result.delivery;
@@ -662,7 +741,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
         promptId,
         finishedAt: new Date().toISOString(),
         reason,
-        origin,
+        origin: projectPromptOriginForWire(origin),
       }),
     );
   }
@@ -672,7 +751,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
     readonly origin: PromptOrigin;
     readonly message: ContextMessage;
   }): void {
-    if (input.origin.kind !== 'user' && input.origin.kind !== 'system_trigger') return;
     void this.dispatcher.dispatch(
       new PromptQueued({
         agentId: this.scopeContext.agentId,
@@ -680,7 +758,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
         content: stripBundledSkillBlocks(input.message),
         clientMetadata: input.origin.kind === 'user' ? input.origin.clientMetadata : undefined,
         queueLength: (this.engine?.snapshot().queue.length ?? 0) + 1,
-        origin: input.origin,
+        origin: projectPromptOriginForWire(input.origin),
       }),
     );
   }
@@ -695,7 +773,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
     },
     status: 'running' | 'queued',
   ): void {
-    if (input.origin.kind !== 'user' && input.origin.kind !== 'system_trigger') return;
     void this.dispatcher.dispatch(
       new PromptSubmitted({
         agentId: this.scopeContext.agentId,
@@ -705,18 +782,17 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
         content: stripBundledSkillBlocks(input.message),
         clientMetadata: input.origin.kind === 'user' ? input.origin.clientMetadata : undefined,
         createdAt: input.createdAt,
-        origin: input.origin,
+        origin: projectPromptOriginForWire(input.origin),
       }),
     );
   }
 
   private publishPromptStarted(promptId: string, origin: PromptOrigin): void {
-    if (origin.kind !== 'user' && origin.kind !== 'system_trigger') return;
     void this.dispatcher.dispatch(
       new PromptStarted({
         agentId: this.scopeContext.agentId,
         promptId,
-        origin,
+        origin: projectPromptOriginForWire(origin),
       }),
     );
   }
@@ -727,7 +803,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
         agentId: this.scopeContext.agentId,
         promptId,
         abortedAt: new Date().toISOString(),
-        origin,
+        origin: projectPromptOriginForWire(origin),
       }),
     );
   }
@@ -1306,6 +1382,14 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
       }
       case 'promptGateFailed': {
         this.settleGateRejectedPrompt(event.queueItemId, event.entry, 'failed');
+        return;
+      }
+      case 'steerGateRequested': {
+        this.runSteerGate(event.entries);
+        return;
+      }
+      case 'steerGateDropped': {
+        this.settleDroppedSteerGate(event.outcomes);
         return;
       }
       case 'promptSteered': {

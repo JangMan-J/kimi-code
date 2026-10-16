@@ -157,6 +157,7 @@ function stubHookRunner(partial: unknown): IExternalHooksRunnerService {
     ready: Promise.resolve(),
     onDidReload: Event.None,
     hasHooksFor: () => false,
+    loaded: true,
     ...p,
   } as IExternalHooksRunnerService;
 }
@@ -1296,6 +1297,17 @@ describe('IExternalHooksRunnerService integration', () => {
             promptId: 'p1',
             prompt: queuedContent,
             queueLength: 2,
+          },
+        },
+        {
+          event: 'UserPromptQueued',
+          matcherValue: [{ type: 'text', text: 'continue the goal' }],
+          inputData: {
+            sessionTitle: 'My Session',
+            promptId: 'p2',
+            prompt: [{ type: 'text', text: 'continue the goal' }],
+            queueLength: 3,
+            origin: { kind: 'system_trigger', name: 'goal_continuation' },
           },
         },
         {

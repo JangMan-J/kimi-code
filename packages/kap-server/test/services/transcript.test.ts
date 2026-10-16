@@ -2255,9 +2255,9 @@ describe('AgentTranscriptProjector', () => {
     feed(ev({ type: 'prompt.started', promptId: 'p5', origin: continuation }));
     feed(ev({ type: 'prompt.completed', promptId: 'p5', finishedAt: '2026-01-01T00:00:06.000Z', reason: 'completed', origin: continuation }));
     feed(ev({ type: 'prompt.aborted', promptId: 'p7', abortedAt: '2026-01-01T00:00:07.000Z', origin: continuation }));
-    expect(tx.getPrompt('p5')).toBeUndefined();
-    expect(tx.getPrompt('p6')).toBeUndefined();
-    expect(tx.getPrompt('p7')).toBeUndefined();
+    expect(tx.getPrompt('p5')).toMatchObject({ status: 'completed', userMessageId: 'm5' });
+    expect(tx.getPrompt('p6')).toMatchObject({ status: 'queued' });
+    expect(tx.getPrompt('p7')).toMatchObject({ status: 'aborted' });
   });
 
   it('keeps restored prompt content when steering after a late projector attach', () => {
@@ -2307,6 +2307,16 @@ describe('AgentTranscriptProjector', () => {
       }
     };
 
+    feed(
+      ev({
+        type: 'prompt.submitted',
+        promptId: 'p2',
+        userMessageId: 'm2',
+        status: 'queued',
+        content: [{ type: 'text', text: 'second' }],
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+    );
     feed(
       ev({
         type: 'prompt.steered',
@@ -2733,6 +2743,16 @@ describe('AgentTranscriptProjector', () => {
 
     feed(
       ev({
+        type: 'prompt.submitted',
+        promptId: 'p2',
+        userMessageId: 'm2',
+        status: 'queued',
+        content: [{ type: 'text', text: 'steered mid-attach' }],
+        createdAt: '2026-01-01T00:00:01.000Z',
+      }),
+    );
+    feed(
+      ev({
         type: 'prompt.steered',
         activePromptId: 'p1',
         promptIds: ['p2'],
@@ -2749,7 +2769,7 @@ describe('AgentTranscriptProjector', () => {
         messageId: 'm-mid',
       }),
     );
-    expect(ops).toHaveLength(1);
+    expect(ops).toHaveLength(2);
     expect(ops.every((op) => op.op === 'prompt.upsert')).toBe(true);
 
     feed(ev({ type: 'turn.step.started', turnId: 3, step: 2 }));
@@ -4365,7 +4385,7 @@ describe('bindSessionTranscript', () => {
         prompt: 'hi',
       });
       expect(store?.getAgent('main')?.getPrompt('prompt-1')).toMatchObject({ status: 'running' });
-      expect(store?.getAgent('sub-1')?.getPrompt('prompt-goal')).toBeUndefined();
+      expect(store?.getAgent('sub-1')?.getPrompt('prompt-goal')).toMatchObject({ status: 'running' });
       service.dropSession('s1');
     } finally {
       await rm(home, { recursive: true, force: true });

@@ -10,11 +10,12 @@ import {
   PromptStarted,
   PromptSteered,
   PromptSubmitted,
+  type PromptOriginProjection,
 } from '#/agent/prompt/promptEvents';
 
 import type { IDisposable } from '#/_base/di/lifecycle';
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
-import { USER_PROMPT_ORIGIN, type PromptOrigin } from '#/agent/contextMemory/types';
+import { USER_PROMPT_ORIGIN } from '#/agent/contextMemory/types';
 import { AgentGoalService, IAgentGoalService } from '#/features/goal/goalService';
 import { IGoalDeadlineScheduler } from '#/features/goal/goalDeadlineScheduler';
 
@@ -507,7 +508,7 @@ describe('AgentGoalService', () => {
       let continuationTurnId: number | undefined;
       const steered: PromptSteered[] = [];
       const turnSteers: TurnSteer[] = [];
-      const lifecycle: { type: string; promptId: string; origin?: PromptOrigin }[] = [];
+      const lifecycle: { type: string; promptId: string; origin?: PromptOriginProjection }[] = [];
       eventBus.subscribe(TurnStarted, (event) => {
         if (event.origin.kind === 'system_trigger' && event.origin.name === 'goal_continuation') {
           continuationPromptId = event.promptId;
@@ -1703,6 +1704,28 @@ describe('AgentGoalService core workflow hooks', () => {
     await vi.waitFor(() => expect(goals.getGoal().goal?.status).toBe('blocked'));
     expect(goals.getGoal().goal?.terminalReason).toBe('Blocked by UserPromptSubmit hook');
     expect(loopService.launches).toHaveLength(1);
+
+    vi.spyOn(loopService, 'snapshot').mockReturnValue({
+      state: 'idle',
+      activeTurnId: undefined,
+      activePromptId: undefined,
+      queue: [],
+      notificationCount: 0,
+      paused: false,
+      hasPendingRequests: false,
+      turn: undefined,
+      activeTraceId: undefined,
+    });
+    vi.spyOn(loopService, 'promptHandle').mockReturnValue({
+      launched: Promise.resolve(undefined),
+      completion: Promise.resolve({ promptId: 'p2', result: undefined, state: 'cancelled' }),
+    } as unknown as PromptHandle);
+    await goals.resumeGoal({ continueIfBlocked: true });
+
+    await vi.waitFor(() => expect(goals.getGoal().goal?.status).toBe('paused'));
+    expect(goals.getGoal().goal?.terminalReason).toBe(
+      'Paused after goal continuation failure: Goal continuation cancelled before launch',
+    );
   });
 
   it('pauses the goal when the continuation launch fails', async () => {

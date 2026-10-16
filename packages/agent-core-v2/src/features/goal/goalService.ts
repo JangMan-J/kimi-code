@@ -747,6 +747,12 @@ function launchContinuationTurn(context: GoalOperationContext, goalId: string, s
     if (pending.turnId !== undefined) return;
     if (completion.state === 'blocked') {
       void markBlocked(context, { reason: 'Blocked by UserPromptSubmit hook' }).catch(() => undefined);
+    } else if (completion.state === 'cancelled') {
+      void settleGoalAfterContinuationFailure(
+        context,
+        new Error2(ErrorCodes.INTERNAL, 'Goal continuation cancelled before launch'),
+        goalId,
+      );
     } else if (completion.state === 'failed') {
       void settleGoalAfterContinuationFailure(
         context,
