@@ -2883,7 +2883,6 @@ async function submitSteerPromptFacade(
       promptMetadataTextFromContentParts(payload.input),
     );
   }
-  const status = loop.snapshot();
   const { id } = loop.submit(
     {
       message: { role: 'user', content: [...payload.input] },
@@ -2891,7 +2890,6 @@ async function submitSteerPromptFacade(
     },
     { steerIfActive: true },
   );
-  if (status.state === 'running' && status.activePromptId === undefined) return undefined;
   const turn = await loop.promptHandle(id)?.launched;
   if (turn === undefined) return undefined;
   await turn.ready.catch(() => undefined);

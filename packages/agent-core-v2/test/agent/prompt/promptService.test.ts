@@ -881,7 +881,7 @@ describe('prompt queue', () => {
     expect(merged?.origin?.kind === 'user' && merged.origin.skillActivations).toBeUndefined();
   });
 
-  it('steers a fresh submission into the active turn and settles it with the parent', async () => {
+  it('steers a fresh submission into an untracked active turn and settles it with the parent', async () => {
     setup();
     const hold = holdNextStep();
     ctx.mockNextResponse({ type: 'text', text: 'active' });
@@ -889,7 +889,12 @@ describe('prompt queue', () => {
     const steered: PromptSteered[] = [];
     ctx.get(IEventBus).subscribe(PromptSteered, (event) => steered.push(event));
 
-    const active = await enqueue(loop, { message: message('active') });
+    const { id: activeId } = loop.submit({
+      message: { role: 'user', content: message('active').content },
+      meta: { origin: { kind: 'system_trigger', name: 'goal_continuation' } as PromptOrigin },
+    });
+    const activeHandle = loop.promptHandle(activeId)!;
+    await activeHandle.launched;
     await hold.started;
     const { id } = loop.submit(
       {
@@ -900,8 +905,9 @@ describe('prompt queue', () => {
     );
     const handle = loop.promptHandle(id)!;
 
+    expect(loop.snapshot().activePromptId).toBeUndefined();
     expect(steered.map((event) => [event.activePromptId, event.promptIds])).toEqual([
-      [active.id, [id]],
+      [activeId, [id]],
     ]);
     expect(handle.state).toBe('steered');
     await expect(handle.launched).resolves.toBeDefined();

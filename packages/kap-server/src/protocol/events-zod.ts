@@ -1002,6 +1002,7 @@ export const promptSubmittedEventSchema = z.object({
   status: z.enum(['running', 'queued', 'blocked']),
   content: z.array(messageContentSchema),
   createdAt: isoDateTimeSchema,
+  origin: promptOriginSchema.optional(),
 });
 
 export const promptCompletedEventSchema = z.object({
@@ -1010,6 +1011,7 @@ export const promptCompletedEventSchema = z.object({
   promptId: z.string(),
   finishedAt: isoDateTimeSchema,
   reason: z.enum(['completed', 'failed', 'blocked']).optional(),
+  origin: promptOriginSchema.optional(),
 });
 
 export const promptAbortedEventSchema = z.object({
@@ -1017,6 +1019,7 @@ export const promptAbortedEventSchema = z.object({
   agentId: z.string(),
   promptId: z.string(),
   abortedAt: isoDateTimeSchema,
+  origin: promptOriginSchema.optional(),
 });
 
 export const promptSteeredEventSchema = z.object({

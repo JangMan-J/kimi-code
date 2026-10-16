@@ -1,4 +1,4 @@
-import type { UserPromptOrigin } from '#/agent/contextMemory/types';
+import type { PromptOrigin, UserPromptOrigin } from '#/agent/contextMemory/types';
 /* oxlint-disable typescript-eslint/no-unsafe-declaration-merging, eslint-plugin-import/namespace -- Event2 class+payload-interface declaration merging is the sanctioned event-declaration idiom. */
 import { z } from 'zod';
 
@@ -11,6 +11,7 @@ export interface PromptCompletedPayload {
   readonly promptId: string;
   readonly finishedAt: string;
   readonly reason: 'completed' | 'failed' | 'blocked';
+  readonly origin?: PromptOrigin;
 }
 
 const promptCompletedSchema = z.object({
@@ -18,6 +19,7 @@ const promptCompletedSchema = z.object({
   promptId: z.string().min(1),
   finishedAt: z.string(),
   reason: z.union([z.literal('completed'), z.literal('failed'), z.literal('blocked')]),
+  origin: z.custom<PromptOrigin>().optional(),
 });
 
 export class PromptCompleted extends AgentEvent2<z.infer<typeof promptCompletedSchema>> {
@@ -33,18 +35,21 @@ export interface PromptCompletedEvent {
   readonly promptId: string;
   readonly finishedAt: string;
   readonly reason?: 'completed' | 'failed' | 'blocked';
+  readonly origin?: PromptOrigin;
 }
 
 export interface PromptAbortedPayload {
   readonly agentId: string;
   readonly promptId: string;
   readonly abortedAt: string;
+  readonly origin?: PromptOrigin;
 }
 
 const promptAbortedSchema = z.object({
   agentId: z.string(),
   promptId: z.string().min(1),
   abortedAt: z.string(),
+  origin: z.custom<PromptOrigin>().optional(),
 });
 
 export class PromptAborted extends AgentEvent2<z.infer<typeof promptAbortedSchema>> {
@@ -66,6 +71,7 @@ export interface PromptSubmittedEvent {
   readonly status: 'running' | 'queued' | 'blocked';
   readonly content: readonly MessageContent[];
   readonly createdAt: string;
+  readonly origin?: PromptOrigin;
 }
 
 export interface PromptSteeredEvent {
@@ -109,6 +115,7 @@ export interface PromptQueuedPayload {
   readonly content: ContentPart[];
   readonly queueLength: number;
   readonly clientMetadata?: UserPromptOrigin['clientMetadata'];
+  readonly origin?: PromptOrigin;
 }
 
 export class PromptQueued extends AgentEvent2<PromptQueuedPayload> {
@@ -125,6 +132,7 @@ export interface PromptSubmittedPayload {
   readonly content: ContentPart[];
   readonly createdAt: string;
   readonly clientMetadata?: UserPromptOrigin['clientMetadata'];
+  readonly origin?: PromptOrigin;
 }
 
 export class PromptSubmitted extends AgentEvent2<PromptSubmittedPayload> {
@@ -136,6 +144,7 @@ export interface PromptSubmitted extends PromptSubmittedPayload {}
 export interface PromptStartedPayload {
   readonly agentId: string;
   readonly promptId: string;
+  readonly origin?: PromptOrigin;
 }
 
 export class PromptStarted extends AgentEvent2<PromptStartedPayload> {

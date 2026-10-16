@@ -1,4 +1,4 @@
-import type { UserPromptOrigin } from '@moonshot-ai/agent-core-v2/agent/contextMemory/types';
+import type { PromptOrigin, UserPromptOrigin } from '@moonshot-ai/agent-core-v2/agent/contextMemory/types';
 import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 
@@ -412,20 +412,23 @@ export class TranscriptService {
         : loop.promptHandle(snapshot.activePromptId);
     if (activeHandle !== undefined) {
       const activeOrigin = activeHandle.message.origin;
-      ops.push({
-        op: 'prompt.upsert',
-        prompt: {
-          promptId: activeHandle.id,
-          status: 'running',
-          userMessageId: activeHandle.userMessageId,
-          content: projectPromptContentParts(activeHandle.message.content),
-          createdAt: activeHandle.createdAt,
-          clientMetadata: activeOrigin?.kind === 'user' || activeOrigin?.kind === 'skill_activation' ? activeOrigin.clientMetadata : undefined,
-        },
-      });
+      if (activeOrigin?.kind !== 'system_trigger') {
+        ops.push({
+          op: 'prompt.upsert',
+          prompt: {
+            promptId: activeHandle.id,
+            status: 'running',
+            userMessageId: activeHandle.userMessageId,
+            content: projectPromptContentParts(activeHandle.message.content),
+            createdAt: activeHandle.createdAt,
+            clientMetadata: activeOrigin?.kind === 'user' || activeOrigin?.kind === 'skill_activation' ? activeOrigin.clientMetadata : undefined,
+          },
+        });
+      }
     }
     for (const item of snapshot.queue) {
       if (item.meta?.tracked !== true) continue;
+      if ((item.meta?.origin as PromptOrigin | undefined)?.kind === 'system_trigger') continue;
       ops.push({
         op: 'prompt.upsert',
         prompt: {

@@ -202,6 +202,7 @@ export class AgentExternalHooksService extends Service implements IAgentExternal
     );
     this._register(
       this.eventBus.subscribe(PromptQueued, (e) => {
+        if ((e.origin ?? USER_PROMPT_ORIGIN).kind !== 'user') return;
         this.fireAndForget(
           'UserPromptQueued',
           { promptId: e.promptId, prompt: e.content, queueLength: e.queueLength },

@@ -1240,6 +1240,15 @@ describe('IExternalHooksRunnerService integration', () => {
         }),
       );
       eventBus.publish(
+        new PromptQueued({
+          agentId: 'main',
+          promptId: 'p2',
+          content: [{ type: 'text' as const, text: 'continue the goal' }],
+          queueLength: 3,
+          origin: { kind: 'system_trigger', name: 'goal_continuation' },
+        }),
+      );
+      eventBus.publish(
         new TaskStarted({
           agentId: 'main',
           info: {
