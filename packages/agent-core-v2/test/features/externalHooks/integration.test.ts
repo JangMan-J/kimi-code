@@ -1214,7 +1214,7 @@ describe('IExternalHooksRunnerService integration', () => {
       ix.set(IAgentExternalHooksService, new SyncDescriptor(AgentExternalHooksService));
       ix.get(IAgentExternalHooksService);
       const eventBus = ix.get(IEventBus);
-      await flushMicrotasks();
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       eventBus.publish(
         new TurnStarted({
@@ -1297,11 +1297,13 @@ describe('IExternalHooksRunnerService integration', () => {
             promptId: 'p1',
             prompt: queuedContent,
             queueLength: 2,
+            origin: undefined,
           },
         },
         {
           event: 'UserPromptQueued',
           matcherValue: [{ type: 'text', text: 'continue the goal' }],
+          cwd: '/tmp',
           inputData: {
             sessionTitle: 'My Session',
             promptId: 'p2',

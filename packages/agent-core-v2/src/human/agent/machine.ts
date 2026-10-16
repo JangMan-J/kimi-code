@@ -385,6 +385,35 @@ export function createAgentMachine({
       forwardToParent: ({ self, event }) => {
         self._parent?.send(event);
       },
+      steerGateResolved: enqueueActions(({ context, enqueue, event }) => {
+        if (event.type !== 'steerGate.resolved') return;
+        const passed: UserEntry[] = [];
+        for (const outcome of event.outcomes) {
+          if (outcome.verdict === 'blocked') {
+            enqueue.emit({
+              type: 'prompt.blocked' as const,
+              queueItemId: outcome.entry.meta?.promptId,
+              entry: outcome.entry,
+            });
+          } else if (outcome.verdict === 'failed') {
+            enqueue.emit({
+              type: 'prompt.gate_failed' as const,
+              queueItemId: outcome.entry.meta?.promptId,
+              error: outcome.error,
+              entry: outcome.entry,
+            });
+          } else {
+            passed.push(
+              outcome.message !== undefined
+                ? { ...outcome.entry, message: outcome.message }
+                : outcome.entry,
+            );
+          }
+        }
+        if (passed.length === 0) return;
+        enqueue.assign(steerMergePatch(context, passed));
+        enqueue.emit(steerMergedEvent(passed));
+      }),
       commitPendingToHistory: enqueueActions(({ context, enqueue }) => {
         const head = context.queue[0];
         enqueue.sendTo('store', {
@@ -646,12 +675,18 @@ export function createAgentMachine({
             target: 'running',
             actions: [assign({ paused: false }), 'commitPendingToHistory'],
           },
-          'steerGate.resolved': {
-            actions: enqueueActions(({ enqueue, event }) => {
-              if (event.type !== 'steerGate.resolved') return;
-              enqueue.emit({ type: 'steerGate.dropped' as const, outcomes: event.outcomes });
-            }),
-          },
+          'steerGate.resolved': [
+            {
+              guard: ({ context }) => context.paused,
+              actions: 'steerGateResolved',
+            },
+            {
+              actions: enqueueActions(({ enqueue, event }) => {
+                if (event.type !== 'steerGate.resolved') return;
+                enqueue.emit({ type: 'steerGate.dropped' as const, outcomes: event.outcomes });
+              }),
+            },
+          ],
         },
         states: {
           ready: {
@@ -852,35 +887,7 @@ export function createAgentMachine({
             }),
           },
           'steerGate.resolved': {
-            actions: enqueueActions(({ context, enqueue, event }) => {
-              if (event.type !== 'steerGate.resolved') return;
-              const passed: UserEntry[] = [];
-              for (const outcome of event.outcomes) {
-                if (outcome.verdict === 'blocked') {
-                  enqueue.emit({
-                    type: 'prompt.blocked' as const,
-                    queueItemId: outcome.entry.meta?.promptId,
-                    entry: outcome.entry,
-                  });
-                } else if (outcome.verdict === 'failed') {
-                  enqueue.emit({
-                    type: 'prompt.gate_failed' as const,
-                    queueItemId: outcome.entry.meta?.promptId,
-                    error: outcome.error,
-                    entry: outcome.entry,
-                  });
-                } else {
-                  passed.push(
-                    outcome.message !== undefined
-                      ? { ...outcome.entry, message: outcome.message }
-                      : outcome.entry,
-                  );
-                }
-              }
-              if (passed.length === 0) return;
-              enqueue.assign(steerMergePatch(context, passed));
-              enqueue.emit(steerMergedEvent(passed));
-            }),
+            actions: 'steerGateResolved',
           },
           'tool.detached': {
             guard: ({ context, event }) => context.turnTools[event.toolCallId] !== undefined,
