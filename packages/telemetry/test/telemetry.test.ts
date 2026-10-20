@@ -876,6 +876,34 @@ describe('AsyncTransport', () => {
     ).toHaveLength(0);
   });
 
+  it('pins the endpoint snapshot for the whole batch across token lookup and retries', async () => {
+    let endpoint: string | undefined = 'https://cn.test/events';
+    const seenUrls: string[] = [];
+    const transport = new AsyncTransport({
+      homeDir: await tempHome(),
+      deviceId: 'dev',
+      endpoint: () => endpoint,
+      getAccessToken: async () => {
+        endpoint = 'https://global.test/events';
+        return null;
+      },
+      fetchImpl: (async (input: unknown) => {
+        seenUrls.push(String(input));
+        return new Response(null, { status: 500 });
+      }) as unknown as typeof fetch,
+      retryBackoffsMs: [1, 1, 1],
+    });
+
+    await transport.send([sampleEvent()]);
+
+    expect(seenUrls).toEqual([
+      'https://cn.test/events',
+      'https://cn.test/events',
+      'https://cn.test/events',
+      'https://cn.test/events',
+    ]);
+  });
+
   it('retries anonymously on 401 with a token', async () => {
     const fetchImpl = vi
       .fn()

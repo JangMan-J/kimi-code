@@ -67,7 +67,7 @@ describe('regionForBareLogin', () => {
   it('judges and persists the region for a fresh install (no persisted ref)', () => {
     const resolved = regionForBareLogin(undefined);
     expect(['mainland-cn', 'global']).toContain(resolved);
-    expect(readFileSync(join(home, 'region'), 'utf-8').trim()).toBe(resolved);
+    expect(readFileSync(join(home, 'region'), 'utf-8').split('\n')[0]).toBe(resolved);
     writeFileSync(join(home, 'region'), 'global\n');
     refreshKimiRegion();
     expect(regionForBareLogin(undefined)).toBe('global');

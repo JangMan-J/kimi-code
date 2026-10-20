@@ -12,6 +12,7 @@ import type {
   ToolExecution,
 } from '#/tool/toolContract';
 import { IAgentToolActivationService } from '#/agent/toolActivation/toolActivation';
+import { IOAuthService } from '#/app/auth/auth';
 import { AgentToolActivationService } from '#/agent/toolActivation/toolActivationService';
 import { IAgentProfileService, type ProfileData } from '#/agent/profile/profile';
 import {
@@ -353,6 +354,9 @@ describe('GrepTool', () => {
           });
           reg.defineInstance(ISessionWorkspaceContext, stubWorkspaceContext('/workspace'));
           reg.defineInstance(ITelemetryService, noopTelemetryService);
+          reg.defineInstance(IOAuthService, {
+            getRegion: () => 'mainland-cn',
+          } as unknown as IOAuthService);
           reg.defineInstance(ISessionSkillCatalog, {
             _serviceBrand: undefined,
             catalog: { getSkillRoots: () => [] },

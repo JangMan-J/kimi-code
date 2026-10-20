@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import {
   KIMI_CODE_OAUTH_KEY,
+  kimiRegionProfile,
   OAuthAccessDeniedError,
   type KimiRegion,
 } from "@moonshot-ai/kimi-code-oauth";
@@ -25,7 +26,11 @@ function regionForLogin(): KimiRegion | undefined {
 
 export const authHandlers: Record<string, Handler<any, any>> = {
   [Methods.CheckLoginStatus]: async (_, ctx): Promise<LoginStatus> => {
-    return { loggedIn: await updateLoginContext(ctx.harness) };
+    const region = regionForLogin() ?? "mainland-cn";
+    return {
+      loggedIn: await updateLoginContext(ctx.harness),
+      siteBase: kimiRegionProfile(region).siteBase,
+    };
   },
 
   [Methods.Login]: async (_, ctx): Promise<LoginResult> => {

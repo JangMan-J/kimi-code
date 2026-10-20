@@ -126,7 +126,11 @@ export class CloudTransport {
         deferred.push(event);
       }
     }
-    if (deferred.length > 0) await this.saveToDisk(deferred);
+    if (deferred.length > 0) {
+      try {
+        await this.saveToDisk(deferred);
+      } catch {}
+    }
     if (sendable.length === 0 || endpoint === undefined) return;
     events = sendable;
     let savedToDisk = false;
@@ -150,7 +154,7 @@ export class CloudTransport {
     try {
       for (let attempt = 0; attempt <= this.retryBackoffsMs.length; attempt++) {
         try {
-          await this.sendHttp(payload, signal);
+          await this.sendHttp(payload, signal, endpoint);
           return;
         } catch (error) {
           if (isSignalAborted(signal) || isAbortError(error)) {
@@ -225,7 +229,7 @@ export class CloudTransport {
           continue;
         }
         try {
-          await this.sendHttp(payload);
+          await this.sendHttp(payload, undefined, endpoint);
           if (deferred.length === 0) {
             await this.storage.delete(TELEMETRY_SCOPE, key);
           } else {
@@ -254,7 +258,11 @@ export class CloudTransport {
     return events;
   }
 
-  private async sendHttp(payload: CloudPayload, signal?: AbortSignal): Promise<void> {
+  private async sendHttp(
+    payload: CloudPayload,
+    signal: AbortSignal | undefined,
+    endpoint: string,
+  ): Promise<void> {
     const token = this.getAccessToken === null ? null : await this.getAccessToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -263,10 +271,10 @@ export class CloudTransport {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await this.post(payload, headers, signal);
+    const response = await this.post(payload, headers, signal, endpoint);
     if (response.status === 401 && headers['Authorization'] !== undefined) {
       delete headers['Authorization'];
-      const retry = await this.post(payload, headers, signal);
+      const retry = await this.post(payload, headers, signal, endpoint);
       handleStatus(retry.status);
       return;
     }
@@ -276,12 +284,9 @@ export class CloudTransport {
   private async post(
     payload: CloudPayload,
     headers: Record<string, string>,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    endpoint: string,
   ): Promise<Response> {
-    const endpoint = this.currentEndpoint();
-    if (endpoint === undefined) {
-      throw new TransientCloudError('telemetry endpoint is disabled');
-    }
     try {
       return await fetchWithTimeout(
         this.fetchImpl,

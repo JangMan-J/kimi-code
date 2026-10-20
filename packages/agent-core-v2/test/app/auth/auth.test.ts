@@ -569,7 +569,7 @@ describe('OAuthService', () => {
       await flush();
       const region = svc.getRegion();
       expect(['mainland-cn', 'global']).toContain(region);
-      const written = (await readFile(join(home, 'region'), 'utf-8')).trim();
+      const written = (await readFile(join(home, 'region'), 'utf-8')).split('\n')[0];
       expect(written).toBe(region);
       expect(svc.getRegion()).toBe(region);
     } finally {
@@ -627,6 +627,27 @@ describe('OAuthService', () => {
       expect(svc.getRegion()).toBe('mainland-cn');
       await expect(readFile(join(home, 'region'), 'utf-8')).rejects.toThrow();
     } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('getRegion treats a bootstrap base-URL-only environment as configured', async () => {
+    const home = ix.get(IBootstrapService).homeDir;
+    const bootstrap = ix.get(IBootstrapService);
+    const originalGetEnv = bootstrap.getEnv;
+    (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = (name) =>
+      name === 'KIMI_CODE_BASE_URL' ? 'https://api.example.com/coding/v1' : originalGetEnv(name);
+    try {
+      await mkdir(home, { recursive: true });
+      vi.stubEnv('KIMI_CODE_OAUTH_HOST', '');
+      vi.stubEnv('KIMI_CODE_BASE_URL', '');
+      providers[OAUTH_PROVIDER] = { type: 'kimi' };
+      const svc = createService();
+      await flush();
+      expect(svc.getRegion()).toBe('mainland-cn');
+      await expect(readFile(join(home, 'region'), 'utf-8')).rejects.toThrow();
+    } finally {
+      (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = originalGetEnv;
       await rm(home, { recursive: true, force: true });
     }
   });

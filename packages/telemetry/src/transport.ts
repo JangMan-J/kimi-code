@@ -97,7 +97,13 @@ export class AsyncTransport {
       // expected === undefined: the event's region has no collector — drop
       // deliberately instead of spooling files that can never be delivered.
     }
-    if (deferred.length > 0) this.saveToDisk(deferred);
+    if (deferred.length > 0) {
+      try {
+        this.saveToDisk(deferred);
+      } catch {
+        // Spooling failures must not block the sendable partition.
+      }
+    }
     if (sendable.length === 0 || endpoint === undefined) return;
     events = sendable;
     let savedToDisk = false;
@@ -121,7 +127,7 @@ export class AsyncTransport {
     try {
       for (let attempt = 0; attempt <= this.retryBackoffsMs.length; attempt++) {
         try {
-          await this.sendHttp(payload, signal);
+          await this.sendHttp(payload, signal, endpoint);
           return;
         } catch (error) {
           if (isSignalAborted(signal) || isAbortError(error)) {
@@ -216,7 +222,7 @@ export class AsyncTransport {
           continue;
         }
         try {
-          await this.sendHttp(payload);
+          await this.sendHttp(payload, undefined, endpoint);
           if (deferred.length === 0) {
             unlinkSync(path);
           } else {
@@ -245,7 +251,11 @@ export class AsyncTransport {
     return this.endpointForRegion(region);
   }
 
-  private async sendHttp(payload: TelemetryPayload, signal?: AbortSignal): Promise<void> {
+  private async sendHttp(
+    payload: TelemetryPayload,
+    signal: AbortSignal | undefined,
+    endpoint: string,
+  ): Promise<void> {
     const token = this.getAccessToken === null ? null : await this.getAccessToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -254,10 +264,10 @@ export class AsyncTransport {
       headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const response = await this.post(payload, headers, signal);
+    const response = await this.post(payload, headers, signal, endpoint);
     if (response.status === 401 && headers['Authorization'] !== undefined) {
       delete headers['Authorization'];
-      const retry = await this.post(payload, headers, signal);
+      const retry = await this.post(payload, headers, signal, endpoint);
       handleStatus(retry.status);
       return;
     }
@@ -267,13 +277,10 @@ export class AsyncTransport {
   private async post(
     payload: TelemetryPayload,
     headers: Record<string, string>,
-    signal?: AbortSignal,
+    signal: AbortSignal | undefined,
+    endpoint: string,
   ): Promise<Response> {
     try {
-      const endpoint = this.resolvedEndpoint();
-      if (endpoint === undefined) {
-        throw new TransientTelemetryError('telemetry endpoint is disabled');
-      }
       return await fetchWithTimeout(
         this.fetchImpl,
         endpoint,

@@ -37,7 +37,7 @@ export function resolveExtensionRegion(options: ExtensionRegionOptions): KimiReg
     readMarker: process.env["KIMI_CODE_REGION_MARKER"] !== "off",
   };
   if (vscode.env.remoteName !== undefined) {
-    return resolveKimiRegionDetailed(resolutionOptions);
+    return resolveKimiRegionDetailed({ ...resolutionOptions, ignoreInferredMarker: true });
   }
   return ensureKimiRegionMarker(resolutionOptions);
 }

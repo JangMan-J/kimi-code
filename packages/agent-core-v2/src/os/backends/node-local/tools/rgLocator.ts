@@ -49,6 +49,7 @@ export interface EnsureRgPathOptions {
   readonly shareDir?: string | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly allowCachedFallback?: boolean;
+  readonly resolveRegion?: () => 'mainland-cn' | 'global' | undefined;
 }
 
 function rgBinaryName(): string {
@@ -65,10 +66,14 @@ export function getShareBinRgPath(): string {
   return join(getShareDir(), 'bin', rgBinaryName());
 }
 
-function rgBaseUrl(): string {
-  const region = resolveKimiRegionDetailed({
-    readMarker: process.env['KIMI_CODE_REGION_MARKER'] !== 'off',
-  }).region;
+function rgBaseUrl(
+  resolveRegion: (() => 'mainland-cn' | 'global' | undefined) | undefined,
+): string {
+  const region =
+    resolveRegion?.() ??
+    resolveKimiRegionDetailed({
+      readMarker: process.env['KIMI_CODE_REGION_MARKER'] !== 'off',
+    }).region;
   return `${kimiRegionProfile(region).cdnBase}/rg`;
 }
 
@@ -97,7 +102,7 @@ async function resolveRgPath(
   if (existing) return existing;
   throwIfAborted(options.signal);
   if (options.allowCachedFallback === true) {
-    return downloadRgWithLock(probe, shareDir);
+    return downloadRgWithLock(probe, shareDir, options.resolveRegion);
   }
   throw new Error2(ErrorCodes.OS_FS_UNAVAILABLE, 'ripgrep (rg) is not available on PATH');
 }
@@ -125,13 +130,17 @@ export async function findExistingRg(
 }
 
 let downloadPromise: Promise<RgResolution> | undefined;
-async function downloadRgWithLock(probe: RgProbe, shareDir: string): Promise<RgResolution> {
+async function downloadRgWithLock(
+  probe: RgProbe,
+  shareDir: string,
+  resolveRegion?: () => 'mainland-cn' | 'global' | undefined,
+): Promise<RgResolution> {
   if (downloadPromise !== undefined) return downloadPromise;
   downloadPromise = (async () => {
     try {
       const existing = await findExistingRg(probe, shareDir, true);
       if (existing) return existing;
-      const binPath = await downloadAndInstallRg(shareDir);
+      const binPath = await downloadAndInstallRg(shareDir, resolveRegion);
       return { path: binPath, source: 'share-bin-downloaded' };
     } finally {
       downloadPromise = undefined;
@@ -176,7 +185,10 @@ export function detectTarget(): string | undefined {
   return undefined;
 }
 
-async function downloadAndInstallRg(shareDir: string): Promise<string> {
+async function downloadAndInstallRg(
+  shareDir: string,
+  resolveRegion?: () => 'mainland-cn' | 'global' | undefined,
+): Promise<string> {
   const target = detectTarget();
   if (target === undefined) {
     throw new Error2(
@@ -197,7 +209,7 @@ async function downloadAndInstallRg(shareDir: string): Promise<string> {
       { details: { archiveName } },
     );
   }
-  const url = `${rgBaseUrl()}/${archiveName}`;
+  const url = `${rgBaseUrl(resolveRegion)}/${archiveName}`;
 
   const binDir = join(shareDir, 'bin');
   await mkdir(binDir, { recursive: true });

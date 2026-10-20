@@ -40,6 +40,7 @@ import {
 } from '@moonshot-ai/agent-core-v2';
 
 import { CLI_SHUTDOWN_TIMEOUT_MS, CLI_USER_AGENT_PRODUCT } from '#/constant/app';
+import { resetKimiRegionCache } from '#/utils/region';
 
 import { runV2Print } from '../../src/cli/v2/run-v2-print';
 
@@ -354,6 +355,9 @@ describe('runV2Print', () => {
     // Pin the telemetry kill-switch to "unset" so the host environment cannot
     // flip the default telemetry-on path these tests exercise.
     vi.stubEnv('KIMI_DISABLE_TELEMETRY', '');
+    // Pin the region to mainland-cn via the env signal so the telemetry
+    // pipeline assertions do not depend on the host's marker/local signals.
+    vi.stubEnv('KIMI_CODE_OAUTH_HOST', 'https://auth.kimi.com');
     // `vi.clearAllMocks` keeps implementations, so re-pin the default here.
     mocks.loadMcpServersDetailed.mockImplementation(async () => ({
       servers: {},
@@ -364,6 +368,7 @@ describe('runV2Print', () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    resetKimiRegionCache();
   });
 
   it('submits a prompt, renders native events, awaits completion, and drains', async () => {
@@ -682,7 +687,11 @@ describe('runV2Print', () => {
       version: '1.2.3-test',
       uiMode: 'print',
       model: 'k2',
+      region: 'mainland-cn',
+      regionSource: 'env',
+      resolveRegion: expect.any(Function),
       endpoint: expect.any(Function),
+      endpointForRegion: expect.any(Function),
       getAccessToken: expect.any(Function),
       onUnexpectedError: expect.any(Function),
     });

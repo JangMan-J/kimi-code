@@ -148,6 +148,13 @@ export interface ResolveKimiRegionOptions {
    * leaves the region choice entirely to the login UI).
    */
   readonly readMarker?: boolean;
+  /**
+   * Set true to additionally ignore a marker this client inferred itself
+   * (one carrying an inferred-provenance comment) — used on remote extension
+   * hosts, where a locally inferred marker describes the server, not the
+   * user's workstation. Genuine install-channel markers still apply.
+   */
+  readonly ignoreInferredMarker?: boolean;
 }
 
 function normalizeHost(value: string): string {
@@ -169,8 +176,31 @@ function readRegionMarker(homeDir: string): KimiRegion | undefined {
   } catch {
     return undefined;
   }
-  const value = raw.trim();
-  return value === 'mainland-cn' || value === 'global' ? value : undefined;
+  const firstLine = (raw.split('\n')[0] ?? '').trim();
+  return firstLine === 'mainland-cn' || firstLine === 'global' ? firstLine : undefined;
+}
+
+/**
+ * An inferred marker carries its provenance as a comment on the second line
+ * (`# local-signals` / `# fallback`) — the same single atomic file as the
+ * region, so provenance can never be crash-separated from the verdict.
+ * Install-channel markers are a bare region line and therefore carry none.
+ */
+function markerHasInferredProvenance(homeDir: string): boolean {
+  let raw: string;
+  try {
+    raw = readFileSync(join(homeDir, KIMI_REGION_MARKER_FILENAME), 'utf-8');
+  } catch {
+    return false;
+  }
+  const secondLine = (raw.split('\n')[1] ?? '').trim();
+  return secondLine === '# local-signals' || secondLine === '# fallback';
+}
+
+function markerFileContents(region: KimiRegion, source?: KimiRegionSource): string {
+  return source === 'local-signals' || source === 'fallback'
+    ? `${region}\n# ${source}\n`
+    : `${region}\n`;
 }
 
 // Mirrors `defaultKimiHome` in ./toolkit; keep the two in sync so the marker
@@ -219,17 +249,6 @@ function acquireRepairLock(lockPath: string): RepairLockOutcome {
 /** Sidecar carrying a first-run judgment's provenance; see {@link writeRegionJudgmentSidecar}. */
 export const KIMI_REGION_JUDGMENT_FILENAME = 'region.json';
 
-function judgmentSidecarIsInferred(homeDir: string): boolean {
-  try {
-    const parsed = JSON.parse(
-      readFileSync(join(homeDir, KIMI_REGION_JUDGMENT_FILENAME), 'utf-8'),
-    ) as { source?: unknown };
-    return parsed.source === 'local-signals' || parsed.source === 'fallback';
-  } catch {
-    return false;
-  }
-}
-
 /**
  * First-writer-wins marker persistence. Uses temp-file + hard-link for an
  * atomic no-overwrite create; on filesystems without hard links (exFAT/FAT,
@@ -237,12 +256,16 @@ function judgmentSidecarIsInferred(homeDir: string): boolean {
  * the winner-takes-all property but reopens a small race window on those
  * filesystems only. Throws with code EEXIST when another process already won.
  */
-function persistMarkerFirstWriterWins(homeDir: string, region: KimiRegion): void {
+function persistMarkerFirstWriterWins(
+  homeDir: string,
+  region: KimiRegion,
+  source: KimiRegionSource,
+): void {
   const markerPath = join(homeDir, KIMI_REGION_MARKER_FILENAME);
   const tmpPath = join(homeDir, `${KIMI_REGION_MARKER_FILENAME}.${process.pid}.tmp`);
   let linked = false;
   try {
-    writeFileSync(tmpPath, `${region}\n`, 'utf-8');
+    writeFileSync(tmpPath, markerFileContents(region, source), 'utf-8');
     linkSync(tmpPath, markerPath);
     linked = true;
   } catch (error) {
@@ -264,20 +287,20 @@ function persistMarkerFirstWriterWins(homeDir: string, region: KimiRegion): void
     }
     return;
   }
-  writeFileSync(markerPath, `${region}\n`, { encoding: 'utf-8', flag: 'wx' });
+  writeFileSync(markerPath, markerFileContents(region, source), {
+    encoding: 'utf-8',
+    flag: 'wx',
+  });
 }
 
 /**
- * Writes the first-run judgment's provenance sidecar. The marker itself
- * stays a bare region for compatibility, but the provenance must exist
- * somewhere durable — a later custom scoped login relies on it to tell an
- * inferred marker from an install-channel one, so the caller rolls the
- * marker back when this returns false.
+ * Best-effort sidecar carrying the first-run judgment's provenance for a
+ * future upload path (feedback, debug bundle) measuring judgments from the
+ * population whose region currently has no telemetry endpoint. Routing does
+ * not read this file — provenance for routing lives in the marker itself —
+ * so a failed write changes nothing beyond the missing artifact.
  */
-function tryWriteRegionJudgmentSidecar(
-  homeDir: string,
-  resolution: KimiRegionResolution,
-): boolean {
+function writeRegionJudgmentSidecar(homeDir: string, resolution: KimiRegionResolution): void {
   try {
     writeFileSync(
       join(homeDir, KIMI_REGION_JUDGMENT_FILENAME),
@@ -288,9 +311,8 @@ function tryWriteRegionJudgmentSidecar(
       })}\n`,
       'utf-8',
     );
-    return true;
   } catch {
-    return false;
+    // Measurement artifact only; never block startup or routing.
   }
 }
 
@@ -351,15 +373,17 @@ export function resolveKimiRegionDetailed(
     // default slot returned above, an official host matched earlier): an
     // install-channel marker still applies, but a marker this client itself
     // inferred while logged out must not flip a custom environment — keep the
-    // conservative default instead.
+    // conservative default instead. Callers on a remote extension host pass
+    // ignoreInferredMarker for the same carve-out (the inference read the
+    // server's signals, not the user's).
     const customScopedLogin = options.configuredOAuthKey !== undefined;
-    if (
-      markerRegion !== undefined &&
-      !(customScopedLogin && judgmentSidecarIsInferred(homeDir))
-    ) {
+    const ignoreInferred =
+      (customScopedLogin || options.ignoreInferredMarker === true) &&
+      markerHasInferredProvenance(homeDir);
+    if (markerRegion !== undefined && !ignoreInferred) {
       return { region: markerRegion, source: 'marker' };
     }
-    if (!customScopedLogin) {
+    if (!customScopedLogin && options.ignoreInferredMarker !== true) {
       const inferred = inferredRegionCache.get(homeDir);
       if (inferred !== undefined) return inferred;
     }
@@ -397,6 +421,7 @@ export function ensureKimiRegionMarker(
   options: EnsureKimiRegionMarkerOptions = {},
 ): KimiRegionResolution {
   const resolution = resolveKimiRegionDetailed(options);
+  const env = options.env ?? process.env;
   if (
     resolution.source !== 'default' ||
     options.readMarker === false ||
@@ -405,7 +430,9 @@ export function ensureKimiRegionMarker(
     // logged-out install: keep the conservative default instead of inferring
     // from unrelated device signals.
     options.configuredOAuthHost !== undefined ||
-    options.configuredOAuthKey !== undefined
+    options.configuredOAuthKey !== undefined ||
+    // A base-URL-only environment override is a configured environment too.
+    kimiCodeEnvBaseUrl(env) !== undefined
   ) {
     return resolution;
   }
@@ -416,7 +443,6 @@ export function ensureKimiRegionMarker(
     region: detection.region,
     source: detection.confident ? 'local-signals' : 'fallback',
   };
-  const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? defaultHomeDir(env);
   inferredRegionCache.set(homeDir, inferred);
   let persistError: NodeJS.ErrnoException | undefined;
@@ -425,21 +451,12 @@ export function ensureKimiRegionMarker(
     // write is the whole point, so create it first (private, matching the
     // other home/config creation paths).
     mkdirSync(homeDir, { recursive: true, mode: 0o700 });
-    persistMarkerFirstWriterWins(homeDir, detection.region);
+    persistMarkerFirstWriterWins(homeDir, detection.region, inferred.source);
   } catch (error) {
     persistError = error as NodeJS.ErrnoException;
   }
   if (persistError === undefined) {
-    if (!tryWriteRegionJudgmentSidecar(homeDir, inferred)) {
-      // Provenance must travel with the marker — a later custom scoped login
-      // reads it to tell an inferred marker from an install-channel one.
-      // Roll the marker back and let the next start re-judge.
-      try {
-        unlinkSync(join(homeDir, KIMI_REGION_MARKER_FILENAME));
-      } catch {
-        // Best effort.
-      }
-    }
+    writeRegionJudgmentSidecar(homeDir, inferred);
     return inferred;
   }
   {
@@ -475,20 +492,14 @@ export function ensureKimiRegionMarker(
         try {
           writeFileSync(
             join(homeDir, KIMI_REGION_MARKER_FILENAME),
-            `${detection.region}\n`,
+            markerFileContents(detection.region, inferred.source),
             'utf-8',
           );
           repairedByUs = true;
         } catch {
           // Still unwritable; the in-memory verdict stands for this process.
         }
-        if (repairedByUs && !tryWriteRegionJudgmentSidecar(homeDir, inferred)) {
-          try {
-            unlinkSync(join(homeDir, KIMI_REGION_MARKER_FILENAME));
-          } catch {
-            // Best effort.
-          }
-        }
+        if (repairedByUs) writeRegionJudgmentSidecar(homeDir, inferred);
         try {
           unlinkSync(lockPath);
         } catch {

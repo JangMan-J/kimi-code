@@ -101,6 +101,7 @@ export class CloudAppender implements ITelemetryAppender {
   private buffer: EnrichedCloudEvent[] = [];
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private lastRegionRefreshAt = 0;
+  private firstEventAccepted = false;
 
   constructor(options: CloudAppenderOptions) {
     this.deviceId = options.deviceId;
@@ -172,7 +173,12 @@ export class CloudAppender implements ITelemetryAppender {
   }
 
   track(record: TelemetryAppenderRecord): void {
-    this.maybeRefreshRegionContext();
+    if (this.firstEventAccepted) {
+      this.maybeRefreshRegionContext();
+    } else {
+      this.firstEventAccepted = true;
+      this.lastRegionRefreshAt = this.now();
+    }
     const ambientSessionId = record.context['session_id'];
     const enriched: EnrichedCloudEvent = {
       event_id: randomUUID().replaceAll('-', ''),
@@ -283,5 +289,7 @@ function telemetryEnv(bootstrap: IBootstrapService): NodeJS.ProcessEnv {
   if (oauthHost === undefined && legacyHost !== undefined) {
     delete env['KIMI_CODE_OAUTH_HOST'];
   }
+  const baseUrl = bootstrap.getEnv('KIMI_CODE_BASE_URL');
+  if (baseUrl !== undefined) env['KIMI_CODE_BASE_URL'] = baseUrl;
   return env;
 }

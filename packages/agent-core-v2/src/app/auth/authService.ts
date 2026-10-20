@@ -461,6 +461,8 @@ export class OAuthService extends Disposable implements IOAuthService {
     if (envOAuthHost === undefined && envLegacyOAuthHost !== undefined) {
       delete env['KIMI_CODE_OAUTH_HOST'];
     }
+    const envBaseUrl = this.bootstrap.getEnv('KIMI_CODE_BASE_URL');
+    if (envBaseUrl !== undefined) env['KIMI_CODE_BASE_URL'] = envBaseUrl;
     return env;
   }
 

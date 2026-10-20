@@ -12,6 +12,7 @@ import {
 } from '#/_base/errors/unexpectedError';
 import { FileStorageService } from '#/persistence/backends/node-fs/fileStorageService';
 import { CloudAppender, type CloudAppenderOptions } from '#/app/telemetry/cloudAppender';
+import { CloudTransport, type EnrichedCloudEvent } from '#/app/telemetry/cloudTransport';
 
 import { stubBootstrap, stubClientIdentity } from '../bootstrap/stubs';
 
@@ -142,7 +143,7 @@ describe('CloudAppender', () => {
     appender.track({ event: 'evt', context: {}, properties: {} });
     await appender.flush();
 
-    const written = readFileSync(join(homeDir, 'region'), 'utf-8').trim();
+    const written = readFileSync(join(homeDir, 'region'), 'utf-8').split('\n')[0];
     expect(['mainland-cn', 'global']).toContain(written);
     if (written === 'mainland-cn') {
       expect(requests).toHaveLength(1);
@@ -335,6 +336,75 @@ describe('CloudAppender', () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.body.events[0]?.['event']).toBe('kfc_legacy');
     expect(existsSync(legacyFile)).toBe(false);
+  });
+
+  it('pins the endpoint snapshot for the whole batch across token lookup and retries', async () => {
+    let endpoint: string | undefined = 'https://cn.example.test/events';
+    const seenUrls: string[] = [];
+    const transport = new CloudTransport({
+      storage: new FileStorageService(homeDir),
+      deviceId: 'dev',
+      resolveEndpoint: () => endpoint,
+      getAccessToken: async () => {
+        endpoint = 'https://global.example.test/events';
+        return null;
+      },
+      fetchImpl: (async (input: unknown) => {
+        seenUrls.push(String(input));
+        return statusResponse(500);
+      }) as unknown as typeof fetch,
+      retryBackoffsMs: [1, 1, 1],
+    });
+    const events: EnrichedCloudEvent[] = [
+      {
+        event_id: 'e1',
+        device_id: 'dev',
+        session_id: null,
+        event: 'evt',
+        timestamp: 1,
+        properties: {},
+        context: {},
+      },
+    ];
+
+    await transport.send(events);
+
+    expect(seenUrls).toEqual([
+      'https://cn.example.test/events',
+      'https://cn.example.test/events',
+      'https://cn.example.test/events',
+      'https://cn.example.test/events',
+    ]);
+  });
+
+  it('preserves the first-run provenance on the first event after the refresh interval', async () => {
+    rmSync(join(homeDir, 'region'));
+    let now = 1_000_000;
+    const requests: CapturedRequest[] = [];
+    const appender = new CloudAppender(
+      baseOptions({
+        homeDir,
+        now: () => now,
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+
+    now += 5_000;
+    appender.track({ event: 'first', context: {}, properties: {} });
+    await appender.flush();
+
+    const written = readFileSync(join(homeDir, 'region'), 'utf-8').split('\n')[0];
+    if (written === 'mainland-cn') {
+      expect(requests).toHaveLength(1);
+      expect(['local-signals', 'fallback']).toContain(
+        requests[0]?.body.events[0]?.['context_region_source'],
+      );
+    } else {
+      expect(requests).toHaveLength(0);
+    }
   });
 
   it('does not send when the env pins the global region', async () => {

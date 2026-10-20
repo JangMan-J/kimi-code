@@ -383,6 +383,28 @@ describe('ensureRgPath download branch', () => {
     }
   });
 
+  it('downloads from the global CDN when the resolver reports the global region', async () => {
+    const body = bodyFromBuffer(Buffer.from('not a real archive', 'utf8'));
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      body,
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      ensureRgPath(noRgProbe(), {
+        shareDir: fakeShare,
+        allowCachedFallback: true,
+        resolveRegion: () => 'global',
+      }),
+    ).rejects.toThrow();
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toMatch(/^https:\/\/code\.kimi\.ai\/kimi-code\/rg\/ripgrep-/);
+  });
+
   it('rejects archives that do not match the pinned SHA-256 before extraction', async () => {
     const tarMock = vi.mocked(extractTar);
     tarMock.mockClear();

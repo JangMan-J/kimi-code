@@ -77,6 +77,8 @@ export class CapabilityService extends Disposable implements ICapabilityService 
           if (envOAuthHost === undefined && envLegacyOAuthHost !== undefined) {
             delete env['KIMI_CODE_OAUTH_HOST'];
           }
+          const envBaseUrl = bootstrap.getEnv('KIMI_CODE_BASE_URL');
+          if (envBaseUrl !== undefined) env['KIMI_CODE_BASE_URL'] = envBaseUrl;
           return ensureKimiRegionMarker({
             env,
             configuredOAuthHost: oauth?.oauthHost,

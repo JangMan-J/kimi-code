@@ -384,7 +384,7 @@ describe('ensureKimiRegionMarker', () => {
       region: 'mainland-cn',
       source: 'local-signals',
     });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n# local-signals\n');
     expect(
       ensureKimiRegionMarker({
         env: {},
@@ -404,7 +404,7 @@ describe('ensureKimiRegionMarker', () => {
         signals: { timeZone: 'America/New_York', locale: 'en-US' },
       }),
     ).toEqual({ region: 'global', source: 'local-signals' });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n# local-signals\n');
   });
 
   it('marks a missing-signal judgment as fallback and still caches mainland', async () => {
@@ -413,7 +413,7 @@ describe('ensureKimiRegionMarker', () => {
       region: 'mainland-cn',
       source: 'fallback',
     });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n# fallback\n');
   });
 
   it('never overwrites an existing marker', async () => {
@@ -567,7 +567,7 @@ describe('ensureKimiRegionMarker', () => {
         signals: { timeZone: 'America/New_York', locale: 'en-US' },
       }),
     ).toEqual({ region: 'global', source: 'local-signals' });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n# local-signals\n');
     expect(resolveKimiRegionDetailed({ env: {}, homeDir: dir })).toEqual({
       region: 'global',
       source: 'marker',
@@ -584,7 +584,7 @@ describe('ensureKimiRegionMarker', () => {
         signals: { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' },
       }),
     ).toEqual({ region: 'mainland-cn', source: 'local-signals' });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n# local-signals\n');
     expect(statSync(dir).mode & 0o777).toBe(0o700);
   });
 
@@ -604,7 +604,7 @@ describe('ensureKimiRegionMarker', () => {
       region: 'global',
       source: 'local-signals',
     });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n# local-signals\n');
   });
 
   it('returns the winner without waiting when the locked marker is already valid', async () => {
@@ -636,7 +636,7 @@ describe('ensureKimiRegionMarker', () => {
         signals: { timeZone: 'America/New_York', locale: 'en-US' },
       }),
     ).toEqual({ region: 'global', source: 'local-signals' });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n# local-signals\n');
     expect(existsSync(lockPath)).toBe(false);
   });
 
@@ -688,7 +688,7 @@ describe('ensureKimiRegionMarker', () => {
       region: 'global',
       source: 'local-signals',
     });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n# local-signals\n');
   });
 
   it('keeps the marker and writes the sidecar when temp cleanup fails after linking', async () => {
@@ -703,7 +703,7 @@ describe('ensureKimiRegionMarker', () => {
         signals: { timeZone: 'America/New_York', locale: 'en-US' },
       }),
     ).toEqual({ region: 'global', source: 'local-signals' });
-    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n# local-signals\n');
     const sidecar = JSON.parse(
       readFileSync(join(dir, KIMI_REGION_JUDGMENT_FILENAME), 'utf-8'),
     ) as { source?: string };
@@ -737,7 +737,7 @@ describe('ensureKimiRegionMarker', () => {
     expect(fallbackSidecar).toMatchObject({ region: 'mainland-cn', source: 'fallback' });
   });
 
-  it('rolls the marker back when the judgment sidecar cannot be written', async () => {
+  it('persists the marker with its provenance even when the measurement sidecar fails', async () => {
     const dir = await freshDir();
     mkdirSync(join(dir, KIMI_REGION_JUDGMENT_FILENAME));
     expect(
@@ -747,6 +747,44 @@ describe('ensureKimiRegionMarker', () => {
         signals: { timeZone: 'America/New_York', locale: 'en-US' },
       }),
     ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe(
+      'global\n# local-signals\n',
+    );
+  });
+
+  it('parses an inferred marker with its provenance comment as its first-line region', async () => {
+    const dir = await freshDir();
+    await writeFile(join(dir, KIMI_REGION_MARKER_FILENAME), 'global\n# local-signals\n', 'utf-8');
+    expect(resolveKimiRegion({ env: {}, homeDir: dir })).toBe('global');
+  });
+
+  it('never infers when only a base URL environment override is set', async () => {
+    const dir = await freshDir();
+    expect(
+      ensureKimiRegionMarker({
+        env: { KIMI_CODE_BASE_URL: 'https://api.example.com/coding/v1' },
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'mainland-cn', source: 'default' });
     expect(existsSync(join(dir, KIMI_REGION_MARKER_FILENAME))).toBe(false);
+  });
+
+  it('ignores a locally inferred marker when ignoreInferredMarker is set', async () => {
+    const dir = await freshDir();
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(
+      resolveKimiRegionDetailed({ env: {}, homeDir: dir, ignoreInferredMarker: true }),
+    ).toEqual({ region: 'mainland-cn', source: 'default' });
+    expect(resolveKimiRegionDetailed({ env: {}, homeDir: dir })).toEqual({
+      region: 'global',
+      source: 'marker',
+    });
   });
 });
