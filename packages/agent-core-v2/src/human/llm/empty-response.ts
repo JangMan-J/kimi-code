@@ -30,20 +30,25 @@ export function createEmptyResponseError(
   };
 }
 
+export function isThinkingOnlyMessage(message: AssistantMessage): boolean {
+  if (message.toolCalls.length > 0) return false;
+  if (!message.content.some((part) => part.type === 'think')) return false;
+  return !message.content.some(
+    (part) => part.type === 'text' && part.text.trim().length > 0,
+  );
+}
+
 export function emptyResponseError(
   message: AssistantMessage,
   model: LlmModel,
   finish: FinishInfo,
+  allowCompletedThinkOnly = false,
 ): LlmErrorMessage<'empty_response'> | null {
-  const hasToolCalls = message.toolCalls.length > 0;
-  if (message.content.length === 0 && !hasToolCalls) {
+  if (message.content.length === 0 && message.toolCalls.length === 0) {
     return createEmptyResponseError(model, finish, false);
   }
-  const hasThink = message.content.some((part) => part.type === 'think');
-  const hasText = message.content.some(
-    (part) => part.type === 'text' && part.text.trim().length > 0,
-  );
-  if (hasThink && !hasText && !hasToolCalls) {
+  if (isThinkingOnlyMessage(message)) {
+    if (allowCompletedThinkOnly && finish.finishReason === 'completed') return null;
     return createEmptyResponseError(model, finish, true);
   }
   return null;

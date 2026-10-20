@@ -615,6 +615,16 @@ export interface LlmRequestProjectionFallbackEvent {
   turn_id?: number;
 }
 
+export interface LlmThinkingOnlyResponseEvent {
+  turn_id: number;
+  step_no: number;
+  action: 'nudged' | 'nudge_exhausted';
+  model?: string;
+  provider_type?: string;
+  protocol?: string;
+  trace_id?: string;
+}
+
 export interface SessionIndexDegradedEvent {
   reason: string;
   degraded_count: number;
@@ -1423,6 +1433,22 @@ export const telemetryEventDefinitions = {
       error_type: 'Classified error category of the rejection',
       model: 'Model that rejected the request',
       turn_id: 'Per-agent turn index; pair with agent_id to locate a turn within a session',
+    },
+  }),
+  llm_thinking_only_response: defineAgentTelemetryEvent<LlmThinkingOnlyResponseEvent>({
+    owner: 'kimi-code',
+    comment:
+      'A normally completed LLM response contains only thinking content: a recovery reminder is queued, or the per-turn recovery was already spent.',
+    properties: {
+      turn_id: 'Per-agent turn index (main or subagent); pair with agent_id to locate a turn within a session',
+      step_no: 'Step index within the turn',
+      action:
+        "How the response was handled: 'nudged' when a recovery reminder was queued (queueing only, not a successful recovery), 'nudge_exhausted' when the turn already spent its one recovery",
+      model: 'Model alias that produced the thinking-only response',
+      provider_type: 'Provider protocol type',
+      protocol: 'Request protocol',
+      trace_id:
+        'Trace id of the LLM request that produced the thinking-only response; absent for non-Kimi protocols',
     },
   }),
   session_index_degraded: defineTelemetryEvent<SessionIndexDegradedEvent>({

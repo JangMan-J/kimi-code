@@ -36,7 +36,7 @@ function statusError(
 }
 
 function createStubRequester(
-  plan: readonly (LlmErrorMessage | 'ok' | 'empty' | 'think_only' | 'filtered_empty')[],
+  plan: readonly (LlmErrorMessage | 'ok' | 'empty' | 'think_only' | 'think_only_completed' | 'filtered_empty')[],
 ) {
   let calls = 0;
   const requester: LlmRequester = {
@@ -54,6 +54,15 @@ function createStubRequester(
       }
       if (step === 'think_only') {
         onEvent?.({ type: 'llm.streaming.part', part: { type: 'think', think: 'reasoning' } });
+        onEvent?.({ type: 'llm.done' });
+        return Promise.resolve();
+      }
+      if (step === 'think_only_completed') {
+        onEvent?.({ type: 'llm.streaming.part', part: { type: 'think', think: 'reasoning' } });
+        onEvent?.({
+          type: 'llm.streaming.finish',
+          finish: { finishReason: 'completed', rawFinishReason: 'stop' },
+        });
         onEvent?.({ type: 'llm.done' });
         return Promise.resolve();
       }
@@ -410,6 +419,54 @@ describe('turn machine llm retry', () => {
     expect(actor.getSnapshot().context.turnOutput).toMatchObject({ type: 'done' });
     expect(retrying).toHaveLength(0);
     expect(calls()).toBe(1);
+  });
+});
+
+describe('turn machine thinking-only completion', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('completes a normally finished think-only response without the empty-response cascade', async () => {
+    const { requester, calls } = createStubRequester(['think_only_completed']);
+    const { actor, retrying, failed } = startTurnActor(requester, {
+      retry: { maxAttemptsPerStep: 3 },
+    });
+
+    await flush();
+
+    const output = actor.getSnapshot().context.turnOutput;
+    expect(output).toMatchObject({ type: 'done' });
+    const produced = output?.type === 'done' ? output.produced : [];
+    expect(produced).toHaveLength(1);
+    expect(produced[0]?.message.role).toBe('assistant');
+    expect(produced[0]?.message.content).toEqual([{ type: 'think', think: 'reasoning' }]);
+    expect(produced[0]?.meta?.finish).toMatchObject({ finishReason: 'completed' });
+    expect(retrying).toHaveLength(0);
+    expect(failed).toHaveLength(0);
+    expect(calls()).toBe(1);
+  });
+
+  it('keeps retrying a think-only response that has no finish reason', async () => {
+    const { requester, calls } = createStubRequester(['think_only', 'ok']);
+    const { actor, retrying, failed } = startTurnActor(requester, {
+      retry: { maxAttemptsPerStep: 3 },
+    });
+
+    await flush();
+    expect(retrying).toHaveLength(1);
+    expect(retrying[0]).toMatchObject({ errorName: 'empty_response' });
+    expect(retrying[0]?.errorMessage).toContain('only thinking content');
+
+    await vi.advanceTimersByTimeAsync((retrying[0]?.delayMs ?? 0) + 1);
+    await flush();
+    expect(actor.getSnapshot().context.turnOutput).toMatchObject({ type: 'done' });
+    expect(calls()).toBe(2);
+    expect(failed).toHaveLength(0);
   });
 });
 
