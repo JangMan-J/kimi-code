@@ -58,7 +58,6 @@ import { IModelService } from '#/llm-adapter/model/model';
 import {
   type ModelRequestEvent,
   type ModelRequestInput,
-  type ModelRequestParams,
   type ModelRequester,
 } from '#/llm-adapter/model/model-requester';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
@@ -1154,55 +1153,6 @@ describe('AgentLLMRequesterService trace id', () => {
     await service.request({ source: { type: 'operation', requestKind: 'full_compaction' } });
 
     expect(telemetry.getContext()['trace_id']).toBe('trace-turn-1');
-  });
-});
-
-describe('AgentLLMRequesterService thinking-only policy', () => {
-  function createThinkOnlyRequester(
-    captured: Array<ModelRequestParams | undefined>,
-  ): ModelRequester {
-    const base = createRequester({ value: 0 });
-    return {
-      model: base.model,
-      request: async function* (_input, _signal, params) {
-        captured.push(params);
-        yield {
-          type: 'part',
-          part: { type: 'think', think: 'reasoning' },
-        } satisfies ModelRequestEvent;
-        yield {
-          type: 'finish',
-          message: {
-            role: 'assistant',
-            content: [{ type: 'think', think: 'reasoning' }],
-            toolCalls: [],
-          },
-          providerFinishReason: 'completed',
-          rawFinishReason: 'stop',
-          id: 'resp-1',
-        } satisfies ModelRequestEvent;
-      },
-    };
-  }
-
-  it('passes the allow policy to turn requests and lets the response through', async () => {
-    const captured: Array<ModelRequestParams | undefined> = [];
-    const { service } = createService(createThinkOnlyRequester(captured), undefined);
-
-    const result = await service.request({ source: { type: 'turn', turnId: 1, step: 1 } });
-
-    expect(captured[0]?.allowCompletedThinkOnly).toBe(true);
-    expect(result.providerFinishReason).toBe('completed');
-    expect(result.message.content).toEqual([{ type: 'think', think: 'reasoning' }]);
-  });
-
-  it('keeps the policy off for operation requests such as compaction', async () => {
-    const captured: Array<ModelRequestParams | undefined> = [];
-    const { service } = createService(createThinkOnlyRequester(captured), undefined);
-
-    await service.request({ source: { type: 'operation', requestKind: 'full_compaction' } });
-
-    expect(captured[0]?.allowCompletedThinkOnly).toBe(false);
   });
 });
 

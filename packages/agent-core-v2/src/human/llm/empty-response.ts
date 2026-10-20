@@ -44,13 +44,11 @@ export function emptyResponseError(
   message: AssistantMessage,
   model: LlmModel,
   finish: FinishInfo,
-  options: { readonly allowCompletedThinkOnly?: boolean } = {},
 ): LlmErrorMessage<'empty_response'> | null {
   if (message.content.length === 0 && message.toolCalls.length === 0) {
     return createEmptyResponseError(model, finish, false);
   }
-  if (isThinkingOnlyMessage(message)) {
-    if (options.allowCompletedThinkOnly === true && finish.finishReason === 'completed') return null;
+  if (isThinkingOnlyMessage(message) && finish.finishReason !== 'completed') {
     return createEmptyResponseError(model, finish, true);
   }
   return null;

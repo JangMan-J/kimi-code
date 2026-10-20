@@ -360,7 +360,7 @@ describe('ModelRequesterImpl request execution', () => {
     expect((empty as { code: string }).code).toBe(PROVIDER_API_ERROR_CODE);
   });
 
-  it('emits a finish event for a completed think-only response when the policy allows it', async () => {
+  it('emits a finish event for a completed think-only response', async () => {
     const requester = new FakeLlmRequester();
     requester.handler = (_i, emit) => {
       emitAll(emit, [
@@ -378,7 +378,7 @@ describe('ModelRequesterImpl request execution', () => {
       gatewayReturning(requester),
     );
 
-    const events = await collect(impl.request(INPUT, undefined, { allowCompletedThinkOnly: true }));
+    const events = await collect(impl.request(INPUT));
 
     const finish = events.find((event) => event.type === 'finish');
     expect(finish).toMatchObject({

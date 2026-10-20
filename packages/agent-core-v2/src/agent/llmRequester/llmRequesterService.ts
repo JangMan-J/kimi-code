@@ -441,7 +441,6 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       try {
         for await (const event of request.requester.request(input, signal, {
           ...request.params,
-          allowCompletedThinkOnly: request.source?.type === 'turn',
           onTraceId: setTraceId,
         })) {
           switch (event.type) {

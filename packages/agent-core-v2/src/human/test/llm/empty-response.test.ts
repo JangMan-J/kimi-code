@@ -85,23 +85,13 @@ describe('emptyResponseError', () => {
     ).toBeNull();
   });
 
-  it('keeps reporting a completed think-only response under the default policy', () => {
+  it('treats a completed think-only response as a valid response', () => {
     const thinkOnly = accumulatedMessage([{ type: 'think', think: 'reasoning' }]);
     const completed: FinishInfo = { finishReason: 'completed', rawFinishReason: 'stop' };
-    const error = emptyResponseError(thinkOnly, model, completed);
-    expect(error?.kind).toBe('empty_response');
-    expect(error?.message).toContain('only thinking content');
+    expect(emptyResponseError(thinkOnly, model, completed)).toBeNull();
   });
 
-  it('tolerates a completed think-only response when the policy allows it', () => {
-    const thinkOnly = accumulatedMessage([{ type: 'think', think: 'reasoning' }]);
-    const completed: FinishInfo = { finishReason: 'completed', rawFinishReason: 'stop' };
-    expect(
-      emptyResponseError(thinkOnly, model, completed, { allowCompletedThinkOnly: true }),
-    ).toBeNull();
-  });
-
-  it('still reports think-only responses with abnormal or missing finish under the allow policy', () => {
+  it('still reports think-only responses with abnormal or missing finish', () => {
     const thinkOnly = accumulatedMessage([{ type: 'think', think: 'reasoning' }]);
     const finishes: FinishInfo[] = [
       { finishReason: 'truncated', rawFinishReason: 'length' },
@@ -111,9 +101,7 @@ describe('emptyResponseError', () => {
       NO_FINISH,
     ];
     for (const finish of finishes) {
-      expect(
-        emptyResponseError(thinkOnly, model, finish, { allowCompletedThinkOnly: true })?.kind,
-      ).toBe('empty_response');
+      expect(emptyResponseError(thinkOnly, model, finish)?.kind).toBe('empty_response');
     }
   });
 });

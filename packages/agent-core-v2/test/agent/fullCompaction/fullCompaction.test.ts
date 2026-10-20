@@ -100,6 +100,11 @@ const EXACT_COMPACTION_PROFILE: ResolvedAgentProfile = normalizeAgentProfile({
   tools: ['Read', 'Write', 'Skill'],
 });
 
+const THINK_ONLY_FINISHES: [string, { finishReason: FinishReason | null; rawFinishReason: string | null }][] = [
+  ['no finish reason', { finishReason: null, rawFinishReason: null }],
+  ['completed', { finishReason: 'completed', rawFinishReason: 'stop' }],
+];
+
 describe('FullCompaction', () => {
   it('keeps oversized trailing user messages as recent', () => {
     const strategy = testCompactionStrategy();
@@ -859,7 +864,7 @@ describe('FullCompaction', () => {
     await ctx.expectResumeMatches();
   });
 
-  it('reduces the compacted prefix and retries when the model returns only thinking content', async () => {
+  it.each(THINK_ONLY_FINISHES)('reduces the compacted prefix and retries when the model returns only thinking content (%s)', async (_label, finish) => {
     vi.useFakeTimers();
     const firstThinkOnly = deferred<void>();
     const inputs: string[][] = [];
@@ -867,9 +872,11 @@ describe('FullCompaction', () => {
       inputs.push(inputHistorySnapshot(history));
       if (attempt === 1) {
         firstThinkOnly.resolve();
-        return mockStreamedMessage([
-          { type: 'think', think: 'Reasoning about the summary but never writing it...' },
-        ]);
+        return mockStreamedMessage(
+          [{ type: 'think', think: 'Reasoning about the summary but never writing it...' }],
+          null,
+          finish,
+        );
       }
       return mockStreamedMessage([{ type: 'text', text: 'Recovered compacted summary.' }]);
     });
@@ -943,7 +950,7 @@ describe('FullCompaction', () => {
     await ctx.expectResumeMatches();
   });
 
-  it('fails after exhausting retries when the model only ever returns thinking content', async () => {
+  it.each(THINK_ONLY_FINISHES)('fails after exhausting retries when the model only ever returns thinking content (%s)', async (_label, finish) => {
     vi.useFakeTimers();
     const records: TelemetryRecord[] = [];
     const inputs: string[][] = [];
@@ -953,9 +960,11 @@ describe('FullCompaction', () => {
       if (attempt === 1) {
         firstResponse.resolve();
       }
-      return mockStreamedMessage([
-        { type: 'think', think: 'Still only thinking, no summary produced.' },
-      ]);
+      return mockStreamedMessage(
+        [{ type: 'think', think: 'Still only thinking, no summary produced.' }],
+        null,
+        finish,
+      );
     });
     const ctx = testAgent({ generate, telemetry: recordingTelemetry(records) });
     ctx.configure({
