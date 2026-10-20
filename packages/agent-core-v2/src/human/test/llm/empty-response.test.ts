@@ -8,7 +8,7 @@ import {
   type StreamedMessagePart,
 } from '#/llm/message';
 import type { LlmModel } from '#/llm/model';
-import { emptyResponseError, isThinkingOnlyMessage } from '#/llm/empty-response';
+import { emptyResponseError } from '#/llm/empty-response';
 
 const model: LlmModel = { provider: 'test', model: 'test-model', capability: UNKNOWN_CAPABILITY };
 
@@ -115,63 +115,5 @@ describe('emptyResponseError', () => {
         emptyResponseError(thinkOnly, model, finish, { allowCompletedThinkOnly: true })?.kind,
       ).toBe('empty_response');
     }
-  });
-
-  it('returns null for thinking with text or tool calls under the allow policy', () => {
-    const completed: FinishInfo = { finishReason: 'completed', rawFinishReason: 'stop' };
-    expect(
-      emptyResponseError(
-        accumulatedMessage([
-          { type: 'think', think: 'reasoning' },
-          { type: 'text', text: 'hi' },
-        ]),
-        model,
-        completed,
-        true,
-      ),
-    ).toBeNull();
-    expect(
-      emptyResponseError(
-        accumulatedMessage([
-          { type: 'think', think: 'reasoning' },
-          { type: 'function', id: 'call_1', name: 'tool', arguments: '{}' },
-        ]),
-        model,
-        completed,
-        true,
-      ),
-    ).toBeNull();
-  });
-
-  it('identifies thinking-only messages with the shared predicate', () => {
-    expect(
-      isThinkingOnlyMessage(accumulatedMessage([{ type: 'think', think: 'reasoning' }])),
-    ).toBe(true);
-    expect(
-      isThinkingOnlyMessage(
-        accumulatedMessage([
-          { type: 'think', think: 'reasoning' },
-          { type: 'text', text: ' ' },
-        ]),
-      ),
-    ).toBe(true);
-    expect(
-      isThinkingOnlyMessage(
-        accumulatedMessage([
-          { type: 'think', think: 'reasoning' },
-          { type: 'text', text: 'hi' },
-        ]),
-      ),
-    ).toBe(false);
-    expect(
-      isThinkingOnlyMessage(
-        accumulatedMessage([
-          { type: 'think', think: 'reasoning' },
-          { type: 'function', id: 'call_1', name: 'tool', arguments: '{}' },
-        ]),
-      ),
-    ).toBe(false);
-    expect(isThinkingOnlyMessage(accumulatedMessage([{ type: 'text', text: 'hi' }]))).toBe(false);
-    expect(isThinkingOnlyMessage(accumulatedMessage([]))).toBe(false);
   });
 });

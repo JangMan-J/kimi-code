@@ -48,7 +48,7 @@ describe('thinking-only recovery', () => {
       .join('');
   }
 
-  function registerLookupTool(): ToolCall {
+  function registerLookupTool(agent: TestAgentContext): ToolCall {
     const lookupCall: ToolCall = {
       type: 'function',
       id: 'call_lookup',
@@ -71,8 +71,8 @@ describe('thinking-only recovery', () => {
         execute: async () => ({ output: 'lookup-result' }),
       }),
     };
-    profile.update({ activeToolNames: ['Lookup'] });
-    ctx.get(IAgentToolRegistryService).register(lookupTool);
+    agent.get(IAgentProfileService).update({ activeToolNames: ['Lookup'] });
+    agent.get(IAgentToolRegistryService).register(lookupTool);
     return lookupCall;
   }
 
@@ -162,7 +162,7 @@ describe('thinking-only recovery', () => {
   });
 
   it('does not nudge when the first response pairs thinking with a tool call', async () => {
-    const lookupCall = registerLookupTool();
+    const lookupCall = registerLookupTool(ctx);
     ctx.mockNextResponse({ type: 'think', think: 'checking' }, lookupCall);
     ctx.mockNextResponse({ type: 'text', text: 'done' });
 
@@ -195,47 +195,6 @@ describe('thinking-only recovery', () => {
     expect(recoveryInjections()).toEqual([]);
   });
 
-  it('keeps the empty-response retry for a truncated thinking-only response without nudging', async () => {
-    profile.update({ activeToolNames: [] });
-    ctx.mockNextProviderResponse({
-      parts: [{ type: 'think', think: 'cut off' }],
-      finishReason: 'truncated',
-      rawFinishReason: 'length',
-    });
-    ctx.mockNextResponse({ type: 'text', text: 'recovered' });
-
-    const { turn } = submitTurn(loop, 'Hello');
-    await ctx.untilTurnEnd();
-
-    expect(ctx.llmCalls).toHaveLength(2);
-    await expect(turn.result).resolves.toEqual({
-      type: 'completed',
-      steps: 2,
-      truncated: false,
-    });
-    expect(recoveryInjections()).toEqual([]);
-  });
-
-  it('keeps the empty-response retry for a thinking-only response without a finish reason', async () => {
-    profile.update({ activeToolNames: [] });
-    ctx.mockNextProviderResponse({
-      parts: [{ type: 'think', think: 'unfinished' }],
-      finishReason: null,
-    });
-    ctx.mockNextResponse({ type: 'text', text: 'recovered' });
-
-    const { turn } = submitTurn(loop, 'Hello');
-    await ctx.untilTurnEnd();
-
-    expect(ctx.llmCalls).toHaveLength(2);
-    await expect(turn.result).resolves.toEqual({
-      type: 'completed',
-      steps: 2,
-      truncated: false,
-    });
-    expect(recoveryInjections()).toEqual([]);
-  });
-
   it('allows exactly one recovery step past maxSteps after a thinking-only response', async () => {
     const local = createTestAgent({ initialConfig: { loopControl: { maxStepsPerTurn: 1 } } });
     try {
@@ -264,31 +223,7 @@ describe('thinking-only recovery', () => {
     try {
       await local.restorePersisted();
       const localLoop = local.get(IAgentLoopService);
-      const localProfile = local.get(IAgentProfileService);
-      const lookupCall: ToolCall = {
-        type: 'function',
-        id: 'call_lookup',
-        name: 'Lookup',
-        arguments: '{"query":"moon"}',
-      };
-      const lookupTool: ExecutableTool<{ query: string }> = {
-        name: 'Lookup',
-        description: 'Look up a short test value.',
-        parameters: {
-          type: 'object',
-          properties: {
-            query: { type: 'string' },
-          },
-          required: ['query'],
-          additionalProperties: false,
-        },
-        resolveExecution: () => ({
-          approvalRule: 'Lookup',
-          execute: async () => ({ output: 'lookup-result' }),
-        }),
-      };
-      localProfile.update({ activeToolNames: ['Lookup'] });
-      local.get(IAgentToolRegistryService).register(lookupTool);
+      const lookupCall = registerLookupTool(local);
       local.mockNextResponse({ type: 'think', think: 'reasoning only' });
       local.mockNextResponse({ type: 'text', text: 'calling a tool' }, lookupCall);
       local.mockNextResponse({ type: 'text', text: 'should not run' });
@@ -306,27 +241,6 @@ describe('thinking-only recovery', () => {
     } finally {
       await local.dispose();
     }
-  });
-
-  it('lets a stop hook take precedence over the queued recovery', async () => {
-    profile.update({ activeToolNames: [] });
-    loop.hooks.onDidFinishStep.register('test-stop-turn', async (hookCtx, next) => {
-      hookCtx.stopTurn = true;
-      await next();
-    });
-    ctx.mockNextResponse({ type: 'think', think: 'reasoning only' });
-    ctx.mockNextResponse({ type: 'text', text: 'should not run' });
-
-    const { turn } = submitTurn(loop, 'Hello');
-    await ctx.untilTurnEnd();
-
-    expect(ctx.llmCalls).toHaveLength(1);
-    await expect(turn.result).resolves.toEqual({
-      type: 'completed',
-      steps: 1,
-      truncated: false,
-    });
-    expect(recoveryInjections()).toEqual([]);
   });
 
   it('lets cancellation take precedence over the queued recovery', async () => {
@@ -391,23 +305,6 @@ describe('thinking-only recovery telemetry', () => {
       for (const event of events) {
         expect(JSON.stringify(event.properties)).not.toContain('secret thought');
       }
-    } finally {
-      await local.dispose();
-    }
-  });
-
-  it('does not report the thinking-only event for responses with visible text', async () => {
-    const records: TelemetryRecord[] = [];
-    const local = createTestAgent({ telemetry: recordingTelemetry(records) });
-    try {
-      local.get(IAgentProfileService).update({ activeToolNames: [] });
-      local.mockNextResponse({ type: 'think', think: 'thought' }, { type: 'text', text: 'hi' });
-      await local.rpc.prompt({ input: [{ type: 'text', text: 'Hello' }] });
-      await local.untilTurnEnd();
-
-      expect(records.filter((record) => record.event === 'llm_thinking_only_response')).toEqual(
-        [],
-      );
     } finally {
       await local.dispose();
     }

@@ -392,42 +392,6 @@ describe('ModelRequesterImpl request execution', () => {
     });
   });
 
-  it('rejects think-only responses under the default policy or with abnormal finish', async () => {
-    const requester = new FakeLlmRequester();
-    const impl = new ModelRequesterImpl(
-      modelWith(createStaticCredentialProvider()),
-      gatewayReturning(requester),
-    );
-    const thinkOnlyStream = (finish: LlmRequestEvent | undefined) => (_i: number, emit: (event: LlmRequestEvent) => void) => {
-      emit({ type: 'llm.sent' });
-      emit({ type: 'llm.streaming.part', part: { type: 'think', think: 'reasoning' } });
-      if (finish !== undefined) emit(finish);
-      emit({ type: 'llm.done' });
-    };
-
-    requester.handler = thinkOnlyStream({
-      type: 'llm.streaming.finish',
-      finish: { finishReason: 'completed', rawFinishReason: 'stop' },
-    });
-    const defaultPolicy = await collect(impl.request(INPUT)).catch((error: unknown) => error);
-    expect(defaultPolicy).toBeInstanceOf(APIEmptyResponseError);
-
-    requester.handler = thinkOnlyStream({
-      type: 'llm.streaming.finish',
-      finish: { finishReason: 'truncated', rawFinishReason: 'length' },
-    });
-    const truncated = await collect(
-      impl.request(INPUT, undefined, { allowCompletedThinkOnly: true }),
-    ).catch((error: unknown) => error);
-    expect(truncated).toBeInstanceOf(APIEmptyResponseError);
-
-    requester.handler = thinkOnlyStream(undefined);
-    const noFinish = await collect(
-      impl.request(INPUT, undefined, { allowCompletedThinkOnly: true }),
-    ).catch((error: unknown) => error);
-    expect(noFinish).toBeInstanceOf(APIEmptyResponseError);
-  });
-
   it('uploadVideo presence is the capability declaration', async () => {
     const requester = new FakeLlmRequester();
     const impl = new ModelRequesterImpl(

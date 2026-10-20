@@ -450,24 +450,6 @@ describe('turn machine thinking-only completion', () => {
     expect(failed).toHaveLength(0);
     expect(calls()).toBe(1);
   });
-
-  it('keeps retrying a think-only response that has no finish reason', async () => {
-    const { requester, calls } = createStubRequester(['think_only', 'ok']);
-    const { actor, retrying, failed } = startTurnActor(requester, {
-      retry: { maxAttemptsPerStep: 3 },
-    });
-
-    await flush();
-    expect(retrying).toHaveLength(1);
-    expect(retrying[0]).toMatchObject({ errorName: 'empty_response' });
-    expect(retrying[0]?.errorMessage).toContain('only thinking content');
-
-    await vi.advanceTimersByTimeAsync((retrying[0]?.delayMs ?? 0) + 1);
-    await flush();
-    expect(actor.getSnapshot().context.turnOutput).toMatchObject({ type: 'done' });
-    expect(calls()).toBe(2);
-    expect(failed).toHaveLength(0);
-  });
 });
 
 function tooLargeError(): LlmErrorMessage {

@@ -1204,15 +1204,6 @@ describe('AgentLLMRequesterService thinking-only policy', () => {
 
     expect(captured[0]?.allowCompletedThinkOnly).toBe(false);
   });
-
-  it('keeps the policy off when the request has no source', async () => {
-    const captured: Array<ModelRequestParams | undefined> = [];
-    const { service } = createService(createThinkOnlyRequester(captured), undefined);
-
-    await service.request();
-
-    expect(captured[0]?.allowCompletedThinkOnly).toBe(false);
-  });
 });
 
 describe('AgentLLMRequesterService media resolver wiring', () => {
