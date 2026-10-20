@@ -16,35 +16,57 @@ export interface EventSinkContextOptions {
   readonly buildSha?: string;
   readonly terminal?: string;
   readonly locale?: string;
+  readonly region?: string;
+  readonly regionSource?: string;
   readonly env?: NodeJS.ProcessEnv;
+}
+
+export interface EventSinkContextRefresh {
+  readonly region?: string;
+  readonly regionSource?: string;
 }
 
 export interface EventSinkOptions {
   readonly transport: TelemetryTransport;
   readonly context: EventSinkContextOptions;
+  readonly refreshContext?: () => EventSinkContextRefresh;
   readonly flushIntervalMs?: number;
   readonly flushThreshold?: number;
 }
 
 const DEFAULT_FLUSH_INTERVAL_MS = 30_000;
 const DEFAULT_FLUSH_THRESHOLD = 50;
+const CONTEXT_REFRESH_INTERVAL_MS = 1_000;
 
 export class EventSink {
   private readonly transport: TelemetryTransport;
   private readonly context: TelemetryContext;
+  private readonly contextRefresher?: () => EventSinkContextRefresh;
   private readonly flushIntervalMs: number;
   private readonly flushThreshold: number;
   private buffer: EnrichedTelemetryEvent[] = [];
   private flushTimer: ReturnType<typeof setInterval> | null = null;
+  private lastContextRefreshAt = 0;
+  private firstEventAccepted = false;
 
   constructor(options: EventSinkOptions) {
     this.transport = options.transport;
     this.context = buildContext(options.context);
+    this.contextRefresher = options.refreshContext;
     this.flushIntervalMs = options.flushIntervalMs ?? DEFAULT_FLUSH_INTERVAL_MS;
     this.flushThreshold = options.flushThreshold ?? DEFAULT_FLUSH_THRESHOLD;
   }
 
   accept(event: TelemetryEvent): void {
+    // The first event must carry the init-time context (e.g. a first-run
+    // region judgment labeled local-signals/fallback) even when it arrives
+    // after the refresh interval — refreshes only start afterwards.
+    if (this.firstEventAccepted) {
+      this.maybeRefreshContext();
+    } else {
+      this.firstEventAccepted = true;
+      this.lastContextRefreshAt = Date.now();
+    }
     const enriched: EnrichedTelemetryEvent = {
       ...event,
       context: { ...this.context },
@@ -53,6 +75,16 @@ export class EventSink {
     if (this.buffer.length >= this.flushThreshold) {
       void this.flush().catch(() => {});
     }
+  }
+
+  private maybeRefreshContext(): void {
+    if (this.contextRefresher === undefined) return;
+    const now = Date.now();
+    if (now - this.lastContextRefreshAt < CONTEXT_REFRESH_INTERVAL_MS) return;
+    this.lastContextRefreshAt = now;
+    const refresh = this.contextRefresher();
+    setPrimitive(this.context, 'region', refresh.region);
+    setPrimitive(this.context, 'region_source', refresh.regionSource);
   }
 
   setModel(model: string): void {
@@ -117,6 +149,8 @@ function buildContext(options: EventSinkContextOptions): TelemetryContext {
   };
   setPrimitive(context, 'model', options.model);
   setPrimitive(context, 'build_sha', options.buildSha);
+  setPrimitive(context, 'region', options.region);
+  setPrimitive(context, 'region_source', options.regionSource);
   return context;
 }
 

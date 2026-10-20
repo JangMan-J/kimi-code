@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -169,6 +169,7 @@ describe('OAuthService', () => {
       base: [registerBootstrapServices, registerTelemetryServices],
       additionalServices: (reg) => {
         reg.definePartialInstance(IProviderService, {
+          ready: Promise.resolve(),
           get: ((name: string) => providers[name]) as IProviderService['get'],
           list: (() => providers) as IProviderService['list'],
           set: providerSet as unknown as IProviderService['set'],
@@ -470,6 +471,34 @@ describe('OAuthService', () => {
     );
   });
 
+  it('startLogin reuses the bootstrap env bag over the parent process host', async () => {
+    const bootstrap = ix.get(IBootstrapService);
+    const originalGetEnv = bootstrap.getEnv;
+    (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = (name) =>
+      name === 'KIMI_OAUTH_HOST' ? 'https://auth.kimi.ai' : originalGetEnv(name);
+    vi.stubEnv('KIMI_CODE_OAUTH_HOST', 'https://auth.kimi.com');
+    vi.stubEnv('KIMI_OAUTH_HOST', '');
+    stubManagedModelsFetch();
+    toolkit.login.mockImplementation((_provider, options) => {
+      options.onDeviceCode(deviceAuth);
+      return Promise.resolve({ providerName: OAUTH_PROVIDER, ok: true });
+    });
+    try {
+      const svc = createService();
+      await svc.startLogin(OAUTH_PROVIDER, { region: 'global' });
+
+      expect(toolkit.login).toHaveBeenCalledWith(
+        OAUTH_PROVIDER,
+        expect.objectContaining({
+          oauthHost: 'https://auth.kimi.ai',
+          baseUrl: 'https://api.example.com',
+        }),
+      );
+    } finally {
+      (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = originalGetEnv;
+    }
+  });
+
   it('getRegion resolves cn by default and global from the persisted login host', () => {
     vi.stubEnv('KIMI_CODE_REGION_MARKER', 'off');
     const svc = createService();
@@ -525,6 +554,78 @@ describe('OAuthService', () => {
         oauth: { storage: 'file', key: 'oauth/kimi-code' },
       };
       expect(createService().getRegion()).toBe('mainland-cn');
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('getRegion judges a marker-less logged-out install from local signals and persists the verdict', async () => {
+    const home = ix.get(IBootstrapService).homeDir;
+    try {
+      await mkdir(home, { recursive: true });
+      vi.stubEnv('KIMI_CODE_OAUTH_HOST', '');
+      providers[OAUTH_PROVIDER] = { type: 'kimi' };
+      const svc = createService();
+      await flush();
+      const region = svc.getRegion();
+      expect(['mainland-cn', 'global']).toContain(region);
+      const written = (await readFile(join(home, 'region'), 'utf-8')).trim();
+      expect(written).toBe(region);
+      expect(svc.getRegion()).toBe(region);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('getRegion honors the OAuth host from the bootstrap env bag over local signals', async () => {
+    const home = ix.get(IBootstrapService).homeDir;
+    const bootstrap = ix.get(IBootstrapService);
+    const originalGetEnv = bootstrap.getEnv;
+    (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = (name) =>
+      name === 'KIMI_CODE_OAUTH_HOST' ? 'https://auth.kimi.ai' : originalGetEnv(name);
+    try {
+      await mkdir(home, { recursive: true });
+      vi.stubEnv('KIMI_CODE_OAUTH_HOST', '');
+      providers[OAUTH_PROVIDER] = { type: 'kimi' };
+      expect(createService().getRegion()).toBe('global');
+      await expect(readFile(join(home, 'region'), 'utf-8')).rejects.toThrow();
+    } finally {
+      (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = originalGetEnv;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('getRegion lets a bootstrap legacy OAuth host outrank the parent primary host', async () => {
+    const home = ix.get(IBootstrapService).homeDir;
+    const bootstrap = ix.get(IBootstrapService);
+    const originalGetEnv = bootstrap.getEnv;
+    (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = (name) =>
+      name === 'KIMI_OAUTH_HOST' ? 'https://auth.kimi.ai' : originalGetEnv(name);
+    try {
+      await mkdir(home, { recursive: true });
+      vi.stubEnv('KIMI_CODE_OAUTH_HOST', 'https://auth.kimi.com');
+      vi.stubEnv('KIMI_OAUTH_HOST', '');
+      providers[OAUTH_PROVIDER] = { type: 'kimi' };
+      const svc = createService();
+      await flush();
+      expect(svc.getRegion()).toBe('global');
+    } finally {
+      (bootstrap as { getEnv: (name: string) => string | undefined }).getEnv = originalGetEnv;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('getRegion does not infer or persist before provider hydration completes', async () => {
+    const home = ix.get(IBootstrapService).homeDir;
+    try {
+      await mkdir(home, { recursive: true });
+      vi.stubEnv('KIMI_CODE_OAUTH_HOST', '');
+      providers[OAUTH_PROVIDER] = { type: 'kimi' };
+      const providerService = ix.get(IProviderService) as unknown as { ready: Promise<void> };
+      providerService.ready = new Promise<void>(() => undefined);
+      const svc = createService();
+      expect(svc.getRegion()).toBe('mainland-cn');
+      await expect(readFile(join(home, 'region'), 'utf-8')).rejects.toThrow();
     } finally {
       await rm(home, { recursive: true, force: true });
     }
@@ -1212,6 +1313,7 @@ describe('WebSearchProviderService', () => {
     ix = createServices(disposables, {
       additionalServices: (reg) => {
         reg.definePartialInstance(IProviderService, {
+          ready: Promise.resolve(),
           get: ((name: string) => providers[name]) as IProviderService['get'],
         });
         reg.definePartialInstance(IOAuthService, {
@@ -1597,6 +1699,7 @@ describe('AuthSummaryService', () => {
     ix = createServices(disposables, {
       additionalServices: (reg) => {
         reg.definePartialInstance(IProviderService, {
+          ready: Promise.resolve(),
           get: ((name: string) => providers[name]) as IProviderService['get'],
           list: (() => providers) as IProviderService['list'],
           getDefaultProvider: (() => defaultProvider) as IProviderService['getDefaultProvider'],

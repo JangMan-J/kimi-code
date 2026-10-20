@@ -269,7 +269,7 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 
 #### `GET /api/v1/oauth/region`
 
-解析该客户端所属的 Kimi 区域。结果在本地推导，不经网络探测：优先取环境变量或配置固定的 OAuth host，其次是已配置的 OAuth key，再次是 home 目录中的区域标记文件；默认为 `mainland-cn`。
+解析该客户端所属的 Kimi 区域。结果在本地推导，不经网络探测：优先取环境变量或配置固定的 OAuth host，其次是已配置的 OAuth key，再次是 home 目录中的区域标记文件。未登录且无标记的客户端会基于本地设备信号（时区与语言）判定一次，并把结论写入标记文件缓存；信号缺失或冲突时回退为 `mainland-cn`。当标记机制被禁用（`KIMI_CODE_REGION_MARKER=off`，如桌面端内嵌服务器）时，跳过本地信号判定，默认为 `mainland-cn`。
 
 成功时 `data` 为 `{ region }`，`region` 为 `mainland-cn` / `global` 之一。
 

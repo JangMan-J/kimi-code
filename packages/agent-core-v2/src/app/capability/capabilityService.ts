@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 
-import { KIMI_CODE_PROVIDER_NAME, resolveKimiRegion } from '@moonshot-ai/kimi-code-oauth';
+import { KIMI_CODE_PROVIDER_NAME, ensureKimiRegionMarker } from '@moonshot-ai/kimi-code-oauth';
 
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
@@ -66,16 +66,26 @@ export class CapabilityService extends Disposable implements ICapabilityService 
         userHomeDir: homedir(),
         plugins,
         hostProcess,
-        resolveRegion: () => {
+        resolveRegion: async () => {
+          await providers.ready;
           const oauth = providers.get(KIMI_CODE_PROVIDER_NAME)?.oauth;
-          return resolveKimiRegion({
+          const env = { ...process.env };
+          const envOAuthHost = bootstrap.getEnv('KIMI_CODE_OAUTH_HOST');
+          if (envOAuthHost !== undefined) env['KIMI_CODE_OAUTH_HOST'] = envOAuthHost;
+          const envLegacyOAuthHost = bootstrap.getEnv('KIMI_OAUTH_HOST');
+          if (envLegacyOAuthHost !== undefined) env['KIMI_OAUTH_HOST'] = envLegacyOAuthHost;
+          if (envOAuthHost === undefined && envLegacyOAuthHost !== undefined) {
+            delete env['KIMI_CODE_OAUTH_HOST'];
+          }
+          return ensureKimiRegionMarker({
+            env,
             configuredOAuthHost: oauth?.oauthHost,
             configuredOAuthKey: oauth?.key,
             readMarker:
               (bootstrap.getEnv('KIMI_CODE_REGION_MARKER') ??
                 process.env['KIMI_CODE_REGION_MARKER']) !== 'off',
             homeDir: bootstrap.homeDir,
-          });
+          }).region;
         },
       };
       this.entries = new Map<CapabilityId, CapabilityEntry>([

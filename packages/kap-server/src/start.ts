@@ -12,6 +12,7 @@ import {
   IMcpOAuthService,
   IOAuthService,
   IProviderDiscoveryService,
+  IProviderService,
   ISessionIndex,
   ISessionIndexMirror,
   ICapabilityService,
@@ -466,8 +467,10 @@ export async function startServer(opts: ServerStartOptions): Promise<RunningServ
     pluginMarketplaceUrl: (() => {
       const configured = opts.pluginMarketplaceUrl ?? process.env['KIMI_CODE_PLUGIN_MARKETPLACE_URL'];
       if (configured !== undefined) return () => configured;
-      return () =>
-        `${kimiRegionProfile(core.accessor.get(IOAuthService).getRegion()).cdnBase}/plugins/marketplace.json`;
+      return async () => {
+        await core.accessor.get(IProviderService).ready;
+        return `${kimiRegionProfile(core.accessor.get(IOAuthService).getRegion()).cdnBase}/plugins/marketplace.json`;
+      };
     })(),
     pluginMarketplaceIsDefault:
       opts.pluginMarketplaceUrl === undefined &&

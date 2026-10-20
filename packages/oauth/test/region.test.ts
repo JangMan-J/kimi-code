@@ -1,22 +1,43 @@
-import { writeFile } from 'node:fs/promises';
+import { writeFile, mkdir, rm } from 'node:fs/promises';
+import { existsSync, linkSync, mkdirSync, readFileSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_KIMI_CODE_OAUTH_HOST } from '#/constants';
 import { KIMI_CODE_OAUTH_KEY } from '#/managed-kimi-code';
 import { DEFAULT_KIMI_CODE_BASE_URL } from '#/managed-usage';
 import {
+  ensureKimiRegionMarker,
+  KIMI_REGION_JUDGMENT_FILENAME,
   KIMI_REGION_MARKER_FILENAME,
   KIMI_REGION_PROFILES,
   kimiRegionLoginHosts,
   kimiRegionProfile,
   kimiRegionSchema,
   resolveKimiRegion,
+  resolveKimiRegionDetailed,
   resolveKimiRemoteControlAuth,
 } from '#/region';
+import { detectKimiRegionFromLocalSignals } from '#/region-local';
 
 import { createTempWorkDir, type TempDirHandle } from './helpers';
+
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return {
+    ...actual,
+    linkSync: vi.fn(actual.linkSync),
+    readFileSync: vi.fn(actual.readFileSync),
+    unlinkSync: vi.fn(actual.unlinkSync),
+    writeFileSync: vi.fn(actual.writeFileSync),
+  };
+});
+
+const linkSyncMock = vi.mocked(linkSync);
+const readFileSyncMock = vi.mocked(readFileSync);
+const unlinkSyncMock = vi.mocked(unlinkSync);
+const writeFileSyncMock = vi.mocked(writeFileSync);
 
 describe('KIMI_REGION_PROFILES', () => {
   it('keeps the mainland-cn profile aligned with the shared defaults', () => {
@@ -217,5 +238,515 @@ describe('kimiRegionSchema', () => {
     expect(kimiRegionSchema.parse('mainland-cn')).toBe('mainland-cn');
     expect(kimiRegionSchema.parse('global')).toBe('global');
     expect(kimiRegionSchema.safeParse('apac').success).toBe(false);
+  });
+});
+
+describe('detectKimiRegionFromLocalSignals', () => {
+  it('judges mainland from a CN time zone and a simplified-Chinese locale', () => {
+    expect(
+      detectKimiRegionFromLocalSignals({ timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' }),
+    ).toEqual({ region: 'mainland-cn', confident: true });
+    expect(
+      detectKimiRegionFromLocalSignals({ timeZone: 'Asia/Urumqi', locale: 'zh-CN' }),
+    ).toEqual({ region: 'mainland-cn', confident: true });
+  });
+
+  it('judges mainland from a lone CN signal', () => {
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'Asia/Shanghai' })).toEqual({
+      region: 'mainland-cn',
+      confident: true,
+    });
+    expect(detectKimiRegionFromLocalSignals({ locale: 'zh' })).toEqual({
+      region: 'mainland-cn',
+      confident: true,
+    });
+    expect(detectKimiRegionFromLocalSignals({ locale: 'zh-Hant-TW', timeZone: 'Asia/Shanghai' })).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+  });
+
+  it('judges global from a non-CN time zone without a contradicting locale', () => {
+    expect(
+      detectKimiRegionFromLocalSignals({ timeZone: 'America/New_York', locale: 'en-US' }),
+    ).toEqual({ region: 'global', confident: true });
+    expect(
+      detectKimiRegionFromLocalSignals({ timeZone: 'Asia/Taipei', locale: 'zh-Hant-TW' }),
+    ).toEqual({ region: 'global', confident: true });
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'Asia/Hong_Kong' })).toEqual({
+      region: 'global',
+      confident: true,
+    });
+  });
+
+  it('falls back to mainland when signals conflict', () => {
+    expect(
+      detectKimiRegionFromLocalSignals({ timeZone: 'Asia/Shanghai', locale: 'en-US' }),
+    ).toEqual({ region: 'mainland-cn', confident: false });
+    expect(
+      detectKimiRegionFromLocalSignals({ timeZone: 'Europe/Berlin', locale: 'zh-Hans' }),
+    ).toEqual({ region: 'mainland-cn', confident: false });
+  });
+
+  it('falls back to mainland when signals are missing or uninformative', () => {
+    expect(detectKimiRegionFromLocalSignals({})).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'UTC', locale: 'en-US' })).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+    expect(detectKimiRegionFromLocalSignals({ locale: 'en-US' })).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+  });
+
+  it('treats non-geographic time zones as abstentions, not as non-CN votes', () => {
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'Etc/GMT-8', locale: 'en-US' })).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'Etc/Unknown', locale: 'en-US' })).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+    expect(detectKimiRegionFromLocalSignals({ timeZone: '+08:00', locale: 'en-US' })).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'CST-8', locale: 'en-US' })).toEqual({
+      region: 'mainland-cn',
+      confident: false,
+    });
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'Etc/GMT-8', locale: 'zh-CN' })).toEqual({
+      region: 'mainland-cn',
+      confident: true,
+    });
+    expect(detectKimiRegionFromLocalSignals({ timeZone: 'CST6CDT', locale: 'en-US' })).toEqual({
+      region: 'global',
+      confident: true,
+    });
+  });
+});
+
+describe('resolveKimiRegionDetailed', () => {
+  let workDir: TempDirHandle | undefined;
+
+  afterEach(async () => {
+    await workDir?.cleanup();
+    workDir = undefined;
+  });
+
+  it('labels each resolution step with its source', async () => {
+    workDir = await createTempWorkDir();
+    await writeFile(join(workDir.path, KIMI_REGION_MARKER_FILENAME), 'global\n', 'utf-8');
+    expect(
+      resolveKimiRegionDetailed({ env: { KIMI_CODE_OAUTH_HOST: 'https://auth.kimi.ai' } }).source,
+    ).toBe('env');
+    expect(
+      resolveKimiRegionDetailed({ env: {}, configuredOAuthHost: 'https://auth.kimi.ai' }).source,
+    ).toBe('login');
+    expect(
+      resolveKimiRegionDetailed({ env: {}, configuredOAuthKey: KIMI_CODE_OAUTH_KEY }).source,
+    ).toBe('login');
+    expect(resolveKimiRegionDetailed({ env: {}, homeDir: workDir.path })).toEqual({
+      region: 'global',
+      source: 'marker',
+    });
+    await workDir.cleanup();
+    workDir = await createTempWorkDir();
+    expect(resolveKimiRegionDetailed({ env: {}, homeDir: workDir.path })).toEqual({
+      region: 'mainland-cn',
+      source: 'default',
+    });
+  });
+});
+
+describe('ensureKimiRegionMarker', () => {
+  let workDir: TempDirHandle | undefined;
+
+  afterEach(async () => {
+    await workDir?.cleanup();
+    workDir = undefined;
+  });
+
+  async function freshDir(): Promise<string> {
+    workDir = await createTempWorkDir();
+    return workDir.path;
+  }
+
+  it('writes a mainland marker from CN signals and serves it as marker afterwards', async () => {
+    const dir = await freshDir();
+    const signals = { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' };
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: dir, signals })).toEqual({
+      region: 'mainland-cn',
+      source: 'local-signals',
+    });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n');
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'mainland-cn', source: 'marker' });
+    expect(resolveKimiRegion({ env: {}, homeDir: dir })).toBe('mainland-cn');
+  });
+
+  it('writes a global marker from non-CN signals', async () => {
+    const dir = await freshDir();
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+  });
+
+  it('marks a missing-signal judgment as fallback and still caches mainland', async () => {
+    const dir = await freshDir();
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: dir, signals: {} })).toEqual({
+      region: 'mainland-cn',
+      source: 'fallback',
+    });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n');
+  });
+
+  it('never overwrites an existing marker', async () => {
+    workDir = await createTempWorkDir();
+    await writeFile(join(workDir.path, KIMI_REGION_MARKER_FILENAME), 'global\n', 'utf-8');
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: workDir.path,
+        signals: { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' },
+      }),
+    ).toEqual({ region: 'global', source: 'marker' });
+    expect(readFileSync(join(workDir.path, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+  });
+
+  it('writes nothing when env or a persisted login decides the region', async () => {
+    const dir = await freshDir();
+    const signals = { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' };
+    expect(
+      ensureKimiRegionMarker({
+        env: { KIMI_CODE_OAUTH_HOST: 'https://auth.kimi.ai' },
+        homeDir: dir,
+        signals,
+      }).source,
+    ).toBe('env');
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        configuredOAuthHost: 'https://auth.kimi.ai',
+        homeDir: dir,
+        signals,
+      }).source,
+    ).toBe('login');
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        configuredOAuthKey: KIMI_CODE_OAUTH_KEY,
+        homeDir: dir,
+        signals,
+      }).source,
+    ).toBe('login');
+    expect(existsSync(join(dir, KIMI_REGION_MARKER_FILENAME))).toBe(false);
+  });
+
+  it('stays on the default and writes nothing when the marker is skipped', async () => {
+    const dir = await freshDir();
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        readMarker: false,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'mainland-cn', source: 'default' });
+    expect(existsSync(join(dir, KIMI_REGION_MARKER_FILENAME))).toBe(false);
+  });
+
+  it('never infers when any persisted login ref exists, even a scoped or unrecognized one', async () => {
+    const dir = await freshDir();
+    const signals = { timeZone: 'America/New_York', locale: 'en-US' };
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        configuredOAuthKey: 'oauth/kimi-code-env-0123456789abcdef',
+        homeDir: dir,
+        signals,
+      }),
+    ).toEqual({ region: 'mainland-cn', source: 'default' });
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        configuredOAuthHost: 'https://auth.legacy.example.com',
+        homeDir: dir,
+        signals,
+      }),
+    ).toEqual({ region: 'mainland-cn', source: 'default' });
+    expect(existsSync(join(dir, KIMI_REGION_MARKER_FILENAME))).toBe(false);
+  });
+
+  it('ignores an inferred marker once a custom scoped login appears', async () => {
+    const dir = await freshDir();
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(
+      resolveKimiRegionDetailed({
+        env: {},
+        configuredOAuthKey: 'oauth/kimi-code-env-0123456789abcdef',
+        homeDir: dir,
+      }),
+    ).toEqual({ region: 'mainland-cn', source: 'default' });
+
+    const installDir = join(dir, 'second');
+    await mkdir(installDir, { recursive: true });
+    await writeFile(join(installDir, KIMI_REGION_MARKER_FILENAME), 'global\n', 'utf-8');
+    expect(
+      resolveKimiRegionDetailed({
+        env: {},
+        configuredOAuthKey: 'oauth/kimi-code-env-0123456789abcdef',
+        homeDir: installDir,
+      }),
+    ).toEqual({ region: 'global', source: 'marker' });
+  });
+
+  it('keeps the inferred verdict process-wide when the marker cannot be persisted', async () => {
+    const dir = await freshDir();
+    writeFileSyncMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+    });
+    const signals = { timeZone: 'America/New_York', locale: 'en-US' };
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: dir, signals })).toEqual({
+      region: 'global',
+      source: 'local-signals',
+    });
+    expect(existsSync(join(dir, KIMI_REGION_MARKER_FILENAME))).toBe(false);
+    expect(resolveKimiRegionDetailed({ env: {}, homeDir: dir })).toEqual({
+      region: 'global',
+      source: 'local-signals',
+    });
+  });
+
+  it('lets a later marker file outrank the in-memory inferred verdict', async () => {
+    const dir = await freshDir();
+    writeFileSyncMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('EROFS: read-only file system'), { code: 'EROFS' });
+    });
+    ensureKimiRegionMarker({
+      env: {},
+      homeDir: dir,
+      signals: { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' },
+    });
+    await writeFile(join(dir, KIMI_REGION_MARKER_FILENAME), 'global\n', 'utf-8');
+    expect(resolveKimiRegionDetailed({ env: {}, homeDir: dir })).toEqual({
+      region: 'global',
+      source: 'marker',
+    });
+  });
+
+  it('repairs a malformed existing marker with the fresh judgment', async () => {
+    workDir = await createTempWorkDir();
+    await writeFile(join(workDir.path, KIMI_REGION_MARKER_FILENAME), 'apac', 'utf-8');
+    const dir = workDir.path;
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(resolveKimiRegionDetailed({ env: {}, homeDir: dir })).toEqual({
+      region: 'global',
+      source: 'marker',
+    });
+  });
+
+  it('creates the home directory when persisting the first judgment', async () => {
+    workDir = await createTempWorkDir();
+    const dir = join(workDir.path, 'nested', 'kimi-home');
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' },
+      }),
+    ).toEqual({ region: 'mainland-cn', source: 'local-signals' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('mainland-cn\n');
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+  });
+
+  it('yields the malformed-marker repair to the process holding the lock', async () => {
+    workDir = await createTempWorkDir();
+    const dir = workDir.path;
+    await writeFile(join(dir, KIMI_REGION_MARKER_FILENAME), 'apac', 'utf-8');
+    await writeFile(join(dir, `${KIMI_REGION_MARKER_FILENAME}.lock`), '999999\n', 'utf-8');
+    const signals = { timeZone: 'America/New_York', locale: 'en-US' };
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: dir, signals, lockWaitMs: 0 })).toEqual({
+      region: 'global',
+      source: 'local-signals',
+    });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('apac');
+    await rm(join(dir, `${KIMI_REGION_MARKER_FILENAME}.lock`));
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: dir, signals, lockWaitMs: 0 })).toEqual({
+      region: 'global',
+      source: 'local-signals',
+    });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+  });
+
+  it('returns the winner without waiting when the locked marker is already valid', async () => {
+    workDir = await createTempWorkDir();
+    const dir = workDir.path;
+    await writeFile(join(dir, KIMI_REGION_MARKER_FILENAME), 'global\n', 'utf-8');
+    await writeFile(join(dir, `${KIMI_REGION_MARKER_FILENAME}.lock`), '999999\n', 'utf-8');
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' },
+      }),
+    ).toEqual({ region: 'global', source: 'marker' });
+  });
+
+  it('recovers a stale repair lock instead of waiting it out', async () => {
+    workDir = await createTempWorkDir();
+    const dir = workDir.path;
+    await writeFile(join(dir, KIMI_REGION_MARKER_FILENAME), 'apac', 'utf-8');
+    const lockPath = join(dir, `${KIMI_REGION_MARKER_FILENAME}.lock`);
+    await writeFile(lockPath, '999999\n', 'utf-8');
+    const longAgo = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, longAgo, longAgo);
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('keeps the inferred verdict without waiting when the stale lock cannot be cleared', async () => {
+    workDir = await createTempWorkDir();
+    const dir = workDir.path;
+    await writeFile(join(dir, KIMI_REGION_MARKER_FILENAME), 'apac', 'utf-8');
+    const lockPath = join(dir, `${KIMI_REGION_MARKER_FILENAME}.lock`);
+    mkdirSync(lockPath);
+    const longAgo = new Date(Date.now() - 60_000);
+    utimesSync(lockPath, longAgo, longAgo);
+    const signals = { timeZone: 'America/New_York', locale: 'en-US' };
+    const startedAt = Date.now();
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: dir, signals })).toEqual({
+      region: 'global',
+      source: 'local-signals',
+    });
+    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    expect(
+      ensureKimiRegionMarker({ env: {}, homeDir: dir, signals }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('apac');
+  });
+
+  it('yields to a verdict repaired by another process before the lock was acquired', async () => {
+    workDir = await createTempWorkDir();
+    const dir = workDir.path;
+    await writeFile(join(dir, KIMI_REGION_MARKER_FILENAME), 'global\n', 'utf-8');
+    readFileSyncMock
+      .mockImplementationOnce(() => 'apac')
+      .mockImplementationOnce(() => 'apac');
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'Asia/Shanghai', locale: 'zh-Hans-CN' },
+      }),
+    ).toEqual({ region: 'global', source: 'marker' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+  });
+
+  it('falls back to an exclusive create on filesystems without hard links', async () => {
+    const dir = await freshDir();
+    linkSyncMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('ENOTSUP: operation not supported'), { code: 'ENOTSUP' });
+    });
+    const signals = { timeZone: 'America/New_York', locale: 'en-US' };
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: dir, signals })).toEqual({
+      region: 'global',
+      source: 'local-signals',
+    });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+  });
+
+  it('keeps the marker and writes the sidecar when temp cleanup fails after linking', async () => {
+    const dir = await freshDir();
+    unlinkSyncMock.mockImplementationOnce(() => {
+      throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+    });
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(readFileSync(join(dir, KIMI_REGION_MARKER_FILENAME), 'utf-8')).toBe('global\n');
+    const sidecar = JSON.parse(
+      readFileSync(join(dir, KIMI_REGION_JUDGMENT_FILENAME), 'utf-8'),
+    ) as { source?: string };
+    expect(sidecar.source).toBe('local-signals');
+  });
+
+  it('records the judgment provenance in a region.json sidecar', async () => {
+    const dir = await freshDir();
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    const sidecar = JSON.parse(
+      readFileSync(join(dir, KIMI_REGION_JUDGMENT_FILENAME), 'utf-8'),
+    ) as { region?: string; source?: string; detectedAt?: string };
+    expect(sidecar.region).toBe('global');
+    expect(sidecar.source).toBe('local-signals');
+    expect(typeof sidecar.detectedAt).toBe('string');
+
+    const fallbackDir = join(dir, 'second');
+    expect(ensureKimiRegionMarker({ env: {}, homeDir: fallbackDir, signals: {} })).toEqual({
+      region: 'mainland-cn',
+      source: 'fallback',
+    });
+    const fallbackSidecar = JSON.parse(
+      readFileSync(join(fallbackDir, KIMI_REGION_JUDGMENT_FILENAME), 'utf-8'),
+    ) as { region?: string; source?: string };
+    expect(fallbackSidecar).toMatchObject({ region: 'mainland-cn', source: 'fallback' });
+  });
+
+  it('rolls the marker back when the judgment sidecar cannot be written', async () => {
+    const dir = await freshDir();
+    mkdirSync(join(dir, KIMI_REGION_JUDGMENT_FILENAME));
+    expect(
+      ensureKimiRegionMarker({
+        env: {},
+        homeDir: dir,
+        signals: { timeZone: 'America/New_York', locale: 'en-US' },
+      }),
+    ).toEqual({ region: 'global', source: 'local-signals' });
+    expect(existsSync(join(dir, KIMI_REGION_MARKER_FILENAME))).toBe(false);
   });
 });

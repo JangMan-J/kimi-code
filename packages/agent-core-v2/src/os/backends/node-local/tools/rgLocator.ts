@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-import { kimiRegionProfile, resolveKimiRegion } from '@moonshot-ai/kimi-code-oauth';
+import { kimiRegionProfile, resolveKimiRegionDetailed } from '@moonshot-ai/kimi-code-oauth';
 import { extract as extractTar } from 'tar';
 import { type Entry, fromBuffer as yauzlFromBuffer } from 'yauzl';
 import { basename, join } from 'pathe';
@@ -66,7 +66,10 @@ export function getShareBinRgPath(): string {
 }
 
 function rgBaseUrl(): string {
-  return `${kimiRegionProfile(resolveKimiRegion()).cdnBase}/rg`;
+  const region = resolveKimiRegionDetailed({
+    readMarker: process.env['KIMI_CODE_REGION_MARKER'] !== 'off',
+  }).region;
+  return `${kimiRegionProfile(region).cdnBase}/rg`;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {

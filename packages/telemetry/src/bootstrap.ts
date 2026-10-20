@@ -20,6 +20,10 @@ export interface TelemetryBootstrapOptions {
   readonly buildSha?: string;
   readonly terminal?: string;
   readonly locale?: string;
+  readonly region?: string;
+  readonly regionSource?: string;
+  readonly resolveRegion?: () => { readonly region: string; readonly source: string };
+  readonly endpointForRegion?: (region: 'mainland-cn' | 'global') => string | undefined;
   readonly getAccessToken?: () => string | null | Promise<string | null>;
   /**
    * Invoked when a tracked property is dropped for not being a primitive.
@@ -65,8 +69,10 @@ export function initializeTelemetry(options: TelemetryBootstrapOptions): void {
     homeDir: options.homeDir,
     deviceId: options.deviceId,
     endpoint: options.endpoint,
+    endpointForRegion: options.endpointForRegion,
     getAccessToken: options.getAccessToken,
   });
+  const resolveRegion = options.resolveRegion;
   const sink = new EventSink({
     transport,
     context: {
@@ -77,7 +83,16 @@ export function initializeTelemetry(options: TelemetryBootstrapOptions): void {
       buildSha: options.buildSha,
       terminal: options.terminal,
       locale: options.locale,
+      region: options.region,
+      regionSource: options.regionSource,
     },
+    refreshContext:
+      resolveRegion === undefined
+        ? undefined
+        : () => {
+            const resolution = resolveRegion();
+            return { region: resolution.region, regionSource: resolution.source };
+          },
   });
 
   client.attachSink(sink);

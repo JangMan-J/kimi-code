@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 
-import { kimiRegionProfile, resolveKimiRegion } from '@moonshot-ai/kimi-code-oauth';
+import { ensureKimiRegionMarker, kimiRegionProfile } from '@moonshot-ai/kimi-code-oauth';
 
 import { isAbortError } from '#/_base/utils/abort';
 import type { IFileSystemStorageService } from '#/persistence/interface/storage';
@@ -33,8 +33,12 @@ export interface CloudTransportOptions {
   readonly storage: IFileSystemStorageService;
   readonly deviceId: string;
   readonly endpoint?: string;
+  readonly resolveEndpoint?: () => string | undefined;
   readonly homeDir?: string;
   readonly readMarker?: boolean;
+  readonly configuredOAuthHost?: string;
+  readonly configuredOAuthKey?: string;
+  readonly env?: NodeJS.ProcessEnv;
   readonly getAccessToken?: () => string | null | Promise<string | null>;
   readonly fetchImpl?: typeof fetch;
   readonly retryBackoffsMs?: readonly number[];
@@ -56,9 +60,16 @@ const JSONL_SUFFIX = '.jsonl';
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
-function defaultTelemetryEndpoint(homeDir?: string, readMarker = true): string | undefined {
+function defaultTelemetryEndpoint(
+  homeDir?: string,
+  readMarker = true,
+  configuredOAuthHost?: string,
+  configuredOAuthKey?: string,
+  env?: NodeJS.ProcessEnv,
+): string | undefined {
   return kimiRegionProfile(
-    resolveKimiRegion({ readMarker, homeDir }),
+    ensureKimiRegionMarker({ readMarker, homeDir, configuredOAuthHost, configuredOAuthKey, env })
+      .region,
   ).telemetryEndpoint;
 }
 
@@ -66,6 +77,7 @@ export class CloudTransport {
   private readonly storage: IFileSystemStorageService;
   private readonly deviceId: string;
   private readonly endpoint: string | undefined;
+  private readonly resolveEndpoint: () => string | undefined;
   private readonly getAccessToken: (() => string | null | Promise<string | null>) | null;
   private readonly fetchImpl: typeof fetch;
   private readonly retryBackoffsMs: readonly number[];
@@ -76,12 +88,17 @@ export class CloudTransport {
   constructor(options: CloudTransportOptions) {
     this.storage = options.storage;
     this.deviceId = options.deviceId;
-    this.endpoint =
-      options.endpoint ??
-      defaultTelemetryEndpoint(
-        options.homeDir,
-        options.readMarker ?? process.env['KIMI_CODE_REGION_MARKER'] !== 'off',
-      );
+    this.endpoint = options.endpoint;
+    this.resolveEndpoint =
+      options.resolveEndpoint ??
+      (() =>
+        defaultTelemetryEndpoint(
+          options.homeDir,
+          options.readMarker ?? process.env['KIMI_CODE_REGION_MARKER'] !== 'off',
+          options.configuredOAuthHost,
+          options.configuredOAuthKey,
+          options.env,
+        ));
     this.getAccessToken = options.getAccessToken ?? null;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
     this.retryBackoffsMs = options.retryBackoffsMs ?? RETRY_BACKOFFS_MS;
@@ -90,8 +107,28 @@ export class CloudTransport {
     this.now = options.now ?? Date.now;
   }
 
+  private currentEndpoint(): string | undefined {
+    return this.endpoint ?? this.resolveEndpoint();
+  }
+
   async send(events: readonly EnrichedCloudEvent[], signal?: AbortSignal): Promise<void> {
-    if (events.length === 0 || this.endpoint === undefined) return;
+    if (events.length === 0) return;
+    const endpoint = this.currentEndpoint();
+    const sendable: EnrichedCloudEvent[] = [];
+    const deferred: EnrichedCloudEvent[] = [];
+    for (const event of events) {
+      const expected = endpointForEventRegion(event);
+      if (expected === null) {
+        if (endpoint !== undefined) sendable.push(event);
+      } else if (expected === endpoint) {
+        sendable.push(event);
+      } else if (expected !== undefined) {
+        deferred.push(event);
+      }
+    }
+    if (deferred.length > 0) await this.saveToDisk(deferred);
+    if (sendable.length === 0 || endpoint === undefined) return;
+    events = sendable;
     let savedToDisk = false;
     const saveEventsToDisk = async (): Promise<void> => {
       if (savedToDisk) return;
@@ -146,9 +183,9 @@ export class CloudTransport {
   }
 
   async retryDiskEvents(): Promise<void> {
-    if (this.endpoint === undefined) return;
     const keys = await this.storage.list(TELEMETRY_SCOPE, FAILED_PREFIX);
     const now = this.now();
+    const endpoint = this.currentEndpoint();
     for (const key of keys) {
       if (!key.startsWith(FAILED_PREFIX) || !key.endsWith(JSONL_SUFFIX)) continue;
       const createdAt = parseFailedTimestamp(key);
@@ -158,10 +195,8 @@ export class CloudTransport {
       }
 
       let events: EnrichedCloudEvent[];
-      let payload: CloudPayload;
       try {
         events = await this.readJsonl(key);
-        payload = buildPayload(events, this.deviceId);
       } catch (error) {
         if (error instanceof SyntaxError || error instanceof TypeError) {
           await this.storage.delete(TELEMETRY_SCOPE, key).catch(() => undefined);
@@ -169,11 +204,39 @@ export class CloudTransport {
         continue;
       }
 
-      try {
-        await this.sendHttp(payload);
-        await this.storage.delete(TELEMETRY_SCOPE, key);
-      } catch (error) {
-        if (error instanceof TransientCloudError) continue;
+      const sendable: EnrichedCloudEvent[] = [];
+      const deferred: EnrichedCloudEvent[] = [];
+      for (const event of events) {
+        const expected = endpointForEventRegion(event);
+        if (expected === null) {
+          if (endpoint !== undefined) sendable.push(event);
+          else deferred.push(event);
+        } else if (expected === endpoint) {
+          sendable.push(event);
+        } else if (expected !== undefined) {
+          deferred.push(event);
+        }
+      }
+      if (endpoint !== undefined && sendable.length > 0) {
+        let payload: CloudPayload;
+        try {
+          payload = buildPayload(sendable, this.deviceId);
+        } catch {
+          continue;
+        }
+        try {
+          await this.sendHttp(payload);
+          if (deferred.length === 0) {
+            await this.storage.delete(TELEMETRY_SCOPE, key);
+          } else {
+            const text = deferred.map((event) => JSON.stringify(event)).join('\n') + '\n';
+            await this.storage.write(TELEMETRY_SCOPE, key, textEncoder.encode(text));
+          }
+        } catch (error) {
+          if (error instanceof TransientCloudError) continue;
+        }
+      } else if (deferred.length === 0) {
+        await this.storage.delete(TELEMETRY_SCOPE, key).catch(() => undefined);
       }
     }
   }
@@ -215,7 +278,7 @@ export class CloudTransport {
     headers: Record<string, string>,
     signal?: AbortSignal,
   ): Promise<Response> {
-    const endpoint = this.endpoint;
+    const endpoint = this.currentEndpoint();
     if (endpoint === undefined) {
       throw new TransientCloudError('telemetry endpoint is disabled');
     }
@@ -245,6 +308,12 @@ function parseFailedTimestamp(key: string): number | undefined {
   const raw = rest.slice(0, underscore);
   const ts = Number(raw);
   return Number.isFinite(ts) ? ts : undefined;
+}
+
+function endpointForEventRegion(event: EnrichedCloudEvent): string | undefined | null {
+  const region = event.context['region'];
+  if (region !== 'mainland-cn' && region !== 'global') return null;
+  return kimiRegionProfile(region).telemetryEndpoint;
 }
 
 export class TransientCloudError extends Error {

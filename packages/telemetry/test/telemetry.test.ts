@@ -513,6 +513,116 @@ describe('EventSink', () => {
     });
   });
 
+  it('enriches context with region and region source when provided', () => {
+    const transport = new RecordingTransport();
+    const sink = new EventSink({
+      transport,
+      context: {
+        appName: 'kimi-code-cli',
+        version: '1.2.3',
+        region: 'mainland-cn',
+        regionSource: 'local-signals',
+        env: {},
+      },
+    });
+
+    sink.accept({
+      event_id: 'e1',
+      device_id: 'dev',
+      session_id: 'ses',
+      event: 'test',
+      timestamp: 1,
+      properties: {},
+    });
+    sink.flushSync();
+
+    expect(transport.saved[0]?.[0]?.context).toMatchObject({
+      region: 'mainland-cn',
+      region_source: 'local-signals',
+    });
+  });
+
+  it('retains the init-time region provenance, then follows the refresher after the interval', () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new RecordingTransport();
+      let resolution = { region: 'mainland-cn', regionSource: 'marker' };
+      const sink = new EventSink({
+        transport,
+        context: {
+          appName: 'kimi-code-cli',
+          version: '1.2.3',
+          region: 'mainland-cn',
+          regionSource: 'local-signals',
+          env: {},
+        },
+        refreshContext: () => resolution,
+      });
+      const event = (id: string): TelemetryEvent => ({
+        event_id: id,
+        device_id: 'dev',
+        session_id: 'ses',
+        event: 'test',
+        timestamp: 1,
+        properties: {},
+      });
+
+      sink.accept(event('e1'));
+      vi.setSystemTime(Date.now() + 1_500);
+      resolution = { region: 'global', regionSource: 'login' };
+      sink.accept(event('e2'));
+      sink.flushSync();
+
+      expect(transport.saved[0]?.[0]?.context).toMatchObject({
+        region: 'mainland-cn',
+        region_source: 'local-signals',
+      });
+      expect(transport.saved[0]?.[1]?.context).toMatchObject({
+        region: 'global',
+        region_source: 'login',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the init-time provenance on a first event that arrives after the interval', () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new RecordingTransport();
+      const resolution = { region: 'mainland-cn', regionSource: 'marker' };
+      const sink = new EventSink({
+        transport,
+        context: {
+          appName: 'kimi-code-cli',
+          version: '1.2.3',
+          region: 'mainland-cn',
+          regionSource: 'fallback',
+          env: {},
+        },
+        refreshContext: () => resolution,
+      });
+
+      vi.setSystemTime(Date.now() + 5_000);
+      sink.accept({
+        event_id: 'e1',
+        device_id: 'dev',
+        session_id: 'ses',
+        event: 'test',
+        timestamp: 1,
+        properties: {},
+      });
+      sink.flushSync();
+
+      expect(transport.saved[0]?.[0]?.context).toMatchObject({
+        region: 'mainland-cn',
+        region_source: 'fallback',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('delegates retry of disk events to its transport', async () => {
     const transport = new RecordingTransport();
     const sink = makeSink(transport);
@@ -724,6 +834,46 @@ describe('AsyncTransport', () => {
     await transport.send([sampleEvent('dropped')]);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(() => statSync(join(homeDir, 'telemetry'))).toThrow();
+  });
+
+  it('drops collector-less events, spools deliverable ones, and never cross-routes', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      new Response('', { status: 200 }),
+    );
+    let endpoint: string | undefined = 'https://cn.test/events';
+    const homeDir = await tempHome();
+    const transport = new AsyncTransport({
+      homeDir,
+      deviceId: 'dev',
+      endpoint: () => endpoint,
+      endpointForRegion: (region) => (region === 'global' ? undefined : 'https://cn.test/events'),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      retryBackoffsMs: [],
+    });
+    const globalEvent = { ...sampleEvent('global-evt'), context: { region: 'global' } };
+    const mainlandEvent = { ...sampleEvent('mainland-evt'), context: { region: 'mainland-cn' } };
+
+    await transport.send([globalEvent, mainlandEvent]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const sentPayload = JSON.parse(requestInitFrom(fetchImpl).body as string) as {
+      events: Array<Record<string, unknown>>;
+    };
+    expect(sentPayload.events).toHaveLength(1);
+    expect(sentPayload.events[0]?.['event']).toBe('kfc_mainland-evt');
+    expect(() => statSync(join(homeDir, 'telemetry'))).toThrow();
+
+    endpoint = undefined;
+    await transport.send([{ ...sampleEvent('waiting-evt'), context: { region: 'mainland-cn' } }]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const spooled = readdirSync(join(homeDir, 'telemetry')).filter((f) => f.startsWith('failed_'));
+    expect(spooled).toHaveLength(1);
+
+    endpoint = 'https://cn.test/events';
+    await transport.retryDiskEvents();
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(
+      readdirSync(join(homeDir, 'telemetry')).filter((f) => f.startsWith('failed_')),
+    ).toHaveLength(0);
   });
 
   it('retries anonymously on 401 with a token', async () => {

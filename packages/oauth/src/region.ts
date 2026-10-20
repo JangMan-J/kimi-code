@@ -20,7 +20,7 @@
  *   5. default 'mainland-cn'
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -34,6 +34,11 @@ import {
   KIMI_CODE_OAUTH_KEY,
   resolveKimiCodeOAuthRef,
 } from './managed-kimi-code';
+import {
+  collectLocalRegionSignals,
+  detectKimiRegionFromLocalSignals,
+  type LocalRegionSignals,
+} from './region-local';
 
 export type KimiRegion = 'mainland-cn' | 'global';
 
@@ -176,7 +181,152 @@ function defaultHomeDir(env: NodeJS.ProcessEnv): string {
   return join(homedir(), '.kimi-code');
 }
 
-export function resolveKimiRegion(options: ResolveKimiRegionOptions = {}): KimiRegion {
+/** A repair lock untouched for longer than any real repair takes is stale. */
+const REPAIR_LOCK_STALE_MS = 10_000;
+
+type RepairLockOutcome = 'acquired' | 'holder-active' | 'unrecoverable';
+
+function tryAcquireRepairLock(lockPath: string): boolean {
+  try {
+    writeFileSync(lockPath, `${process.pid}\n`, { encoding: 'utf-8', flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function acquireRepairLock(lockPath: string): RepairLockOutcome {
+  if (tryAcquireRepairLock(lockPath)) return 'acquired';
+  let stale: boolean;
+  try {
+    stale = Date.now() - statSync(lockPath).mtimeMs > REPAIR_LOCK_STALE_MS;
+  } catch {
+    // The lock vanished meanwhile — retry once.
+    return tryAcquireRepairLock(lockPath) ? 'acquired' : 'holder-active';
+  }
+  if (!stale) return 'holder-active';
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    // The stale lock cannot be cleared (e.g. a temporarily locked file on
+    // Windows): waiting would stall every later refresh, so the caller falls
+    // back to its own judgment without waiting.
+    return 'unrecoverable';
+  }
+  return tryAcquireRepairLock(lockPath) ? 'acquired' : 'holder-active';
+}
+
+/** Sidecar carrying a first-run judgment's provenance; see {@link writeRegionJudgmentSidecar}. */
+export const KIMI_REGION_JUDGMENT_FILENAME = 'region.json';
+
+function judgmentSidecarIsInferred(homeDir: string): boolean {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(homeDir, KIMI_REGION_JUDGMENT_FILENAME), 'utf-8'),
+    ) as { source?: unknown };
+    return parsed.source === 'local-signals' || parsed.source === 'fallback';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * First-writer-wins marker persistence. Uses temp-file + hard-link for an
+ * atomic no-overwrite create; on filesystems without hard links (exFAT/FAT,
+ * restricted network mounts) falls back to an exclusive create, which keeps
+ * the winner-takes-all property but reopens a small race window on those
+ * filesystems only. Throws with code EEXIST when another process already won.
+ */
+function persistMarkerFirstWriterWins(homeDir: string, region: KimiRegion): void {
+  const markerPath = join(homeDir, KIMI_REGION_MARKER_FILENAME);
+  const tmpPath = join(homeDir, `${KIMI_REGION_MARKER_FILENAME}.${process.pid}.tmp`);
+  let linked = false;
+  try {
+    writeFileSync(tmpPath, `${region}\n`, 'utf-8');
+    linkSync(tmpPath, markerPath);
+    linked = true;
+  } catch (error) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // Nothing to clean up.
+    }
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'ENOSYS') throw error;
+  }
+  if (linked) {
+    // The marker is already published; a cleanup failure must not downgrade
+    // this to a failed persist (or worse, an apparent race winner).
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // A leftover temp file is harmless.
+    }
+    return;
+  }
+  writeFileSync(markerPath, `${region}\n`, { encoding: 'utf-8', flag: 'wx' });
+}
+
+/**
+ * Writes the first-run judgment's provenance sidecar. The marker itself
+ * stays a bare region for compatibility, but the provenance must exist
+ * somewhere durable — a later custom scoped login relies on it to tell an
+ * inferred marker from an install-channel one, so the caller rolls the
+ * marker back when this returns false.
+ */
+function tryWriteRegionJudgmentSidecar(
+  homeDir: string,
+  resolution: KimiRegionResolution,
+): boolean {
+  try {
+    writeFileSync(
+      join(homeDir, KIMI_REGION_JUDGMENT_FILENAME),
+      `${JSON.stringify({
+        region: resolution.region,
+        source: resolution.source,
+        detectedAt: new Date().toISOString(),
+      })}\n`,
+      'utf-8',
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How a resolved region was decided. `env` / `login` / `marker` mirror the
+ * persisted steps of the resolution chain; `local-signals` and `fallback`
+ * are produced by {@link ensureKimiRegionMarker} after a first-run local
+ * judgment (confident vs. fallen back); `default` means the chain reached
+ * its final default with no judgment attempted (e.g. the marker is skipped).
+ */
+export type KimiRegionSource =
+  | 'env'
+  | 'login'
+  | 'marker'
+  | 'local-signals'
+  | 'fallback'
+  | 'default';
+
+export interface KimiRegionResolution {
+  readonly region: KimiRegion;
+  readonly source: KimiRegionSource;
+}
+
+/**
+ * Process-wide cache of a first-run local judgment, keyed by Kimi home dir.
+ * It lets every consumer in the process share the verdict even when the
+ * marker file could not be persisted (read-only home), so one process never
+ * mixes global telemetry routing with mainland login/CDN routing. Entries
+ * are only ever consulted at the chain's default step — env, login, and a
+ * later-appearing marker file always outrank them.
+ */
+const inferredRegionCache = new Map<string, KimiRegionResolution>();
+
+export function resolveKimiRegionDetailed(
+  options: ResolveKimiRegionOptions = {},
+): KimiRegionResolution {
   const env = options.env ?? process.env;
   // An env host that matches a profile pins the region. An unknown env host
   // means a custom/internal environment: the per-endpoint env overrides keep
@@ -184,19 +334,197 @@ export function resolveKimiRegion(options: ResolveKimiRegionOptions = {}): KimiR
   // instead of letting a stale config/marker point CDN links somewhere odd.
   const envHost = env['KIMI_CODE_OAUTH_HOST'] ?? env['KIMI_OAUTH_HOST'];
   if (envHost !== undefined && envHost.length > 0) {
-    return regionForOAuthHost(envHost) ?? 'mainland-cn';
+    return { region: regionForOAuthHost(envHost) ?? 'mainland-cn', source: 'env' };
   }
   const configured = options.configuredOAuthHost;
   if (configured !== undefined && configured.length > 0) {
     const configuredRegion = regionForOAuthHost(configured);
-    if (configuredRegion !== undefined) return configuredRegion;
+    if (configuredRegion !== undefined) return { region: configuredRegion, source: 'login' };
   }
-  if (options.configuredOAuthKey === KIMI_CODE_OAUTH_KEY) return 'mainland-cn';
+  if (options.configuredOAuthKey === KIMI_CODE_OAUTH_KEY) {
+    return { region: 'mainland-cn', source: 'login' };
+  }
   if (options.readMarker !== false) {
-    const markerRegion = readRegionMarker(options.homeDir ?? defaultHomeDir(env));
-    if (markerRegion !== undefined) return markerRegion;
+    const homeDir = options.homeDir ?? defaultHomeDir(env);
+    const markerRegion = readRegionMarker(homeDir);
+    // Reaching here with a configured key means a custom scoped login (the
+    // default slot returned above, an official host matched earlier): an
+    // install-channel marker still applies, but a marker this client itself
+    // inferred while logged out must not flip a custom environment — keep the
+    // conservative default instead.
+    const customScopedLogin = options.configuredOAuthKey !== undefined;
+    if (
+      markerRegion !== undefined &&
+      !(customScopedLogin && judgmentSidecarIsInferred(homeDir))
+    ) {
+      return { region: markerRegion, source: 'marker' };
+    }
+    if (!customScopedLogin) {
+      const inferred = inferredRegionCache.get(homeDir);
+      if (inferred !== undefined) return inferred;
+    }
   }
-  return 'mainland-cn';
+  return { region: 'mainland-cn', source: 'default' };
+}
+
+export function resolveKimiRegion(options: ResolveKimiRegionOptions = {}): KimiRegion {
+  return resolveKimiRegionDetailed(options).region;
+}
+
+export interface EnsureKimiRegionMarkerOptions extends ResolveKimiRegionOptions {
+  /** Signals to judge from; defaults to a fresh local read. Injectable for tests. */
+  readonly signals?: LocalRegionSignals;
+  /**
+   * How long to wait for another process repairing a malformed marker before
+   * falling back to this process's own judgment. Defaults to 2s; 0 disables
+   * the wait (tests).
+   */
+  readonly lockWaitMs?: number;
+}
+
+/**
+ * {@link resolveKimiRegionDetailed} plus first-run persistence: when the
+ * whole chain would fall through to the default, judge the region from local
+ * device signals and write the verdict to the marker file, so later starts
+ * hit the marker step directly and the judgment stays stable over time (the
+ * RFC's "decide once, cache, do not drift with IP" semantics for logged-out
+ * clients). Steps that outrank the marker (env, persisted login) never
+ * trigger a write; `readMarker: false` skips detection entirely and reports
+ * `default`, leaving the region choice to the caller (the desktop embedded
+ * server leaves it to the login UI).
+ */
+export function ensureKimiRegionMarker(
+  options: EnsureKimiRegionMarkerOptions = {},
+): KimiRegionResolution {
+  const resolution = resolveKimiRegionDetailed(options);
+  if (
+    resolution.source !== 'default' ||
+    options.readMarker === false ||
+    // A persisted login of any kind — official, scoped, or a custom
+    // environment whose host is not recognized — means this is not a
+    // logged-out install: keep the conservative default instead of inferring
+    // from unrelated device signals.
+    options.configuredOAuthHost !== undefined ||
+    options.configuredOAuthKey !== undefined
+  ) {
+    return resolution;
+  }
+  const detection = detectKimiRegionFromLocalSignals(
+    options.signals ?? collectLocalRegionSignals(),
+  );
+  const inferred: KimiRegionResolution = {
+    region: detection.region,
+    source: detection.confident ? 'local-signals' : 'fallback',
+  };
+  const env = options.env ?? process.env;
+  const homeDir = options.homeDir ?? defaultHomeDir(env);
+  inferredRegionCache.set(homeDir, inferred);
+  let persistError: NodeJS.ErrnoException | undefined;
+  try {
+    // The home may not exist yet on a truly fresh `kimi login` — the marker
+    // write is the whole point, so create it first (private, matching the
+    // other home/config creation paths).
+    mkdirSync(homeDir, { recursive: true, mode: 0o700 });
+    persistMarkerFirstWriterWins(homeDir, detection.region);
+  } catch (error) {
+    persistError = error as NodeJS.ErrnoException;
+  }
+  if (persistError === undefined) {
+    if (!tryWriteRegionJudgmentSidecar(homeDir, inferred)) {
+      // Provenance must travel with the marker — a later custom scoped login
+      // reads it to tell an inferred marker from an install-channel one.
+      // Roll the marker back and let the next start re-judge.
+      try {
+        unlinkSync(join(homeDir, KIMI_REGION_MARKER_FILENAME));
+      } catch {
+        // Best effort.
+      }
+    }
+    return inferred;
+  }
+  {
+    const error = persistError;
+    if (error.code === 'EEXIST') {
+      const winner = readRegionMarker(homeDir);
+      if (winner !== undefined) {
+        inferredRegionCache.delete(homeDir);
+        return { region: winner, source: 'marker' };
+      }
+      // The existing file is malformed or empty — it carries no verdict, so
+      // repair it with this judgment; otherwise every new process would keep
+      // re-detecting (and could route a mainland user internationally).
+      // Serialize the repair through a lock file so two processes fixing the
+      // same malformed marker cannot both win with different verdicts.
+      const lockPath = join(homeDir, `${KIMI_REGION_MARKER_FILENAME}.lock`);
+      const lockOutcome = acquireRepairLock(lockPath);
+      if (lockOutcome === 'acquired') {
+        // Another repair may have completed between the first read and the
+        // lock acquisition: re-read under the lock and yield to a verdict
+        // that is already valid instead of overwriting it.
+        const repaired = readRegionMarker(homeDir);
+        if (repaired !== undefined) {
+          inferredRegionCache.delete(homeDir);
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            // A leftover lock degrades future repairs to in-memory verdicts.
+          }
+          return { region: repaired, source: 'marker' };
+        }
+        let repairedByUs = false;
+        try {
+          writeFileSync(
+            join(homeDir, KIMI_REGION_MARKER_FILENAME),
+            `${detection.region}\n`,
+            'utf-8',
+          );
+          repairedByUs = true;
+        } catch {
+          // Still unwritable; the in-memory verdict stands for this process.
+        }
+        if (repairedByUs && !tryWriteRegionJudgmentSidecar(homeDir, inferred)) {
+          try {
+            unlinkSync(join(homeDir, KIMI_REGION_MARKER_FILENAME));
+          } catch {
+            // Best effort.
+          }
+        }
+        try {
+          unlinkSync(lockPath);
+        } catch {
+          // A stale lock degrades future repairs to per-process in-memory
+          // verdicts, never to a wrong region.
+        }
+        return inferred;
+      }
+      if (lockOutcome === 'unrecoverable') {
+        // The stale lock cannot be cleared: keep this process's cached
+        // verdict (set above) instead of stalling every later refresh on a
+        // wait that can never succeed.
+        return inferred;
+      }
+      // Another process is (or was) repairing: wait briefly for its verdict
+      // instead of returning an independently inferred one, so both processes
+      // route the same way from the very first call. A stale lock or a failed
+      // holder degrades to this process's judgment after the wait, never to a
+      // wrong region.
+      const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+      const deadline = Date.now() + (options.lockWaitMs ?? 2_000);
+      let repaired = readRegionMarker(homeDir);
+      while (repaired === undefined && existsSync(lockPath) && Date.now() < deadline) {
+        Atomics.wait(waitBuffer, 0, 0, 25);
+        repaired = readRegionMarker(homeDir);
+      }
+      // Drop the in-memory cache either way so the next call re-reads the
+      // file the lock holder wrote and converges onto it.
+      inferredRegionCache.delete(homeDir);
+      if (repaired !== undefined) return { region: repaired, source: 'marker' };
+      return inferred;
+    }
+    // An unwritable home dir must not break startup; the in-memory verdict
+    // still stands for this process and the write is retried next start.
+  }
+  return inferred;
 }
 
 export interface KimiRemoteControlAuth {

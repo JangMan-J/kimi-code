@@ -96,6 +96,7 @@ KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 | `KIMI_CODE_OAUTH_HOST` | OAuth 认证 host，优先级最高 | 未设时回退到 `KIMI_OAUTH_HOST` |
 | `KIMI_OAUTH_HOST` | OAuth 认证 host，作为上一个的 fallback | 未设时使用 `https://auth.kimi.com` |
 | `KIMI_CODE_BASE_URL` | OAuth 登录后的托管 API base URL | `https://api.kimi.com/coding/v1` |
+| `KIMI_CODE_REGION_MARKER` | 区域标记机制：安装渠道 marker 文件 + 未登录首跑的本地信号 region 判定；设为 `off` 可同时禁用两者，保持原先「一律默认国内」的行为 | 启用 |
 
 ::: warning
 `KIMI_CODE_BASE_URL`（OAuth 托管服务，指向 `kimi.com`）和 `KIMI_BASE_URL`（API 密钥直连，指向 `moonshot.ai`）是两个不同的变量，请按场景区分。

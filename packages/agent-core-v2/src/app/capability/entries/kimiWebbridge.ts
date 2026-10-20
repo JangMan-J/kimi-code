@@ -6,7 +6,7 @@ import path from 'node:path';
 import {
   kimiCdnContentUrl,
   kimiRegionProfile,
-  resolveKimiRegion,
+  resolveKimiRegionDetailed,
 } from '@moonshot-ai/kimi-code-oauth';
 
 import { downloadToFile, runCommand } from '../host';
@@ -222,7 +222,11 @@ export function createKimiWebbridgeEntry(ctx: CapabilityEntryContext): Capabilit
     }
 
     report('skill');
-    const region = (await ctx.resolveRegion?.()) ?? resolveKimiRegion();
+    const region =
+      (await ctx.resolveRegion?.()) ??
+      resolveKimiRegionDetailed({
+        readMarker: process.env['KIMI_CODE_REGION_MARKER'] !== 'off',
+      }).region;
     const summary = await ctx.plugins.installPlugin({
       source: `${kimiRegionProfile(region).cdnBase}/${PLUGIN_ZIP_PATH}`,
     });

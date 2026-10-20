@@ -1,4 +1,4 @@
-import { IOAuthService, type Scope } from '@moonshot-ai/agent-core-v2';
+import { IOAuthService, IProviderService, type Scope } from '@moonshot-ai/agent-core-v2';
 import {
   managedUsageResultSchema,
   managedUserInfoResultSchema,
@@ -310,6 +310,7 @@ export function registerOAuthRoutes(
       tags: ['auth'],
     },
     async (req, reply) => {
+      await core.accessor.get(IProviderService).ready;
       const region = core.accessor.get(IOAuthService).getRegion();
       reply.send(okEnvelope({ region }, req.id));
     },

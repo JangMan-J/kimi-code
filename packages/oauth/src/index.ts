@@ -44,6 +44,8 @@ export type { KimiHostIdentity, KimiIdentityOptions } from './identity';
 export { KIMI_CODE_FLOW_CONFIG } from './constants';
 
 export {
+  ensureKimiRegionMarker,
+  KIMI_REGION_JUDGMENT_FILENAME,
   KIMI_REGION_MARKER_FILENAME,
   KIMI_REGION_PROFILES,
   kimiCdnContentUrl,
@@ -51,14 +53,27 @@ export {
   kimiRegionProfile,
   kimiRegionSchema,
   resolveKimiRegion,
+  resolveKimiRegionDetailed,
   resolveKimiRemoteControlAuth,
 } from './region';
 export type {
+  EnsureKimiRegionMarkerOptions,
   KimiRegion,
   KimiRegionProfile,
+  KimiRegionResolution,
+  KimiRegionSource,
   KimiRemoteControlAuth,
   ResolveKimiRegionOptions,
 } from './region';
+
+export {
+  collectLocalRegionSignals,
+  detectKimiRegionFromLocalSignals,
+} from './region-local';
+export type {
+  LocalRegionDetection,
+  LocalRegionSignals,
+} from './region-local';
 
 export {
   applyManagedApiKeyProviderModels,

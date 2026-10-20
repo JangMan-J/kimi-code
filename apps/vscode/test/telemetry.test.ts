@@ -16,6 +16,7 @@ const host = vi.hoisted(() => {
     configModel: "kimi-k2",
     accessToken: "token-1" as string | null,
     staticallyEnabled: true,
+    remoteName: undefined as string | undefined,
   };
   return {
     state,
@@ -29,7 +30,8 @@ const host = vi.hoisted(() => {
     track: vi.fn(),
     shutdownTelemetry: vi.fn(async () => undefined),
     installCrashHandlers: vi.fn(),
-    resolveKimiRegion: vi.fn(() => "global" as const),
+    ensureKimiRegionMarker: vi.fn(() => ({ region: "global" as const, source: "login" as const })),
+    resolveKimiRegionDetailed: vi.fn(() => ({ region: "mainland-cn" as const, source: "default" as const })),
     loadRuntimeConfigSafe: vi.fn(() => ({
       config: {
         telemetry: host.state.configTelemetry,
@@ -49,6 +51,9 @@ vi.mock("vscode", () => ({
   env: {
     get isTelemetryEnabled() {
       return host.state.isTelemetryEnabled;
+    },
+    get remoteName() {
+      return host.state.remoteName;
     },
     onDidChangeTelemetryEnabled: vi.fn((listener: (enabled: boolean) => void) => {
       host.state.telemetryListener = listener;
@@ -73,7 +78,8 @@ vi.mock("@moonshot-ai/kimi-code-oauth", () => ({
     "mainland-cn": { telemetryEndpoint: "https://telemetry-logs.example.com/v1/event" },
     global: { telemetryEndpoint: "https://telemetry-logs.example.net/v1/event" },
   },
-  resolveKimiRegion: host.resolveKimiRegion,
+  ensureKimiRegionMarker: host.ensureKimiRegionMarker,
+  resolveKimiRegionDetailed: host.resolveKimiRegionDetailed,
 }));
 
 vi.mock("@moonshot-ai/kimi-code-sdk", () => ({
@@ -109,6 +115,7 @@ describe("extension telemetry composition root", () => {
     host.state.configModel = "kimi-k2";
     host.state.accessToken = "token-1";
     host.state.staticallyEnabled = true;
+    host.state.remoteName = undefined;
     vi.clearAllMocks();
   });
 
@@ -125,6 +132,8 @@ describe("extension telemetry composition root", () => {
       version: "1.2.3",
       uiMode: "vscode",
       model: "kimi-k2",
+      region: "global",
+      regionSource: "login",
     });
     expect(options["endpoint"]).toBeTypeOf("function");
     expect(options["getAccessToken"]).toBeTypeOf("function");
@@ -146,12 +155,26 @@ describe("extension telemetry composition root", () => {
 
     const endpoint = initializeOptions()["endpoint"] as () => string;
     expect(endpoint()).toBe("https://telemetry-logs.example.net/v1/event");
-    expect(host.resolveKimiRegion).toHaveBeenCalledWith(
+    expect(host.ensureKimiRegionMarker).toHaveBeenCalledWith(
       expect.objectContaining({
         configuredOAuthHost: "https://auth.kimi.ai",
         configuredOAuthKey: "oauth/kimi-code-global",
         homeDir: "/kimi-home",
       }),
+    );
+  });
+
+  it("skips local-signal inference on a remote extension host", () => {
+    host.state.remoteName = "ssh-remote";
+
+    activate();
+
+    const options = initializeOptions();
+    expect(options["region"]).toBe("mainland-cn");
+    expect(options["regionSource"]).toBe("default");
+    expect(host.ensureKimiRegionMarker).not.toHaveBeenCalled();
+    expect(host.resolveKimiRegionDetailed).toHaveBeenCalledWith(
+      expect.objectContaining({ homeDir: "/kimi-home" }),
     );
   });
 

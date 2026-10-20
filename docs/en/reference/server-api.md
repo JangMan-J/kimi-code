@@ -269,7 +269,7 @@ On success, `data` is `{ kind: "ok", userInfo }` or `{ kind: "error", message, s
 
 #### `GET /api/v1/oauth/region`
 
-Resolves which Kimi region this client belongs to. The answer is derived locally, not probed over the network: an OAuth host pinned by environment or config wins first, then the configured OAuth key, then the region marker file in the home directory; the default is `mainland-cn`.
+Resolves which Kimi region this client belongs to. The answer is derived locally, not probed over the network: an OAuth host pinned by environment or config wins first, then the configured OAuth key, then the region marker file in the home directory. A logged-out client with no marker is judged once from local device signals (time zone and locale), and the verdict is cached in the marker file; missing or conflicting signals fall back to `mainland-cn`. When the marker mechanism is disabled (`KIMI_CODE_REGION_MARKER=off`, e.g. the desktop embedded server), the local-signal judgment is skipped and the default is `mainland-cn`.
 
 On success, `data` is `{ region }` with `region` one of `mainland-cn` / `global`.
 

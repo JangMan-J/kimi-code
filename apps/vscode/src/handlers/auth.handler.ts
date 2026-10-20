@@ -1,12 +1,27 @@
 import * as vscode from "vscode";
 
-import { OAuthAccessDeniedError } from "@moonshot-ai/kimi-code-oauth";
+import {
+  KIMI_CODE_OAUTH_KEY,
+  OAuthAccessDeniedError,
+  type KimiRegion,
+} from "@moonshot-ai/kimi-code-oauth";
+import { resolveKimiHome } from "@moonshot-ai/kimi-code-sdk";
 
 import { Events, Methods } from "../../shared/bridge";
 import type { LoginResult } from "../../shared/legacy-sdk";
 import type { LoginStatus } from "../../shared/types";
 import { updateLoginContext } from "../utils/context";
+import { readPersistedKimiOAuthRef, resolveExtensionRegion } from "../utils/region";
 import type { Handler } from "./types";
+
+function regionForLogin(): KimiRegion | undefined {
+  const homeDir = resolveKimiHome();
+  const oauth = readPersistedKimiOAuthRef(homeDir);
+  if (oauth !== undefined) {
+    return oauth.key === KIMI_CODE_OAUTH_KEY ? "mainland-cn" : undefined;
+  }
+  return resolveExtensionRegion({ homeDir }).region;
+}
 
 export const authHandlers: Record<string, Handler<any, any>> = {
   [Methods.CheckLoginStatus]: async (_, ctx): Promise<LoginStatus> => {
@@ -16,6 +31,7 @@ export const authHandlers: Record<string, Handler<any, any>> = {
   [Methods.Login]: async (_, ctx): Promise<LoginResult> => {
     try {
       await ctx.harness.auth.login(undefined, {
+        region: regionForLogin(),
         onDeviceCode: async (authorization) => {
           const url = authorization.verificationUriComplete || authorization.verificationUri;
           ctx.broadcast(Events.LoginUrl, { url }, ctx.webviewId);

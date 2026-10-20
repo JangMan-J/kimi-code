@@ -1,8 +1,10 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { KIMI_CODE_OAUTH_KEY } from '@moonshot-ai/kimi-code-oauth';
 
 import {
   resetUnexpectedErrorHandler,
@@ -75,6 +77,7 @@ describe('CloudAppender', () => {
     delete process.env['KIMI_CODE_OAUTH_HOST'];
     delete process.env['KIMI_OAUTH_HOST'];
     process.env['KIMI_CODE_HOME'] = homeDir;
+    writeFileSync(join(homeDir, 'region'), 'mainland-cn\n');
   });
 
   afterEach(() => {
@@ -116,9 +119,222 @@ describe('CloudAppender', () => {
     expect(event?.['context_app_name']).toBe('test-app');
     expect(event?.['context_client_version']).toBe('1.0.0');
     expect(event?.['context_version']).toBe('1.0.0');
+    expect(event?.['context_region']).toBe('mainland-cn');
+    expect(event?.['context_region_source']).toBe('marker');
     expect(typeof event?.['context_core_version']).toBe('string');
     expect(typeof event?.['event_id']).toBe('string');
     expect(typeof event?.['timestamp']).toBe('number');
+  });
+
+  it('judges region from local signals on first run and persists the marker', async () => {
+    rmSync(join(homeDir, 'region'));
+    const requests: CapturedRequest[] = [];
+    const appender = new CloudAppender(
+      baseOptions({
+        homeDir,
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+
+    appender.track({ event: 'evt', context: {}, properties: {} });
+    await appender.flush();
+
+    const written = readFileSync(join(homeDir, 'region'), 'utf-8').trim();
+    expect(['mainland-cn', 'global']).toContain(written);
+    if (written === 'mainland-cn') {
+      expect(requests).toHaveLength(1);
+      const event = requests[0]?.body.events[0];
+      expect(event?.['context_region']).toBe('mainland-cn');
+      expect(['local-signals', 'fallback']).toContain(event?.['context_region_source']);
+    } else {
+      expect(requests).toHaveLength(0);
+    }
+
+    const followUp = new CloudAppender(
+      baseOptions({
+        homeDir,
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+    followUp.track({ event: 'evt', context: {}, properties: {} });
+    await followUp.flush();
+    for (const req of requests.slice(written === 'mainland-cn' ? 1 : 0)) {
+      expect(req.body.events[0]?.['context_region']).toBe(written);
+      expect(req.body.events[0]?.['context_region_source']).toBe('marker');
+    }
+  });
+
+  it('lets a persisted mainland login outrank local-signal inference', async () => {
+    rmSync(join(homeDir, 'region'));
+    const requests: CapturedRequest[] = [];
+    const appender = new CloudAppender(
+      baseOptions({
+        homeDir,
+        configuredOAuthKey: KIMI_CODE_OAUTH_KEY,
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+
+    appender.track({ event: 'evt', context: {}, properties: {} });
+    await appender.flush();
+
+    expect(requests).toHaveLength(1);
+    const event = requests[0]?.body.events[0];
+    expect(event?.['context_region']).toBe('mainland-cn');
+    expect(event?.['context_region_source']).toBe('login');
+    expect(existsSync(join(homeDir, 'region'))).toBe(false);
+  });
+
+  it('lets a persisted global login outrank local-signal inference', async () => {
+    rmSync(join(homeDir, 'region'));
+    const requests: CapturedRequest[] = [];
+    const appender = new CloudAppender(
+      baseOptions({
+        homeDir,
+        configuredOAuthHost: 'https://auth.kimi.ai',
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+
+    appender.track({ event: 'evt', context: {}, properties: {} });
+    await appender.flush();
+
+    expect(requests).toHaveLength(0);
+    expect(existsSync(join(homeDir, 'region'))).toBe(false);
+  });
+
+  it('re-resolves the region at flush when a login appears after startup', async () => {
+    rmSync(join(homeDir, 'region'));
+    let oauthRef: { key?: string; oauthHost?: string } | undefined;
+    const requests: CapturedRequest[] = [];
+    const appender = new CloudAppender(
+      baseOptions({
+        homeDir,
+        getConfiguredOAuthRef: () => oauthRef,
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+
+    appender.track({ event: 'evt', context: {}, properties: {} });
+    await appender.flush();
+
+    oauthRef = { key: KIMI_CODE_OAUTH_KEY };
+    appender.track({ event: 'evt', context: {}, properties: {} });
+    await appender.flush();
+
+    appender.track({ event: 'evt', context: {}, properties: {} });
+    await appender.flush();
+
+    expect(requests.length).toBeGreaterThan(0);
+    const event = requests.at(-1)?.body.events[0];
+    expect(event?.['context_region']).toBe('mainland-cn');
+    expect(event?.['context_region_source']).toBe('login');
+  });
+
+  it('honors the OAuth host from the bootstrap env bag', async () => {
+    rmSync(join(homeDir, 'region'));
+    const requests: CapturedRequest[] = [];
+    const appender = new CloudAppender(
+      baseOptions({
+        homeDir,
+        bootstrapEnv: { KIMI_CODE_OAUTH_HOST: 'https://auth.kimi.ai' },
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+
+    appender.track({ event: 'evt', context: {}, properties: {} });
+    await appender.flush();
+
+    expect(requests).toHaveLength(0);
+    expect(existsSync(join(homeDir, 'region'))).toBe(false);
+  });
+
+  it('partitions buffered events by their recorded region when the region changes before flush', async () => {
+    rmSync(join(homeDir, 'region'));
+    writeFileSync(join(homeDir, 'region'), 'global\n');
+    let now = 1_000_000;
+    let oauthRef: { key?: string; oauthHost?: string } | undefined;
+    const requests: CapturedRequest[] = [];
+    const appender = new CloudAppender(
+      baseOptions({
+        homeDir,
+        now: () => now,
+        getConfiguredOAuthRef: () => oauthRef,
+        fetchImpl: makeFetch((req) => {
+          requests.push(req);
+          return okResponse();
+        }),
+      }),
+    );
+
+    appender.track({ event: 'early', context: {}, properties: {} });
+    await appender.flush();
+    expect(requests).toHaveLength(0);
+    expect(() => statSync(join(homeDir, 'telemetry'))).toThrow();
+
+    oauthRef = { key: KIMI_CODE_OAUTH_KEY };
+    now += 2_000;
+    appender.track({ event: 'late', context: {}, properties: {} });
+    await appender.flush();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body.events).toHaveLength(1);
+    expect(requests[0]?.body.events[0]?.['event']).toBe('kfc_late');
+    expect(requests[0]?.body.events[0]?.['context_region']).toBe('mainland-cn');
+    expect(() => statSync(join(homeDir, 'telemetry'))).toThrow();
+  });
+
+  it('keeps regionless legacy retry files until a mainland session can deliver them', async () => {
+    rmSync(join(homeDir, 'region'));
+    writeFileSync(join(homeDir, 'region'), 'global\n');
+    mkdirSync(join(homeDir, 'telemetry'), { recursive: true });
+    const legacyEvent = {
+      event_id: 'legacy-1',
+      device_id: 'dev',
+      session_id: null,
+      event: 'legacy',
+      timestamp: 1,
+      properties: {},
+      context: {},
+    };
+    const legacyFile = join(homeDir, 'telemetry', `failed_${Date.now()}_abcdef.jsonl`);
+    writeFileSync(legacyFile, JSON.stringify(legacyEvent) + '\n', 'utf-8');
+    const requests: CapturedRequest[] = [];
+    const capture = makeFetch((req) => {
+      requests.push(req);
+      return okResponse();
+    });
+
+    const globalAppender = new CloudAppender(baseOptions({ homeDir, fetchImpl: capture }));
+    await globalAppender.retryDiskEvents();
+    expect(requests).toHaveLength(0);
+    expect(existsSync(legacyFile)).toBe(true);
+
+    const mainlandAppender = new CloudAppender(
+      baseOptions({ homeDir, configuredOAuthKey: KIMI_CODE_OAUTH_KEY, fetchImpl: capture }),
+    );
+    await mainlandAppender.retryDiskEvents();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body.events[0]?.['event']).toBe('kfc_legacy');
+    expect(existsSync(legacyFile)).toBe(false);
   });
 
   it('does not send when the env pins the global region', async () => {

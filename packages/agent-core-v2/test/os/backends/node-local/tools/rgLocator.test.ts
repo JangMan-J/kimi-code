@@ -189,6 +189,7 @@ describe('ensureRgPath download branch', () => {
   let fakeShare: string;
   let savedFetch: typeof globalThis.fetch | undefined;
   let savedPath: string | undefined;
+  let savedMarkerFlag: string | undefined;
   beforeEach(() => {
     fakeShare = join(
       tmpdir(),
@@ -198,6 +199,8 @@ describe('ensureRgPath download branch', () => {
     savedFetch = globalThis.fetch;
     savedPath = process.env['PATH'];
     process.env['PATH'] = '';
+    savedMarkerFlag = process.env['KIMI_CODE_REGION_MARKER'];
+    process.env['KIMI_CODE_REGION_MARKER'] = 'off';
   });
   afterEach(() => {
     rmSync(fakeShare, { recursive: true, force: true });
@@ -210,6 +213,11 @@ describe('ensureRgPath download branch', () => {
       delete process.env['PATH'];
     } else {
       process.env['PATH'] = savedPath;
+    }
+    if (savedMarkerFlag === undefined) {
+      delete process.env['KIMI_CODE_REGION_MARKER'];
+    } else {
+      process.env['KIMI_CODE_REGION_MARKER'] = savedMarkerFlag;
     }
     vi.restoreAllMocks();
   });
@@ -364,6 +372,7 @@ describe('ensureRgPath download branch', () => {
 
       const [url] = fetchMock.mock.calls[0] as [string];
       expect(url).toMatch(/^https:\/\/code\.kimi\.com\/kimi-code\/rg\/ripgrep-/);
+      expect(existsSync(join(fakeShare, 'region'))).toBe(false);
     } finally {
       if (savedHost === undefined) delete process.env['KIMI_CODE_OAUTH_HOST'];
       else process.env['KIMI_CODE_OAUTH_HOST'] = savedHost;

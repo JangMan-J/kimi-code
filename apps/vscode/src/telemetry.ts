@@ -1,11 +1,6 @@
 import * as vscode from "vscode";
 
-import {
-  createKimiDeviceId,
-  KIMI_CODE_PROVIDER_NAME,
-  KIMI_REGION_PROFILES,
-  resolveKimiRegion,
-} from "@moonshot-ai/kimi-code-oauth";
+import { createKimiDeviceId, KIMI_CODE_PROVIDER_NAME, KIMI_REGION_PROFILES } from "@moonshot-ai/kimi-code-oauth";
 import {
   KimiAuthFacade,
   loadRuntimeConfigSafe,
@@ -20,6 +15,8 @@ import {
   shutdownTelemetry,
   track,
 } from "@moonshot-ai/kimi-telemetry";
+
+import { readPersistedKimiOAuthRef, resolveExtensionRegion } from "./utils/region";
 
 const SHUTDOWN_TIMEOUT_MS = 2000;
 
@@ -39,6 +36,15 @@ export function activateExtensionTelemetry(options: ExtensionTelemetryOptions): 
   const configPath = resolveConfigPath({ homeDir });
   const config = readTelemetryConfig(configPath);
   const auth = new KimiAuthFacade({ homeDir, configPath });
+  const resolveRegion = () => {
+    const oauth = readPersistedKimiOAuthRef(homeDir);
+    return resolveExtensionRegion({
+      homeDir,
+      configuredOAuthHost: oauth?.oauthHost,
+      configuredOAuthKey: oauth?.key,
+    });
+  };
+  const resolution = resolveRegion();
 
   initializeTelemetry({
     homeDir,
@@ -49,7 +55,11 @@ export function activateExtensionTelemetry(options: ExtensionTelemetryOptions): 
     version: options.version,
     uiMode: "vscode",
     model: config.defaultModel,
+    region: resolution.region,
+    regionSource: resolution.source,
+    resolveRegion,
     endpoint: () => telemetryEndpoint(homeDir),
+    endpointForRegion: (region) => KIMI_REGION_PROFILES[region].telemetryEndpoint,
     getAccessToken: async () => (await auth.getCachedAccessToken(KIMI_CODE_PROVIDER_NAME)) ?? null,
     onUnexpectedError: (error) => options.log(`Telemetry dropped a property: ${error.message}`),
   });
@@ -79,14 +89,11 @@ function readTelemetryConfig(
 }
 
 function telemetryEndpoint(homeDir: string): string | undefined {
-  const oauth = loadRuntimeConfigSafe(resolveConfigPath({ homeDir })).config.providers?.[
-    KIMI_CODE_PROVIDER_NAME
-  ]?.oauth;
-  const region = resolveKimiRegion({
+  const oauth = readPersistedKimiOAuthRef(homeDir);
+  const resolution = resolveExtensionRegion({
+    homeDir,
     configuredOAuthHost: oauth?.oauthHost,
     configuredOAuthKey: oauth?.key,
-    homeDir,
-    readMarker: process.env["KIMI_CODE_REGION_MARKER"] !== "off",
   });
-  return KIMI_REGION_PROFILES[region].telemetryEndpoint;
+  return KIMI_REGION_PROFILES[resolution.region].telemetryEndpoint;
 }
