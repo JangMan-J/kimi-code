@@ -1,6 +1,6 @@
 import type { LlmErrorMessage } from '#/llm/errors';
 import type { FinishInfo } from '#/llm/finish-reason';
-import type { AssistantMessage } from '#/llm/message';
+import { isThinkingOnlyMessage, type AssistantMessage } from '#/llm/message';
 import type { LlmModel } from '#/llm/model';
 
 function formatFinishReasonHint(finish: FinishInfo): string {
@@ -28,16 +28,6 @@ export function createEmptyResponseError(
     finishReason: finish.finishReason,
     rawFinishReason: finish.rawFinishReason,
   };
-}
-
-export function isThinkingOnlyMessage(
-  message: Pick<AssistantMessage, 'content' | 'toolCalls'>,
-): boolean {
-  if (message.toolCalls.length > 0) return false;
-  if (!message.content.some((part) => part.type === 'think')) return false;
-  return !message.content.some(
-    (part) => part.type === 'text' && part.text.trim().length > 0,
-  );
 }
 
 export function emptyResponseError(

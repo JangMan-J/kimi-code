@@ -200,6 +200,16 @@ export function isVacuousContentPart(part: ContentPart): boolean {
   }
 }
 
+export function isThinkingOnlyMessage(
+  message: Pick<AssistantMessage, 'content' | 'toolCalls'>,
+): boolean {
+  if (message.toolCalls.length > 0) return false;
+  if (!message.content.some((part) => part.type === 'think')) return false;
+  return !message.content.some(
+    (part) => part.type === 'text' && part.text.trim().length > 0,
+  );
+}
+
 export function salvageInterruptedMessage(message: AssistantMessage): AssistantMessage | null {
   const content = message.content.filter((part) => !isVacuousContentPart(part));
   if (content.length === 0) {

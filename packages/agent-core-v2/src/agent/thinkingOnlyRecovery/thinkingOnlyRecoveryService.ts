@@ -7,7 +7,7 @@ import { IAgentLoopService, type AfterStepContext } from '#/agent/loop/loop';
 import type { LlmThinkingOnlyResponseEvent } from '#/app/telemetry/events';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { wrapSystemReminder } from '#/features/reminder/systemReminder';
-import { isThinkingOnlyMessage } from '#human/llm/empty-response';
+import { isThinkingOnlyMessage } from '#human/llm/message';
 
 import {
   IAgentThinkingOnlyRecoveryService,
