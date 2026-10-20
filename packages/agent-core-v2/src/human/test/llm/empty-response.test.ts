@@ -96,7 +96,9 @@ describe('emptyResponseError', () => {
   it('tolerates a completed think-only response when the policy allows it', () => {
     const thinkOnly = accumulatedMessage([{ type: 'think', think: 'reasoning' }]);
     const completed: FinishInfo = { finishReason: 'completed', rawFinishReason: 'stop' };
-    expect(emptyResponseError(thinkOnly, model, completed, true)).toBeNull();
+    expect(
+      emptyResponseError(thinkOnly, model, completed, { allowCompletedThinkOnly: true }),
+    ).toBeNull();
   });
 
   it('still reports think-only responses with abnormal or missing finish under the allow policy', () => {
@@ -109,7 +111,9 @@ describe('emptyResponseError', () => {
       NO_FINISH,
     ];
     for (const finish of finishes) {
-      expect(emptyResponseError(thinkOnly, model, finish, true)?.kind).toBe('empty_response');
+      expect(
+        emptyResponseError(thinkOnly, model, finish, { allowCompletedThinkOnly: true })?.kind,
+      ).toBe('empty_response');
     }
   });
 

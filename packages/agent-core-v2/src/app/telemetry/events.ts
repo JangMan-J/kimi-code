@@ -620,9 +620,6 @@ export interface LlmThinkingOnlyResponseEvent {
   step_no: number;
   action: 'nudged' | 'nudge_exhausted';
   model?: string;
-  provider_type?: string;
-  protocol?: string;
-  trace_id?: string;
 }
 
 export interface SessionIndexDegradedEvent {
@@ -1445,10 +1442,6 @@ export const telemetryEventDefinitions = {
       action:
         "How the response was handled: 'nudged' when a recovery reminder was queued (queueing only, not a successful recovery), 'nudge_exhausted' when the turn already spent its one recovery",
       model: 'Model alias that produced the thinking-only response',
-      provider_type: 'Provider protocol type',
-      protocol: 'Request protocol',
-      trace_id:
-        'Trace id of the LLM request that produced the thinking-only response; absent for non-Kimi protocols',
     },
   }),
   session_index_degraded: defineTelemetryEvent<SessionIndexDegradedEvent>({

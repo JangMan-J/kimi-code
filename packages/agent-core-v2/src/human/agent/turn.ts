@@ -344,7 +344,7 @@ function emptyErrorOf(context: TurnMachineContext): LlmErrorMessage<'empty_respo
     entry.message,
     context.input.request.model,
     entry.meta?.finish ?? NO_FINISH,
-    true,
+    { allowCompletedThinkOnly: true },
   );
 }
 

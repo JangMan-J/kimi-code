@@ -686,6 +686,8 @@ export * from '#/agent/loop/promptChannel';
 export * from '#/agent/interruptionReminder/interruptionReminder';
 export * from '#/agent/interruptionReminder/interruptionReminderService';
 export * from '#/agent/interruptionReminder/interruptionReminderOps';
+export * from '#/agent/thinkingOnlyRecovery/thinkingOnlyRecovery';
+export * from '#/agent/thinkingOnlyRecovery/thinkingOnlyRecoveryService';
 export * from '#/agent/mcp/mcp';
 export * from '#/agent/mcp/mcpService';
 export * from '#/agent/mcp/mcpDiscoveryOps';

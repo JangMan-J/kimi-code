@@ -22,9 +22,7 @@ import type { ExecutableToolResult } from '#/tool/toolContract';
 import { IAgentToolRegistryService } from '#/agent/toolRegistry/toolRegistry';
 import { IConfigService } from '#/app/config/config';
 import { AgentErrorEvent } from '#/agent/mcp/mcpEvents';
-import { isThinkingOnlyMessage } from '#human/llm/empty-response';
 import { type FinishReason } from '#human/llm/finish-reason';
-import { wrapSystemReminder } from '#/features/reminder/systemReminder';
 import { mergeInPlace } from '#/llm-adapter/contract/message';
 import type { ContentPart, UserMessage } from '#human/llm/message';
 import { emptyUsage, type TokenUsage } from '#human/llm/usage';
@@ -46,7 +44,6 @@ import { IAgentStateService } from '#/agent/state/agentState';
 import { IFileService } from '#/app/file/fileService';
 import { IPluginService } from '#/app/plugin/plugin';
 import type {
-  LlmThinkingOnlyResponseEvent,
   TurnEndedEvent as TurnEndedTelemetryEvent,
   TurnInterruptedEvent,
   TurnStartedEvent as TurnStartedTelemetryEvent,
@@ -123,9 +120,6 @@ import {
 } from './machine';
 
 export type LoopInterruptReason = 'aborted' | 'max_steps' | 'error';
-
-const THINKING_ONLY_RECOVERY_REMINDER =
-  'Your previous response had no visible output. Continue and produce a user-visible response.';
 
 export const loopLastRequestTraceIdKey = defineState<string | undefined>(
   'loop.lastRequestTraceId',
@@ -1183,7 +1177,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
       maxStepsError: undefined,
       abortReason: undefined,
       retryRequested: false,
-      thinkingOnlyNudged: false,
       afterChain: Promise.resolve(),
       partials: [],
       forceContentPartBoundary: false,
@@ -1496,42 +1489,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
         step.contentAppended = true;
         this.lastRequestTraceId = this.activeRequestTrace?.traceId;
         const toolCalls = event.entry.message.toolCalls;
-        if (
-          step.providerFinishReason === 'completed' &&
-          isThinkingOnlyMessage(event.entry.message)
-        ) {
-          const action: LlmThinkingOnlyResponseEvent['action'] = turn.thinkingOnlyNudged
-            ? 'nudge_exhausted'
-            : 'nudged';
-          if (!turn.thinkingOnlyNudged) {
-            turn.thinkingOnlyNudged = true;
-            this.notify({
-              message: {
-                role: 'user',
-                content: [
-                  { type: 'text', text: wrapSystemReminder(THINKING_ONLY_RECOVERY_REMINDER) },
-                ],
-                toolCalls: [],
-                origin: {
-                  kind: 'injection',
-                  variant: 'thinking_only_recovery',
-                  ownerPromptId: turn.prompt.id,
-                },
-              },
-              bypassMaxSteps: true,
-            });
-          }
-          const properties: LlmThinkingOnlyResponseEvent = {
-            turn_id: turn.id,
-            step_no: step.number,
-            action,
-            model: event.model,
-            provider_type: turn.providerType,
-            protocol: turn.protocol,
-            trace_id: event.traceId,
-          };
-          this.telemetry.track2('llm_thinking_only_response', properties);
-        }
         if (toolCalls.length === 0) {
           const finishReason = step.providerFinishReason ?? 'completed';
           this.endOrInterruptMachineStep(turn, step, finishReason === 'tool_calls' ? 'other' : finishReason);
@@ -2302,7 +2259,6 @@ interface ActiveTurn {
   maxStepsError: LoopError | undefined;
   abortReason: unknown;
   retryRequested: boolean;
-  thinkingOnlyNudged: boolean;
   afterChain: Promise<void>;
   partials: ContentPart[];
   forceContentPartBoundary: boolean;

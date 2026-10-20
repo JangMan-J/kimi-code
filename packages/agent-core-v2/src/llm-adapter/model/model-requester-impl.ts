@@ -261,7 +261,7 @@ export class ModelRequesterImpl implements ModelRequester {
       accumulator.finish(),
       config.model,
       finish ?? NO_FINISH,
-      params?.allowCompletedThinkOnly === true,
+      { allowCompletedThinkOnly: params?.allowCompletedThinkOnly },
     );
     if (emptyError !== null) {
       throw errorFromLlmMessage(emptyError);
