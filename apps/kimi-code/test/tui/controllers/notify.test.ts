@@ -344,8 +344,8 @@ describe('NotifyController', () => {
     h.send('a', 'First worker reports last', 'agent-7');
     expect(h.notifyPanel.getChannels().map((ch) => ch.label)).toEqual([
       'coder',
-      'coder(2)',
-      'coder(3)',
+      'coder_2',
+      'coder_3',
     ]);
     h.emit('background.task.started', {
       info: { kind: 'agent', agentId: 'agent-29', description: 'Changed task', status: 'running' },

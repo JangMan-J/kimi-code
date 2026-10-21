@@ -8,9 +8,10 @@
  * `↑`/`↓` page through the channel's updates, `Shift+↑`/`↓` scroll a docked
  * body, and `Esc`/`Ctrl+N` hand focus back to the editor; any other key hands
  * focus back and goes to the editor. Docked (fullscreen), clicks on the head's
- * tabs, pager and stub change the view without taking focus. A new update
- * pulls the view along only while the panel is unfocused and showing the
- * newest update; otherwise other channels collect an unread dot.
+ * tabs, pager and stub change the view without taking focus. Updates never
+ * change the selected channel automatically. An unfocused panel follows new
+ * pages in its current channel while already on the latest page; other
+ * channels collect an unread dot.
  *
  * When the turn ends the panel folds to a one-line stub until the user focuses
  * it; while an approval or question waits it shrinks to a one-line summary of
@@ -93,8 +94,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   /** Key of the channel on display; channels themselves are append-only. */
   private activeKey = MAIN_AGENT_ID;
   private hasFocus = false;
-  /** Update ids in arrival order; the view follows the last one while it shows it. */
-  private readonly arrivals: string[] = [];
   private ended = false;
   /** Turn ended and no one is reading: the panel folds to a one-line stub. */
   private collapsed = false;
@@ -107,23 +106,22 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   onReturnFocus: ((key: string | undefined) => void) | undefined;
 
   /**
-   * Add or update an entry in a channel. A repeated `id` updates the entry in
-   * place; a new id appends. A new entry pulls the view to its channel's tail
-   * only while the panel is unfocused and showing the newest update, the way
-   * a scrolled-up transcript stops following; otherwise a background channel
-   * collects an unread dot and the pager simply grows.
+   * Add or update an entry without changing the selected channel. A repeated
+   * `id` updates in place. A new id appends and marks a background channel
+   * unread. The current channel follows its own tail only while unfocused and
+   * already on its latest page.
    */
   upsert(entry: NotifyEntry): void {
-    const following = !this.hasFocus && this.showsNewest();
     const ch = this.channelFor(entry);
+    const following =
+      !this.hasFocus && ch.key === this.activeKey && ch.page === ch.entries.length - 1;
     const existing = ch.entries.find((item) => item.id === entry.id);
     if (existing !== undefined) {
       ch.entries[ch.entries.indexOf(existing)] = entry;
     } else {
       ch.entries.push(entry);
-      this.arrivals.push(entry.id);
-      if (following) this.showChannel(ch.key);
-      else if (ch.key !== this.activeKey) ch.unreadIds.add(entry.id);
+      if (ch.key !== this.activeKey) ch.unreadIds.add(entry.id);
+      else if (following) ch.page = ch.entries.length - 1;
     }
     this.ended = false;
     this.collapsed = false;
@@ -142,7 +140,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       ch.page = Math.min(ch.page, ch.entries.length - 1);
       ch.unreadIds.delete(id);
     }
-    this.arrivals.splice(this.arrivals.indexOf(id), 1);
     if (this.channels.length === 0) this.dropFocus();
     return true;
   }
@@ -151,7 +148,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     this.channels.length = 0;
     this.activeKey = MAIN_AGENT_ID;
     this.dropFocus();
-    this.arrivals.length = 0;
     this.ended = false;
     this.collapsed = false;
     this.keptOpen = false;
@@ -424,7 +420,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
           { text: '>', style: strong, action: { kind: 'next' } },
         );
       }
-      if (this.ended) segments.push({ text: ' · turn ended', style: strong });
       if (hint.length > 0) segments.push({ text: ` · ${hint}`, style: dim });
       segments.push({ text: ' ', style: rule });
       return segments;
@@ -537,11 +532,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     return firstLine === undefined || firstLine.length === 0 ? undefined : firstLine;
   }
 
-  private showsNewest(): boolean {
-    const newest = this.arrivals.at(-1);
-    return this.channels.length === 0 || newest === undefined || this.currentEntry().id === newest;
-  }
-
   private currentEntry(): NotifyEntry {
     const ch = this.activeChannel();
     return ch.entries[Math.min(ch.page, ch.entries.length - 1)]!;
@@ -558,17 +548,18 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       page: 0,
       unreadIds: new Set(),
     };
+    if (this.channels.length === 0) this.activeKey = key;
     if (key === MAIN_AGENT_ID) this.channels.unshift(created);
     else this.channels.push(created);
     return created;
   }
 
-  /** Dedup identical labels as `explore`, `explore(2)`, `explore(3)`, … */
+  /** Dedup identical labels as `explore`, `explore_2`, `explore_3`, … */
   private labelFor(base: string): string {
     if (!this.channels.some((ch) => ch.label === base)) return base;
     let n = 2;
-    while (this.channels.some((ch) => ch.label === `${base}(${String(n)})`)) n += 1;
-    return `${base}(${String(n)})`;
+    while (this.channels.some((ch) => ch.label === `${base}_${String(n)}`)) n += 1;
+    return `${base}_${String(n)}`;
   }
 
   private activeIndex(): number {

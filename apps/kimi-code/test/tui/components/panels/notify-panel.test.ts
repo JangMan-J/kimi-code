@@ -69,6 +69,7 @@ describe('NotifyPanelComponent', () => {
     const lines = render(panel);
 
     expect(lines[0]).toMatch(/^─ main · Updates · ctrl\+n to browse ─+$/);
+    expect(lines[0]).not.toContain('1/1');
     expect(lines.slice(1).map((line) => line.trimEnd())).toEqual([
       '  Login module is clean; the bug is in session expiry.',
     ]);
@@ -82,7 +83,7 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('Reading the parser first.');
   });
 
-  it('follows the latest activity across channels while unfocused', () => {
+  it('stays on main when another agent posts while unfocused', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main phase one'));
     panel.upsert(entry('tc-2', 'main phase two'));
@@ -90,9 +91,9 @@ describe('NotifyPanelComponent', () => {
 
     panel.upsert(entry('a0:c1', 'explore finding', 'a0', 'explore'));
     const lines = render(panel);
-    expect(lines[0]).toContain('main · explore · Updates · ctrl+n to browse');
-    expect(lines.join('\n')).toContain('explore finding');
-    expect(lines.join('\n')).not.toContain('main phase');
+    expect(lines[0]).toContain('main · explore● · Updates < 2/2 > · ctrl+n to browse');
+    expect(lines.join('\n')).toContain('main phase two');
+    expect(lines.join('\n')).not.toContain('explore finding');
   });
 
   it('switches channels with prev/nextChannel and pages inside a channel', () => {
@@ -102,6 +103,7 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
 
     expect(panel.focus()).toBe(true);
+    expect(panel.nextChannel()).toBe(true);
     expect(panel.nextChannel()).toBe(false);
 
     expect(panel.prevChannel()).toBe(true);
@@ -128,7 +130,8 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
 
     panel.focus();
-    panel.prevChannel();
+    expect(panel.nextChannel()).toBe(true);
+    expect(panel.prevChannel()).toBe(true);
     expect(titleOf(panel)).not.toContain('●');
 
     panel.upsert(entry('a0:c2', 'explore two', 'a0', 'explore'));
@@ -145,12 +148,17 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('explore two');
   });
 
-  it('dedups repeated channel labels with a counter', () => {
+  it('dedups repeated channel labels with an instance suffix', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('a1:c1', 'first explore', 'a1', 'explore'));
     panel.upsert(entry('a2:c1', 'second explore', 'a2', 'explore'));
+    panel.upsert(entry('a3:c1', 'third explore', 'a3', 'explore'));
 
-    expect(panel.getChannels().map((ch) => ch.label)).toEqual(['explore', 'explore(2)']);
+    expect(panel.getChannels().map((ch) => ch.label)).toEqual([
+      'explore',
+      'explore_2',
+      'explore_3',
+    ]);
   });
 
   it('labels channels by raw agent id when no name is known', () => {
@@ -224,12 +232,13 @@ describe('NotifyPanelComponent', () => {
     expect(collapsed[0]).not.toContain('Two refreshes');
   });
 
-  it('stays expanded when the turn ends while the user is reading, folds on blur', () => {
+  it('stays expanded without a turn-ended label while reading, then folds on blur', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'phase one'));
     panel.focus();
     panel.setEnded(true);
 
+    expect(titleOf(panel)).not.toContain('turn ended');
     expect(render(panel).join('\n')).toContain('phase one');
 
     panel.blur();
@@ -286,6 +295,7 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
     expect(panel.focus()).toBe(true);
+    expect(panel.nextChannel()).toBe(true);
 
     panel.upsert(entry('tc-2', 'main two'));
     const before = panel.getChannels().find((ch) => ch.label === 'main');
@@ -301,6 +311,7 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
     expect(panel.focus()).toBe(true);
+    expect(panel.nextChannel()).toBe(true);
 
     panel.upsert(entry('tc-2', 'delegation'));
     expect(panel.getChannels().find((ch) => ch.label === 'main')?.unread).toBe(1);
@@ -314,7 +325,7 @@ describe('NotifyPanelComponent', () => {
     expect(panel.getChannels().find((ch) => ch.label === 'main')?.unread).toBe(1);
   });
 
-  it('dims to a stub and notes the ended turn, and clears wholesale', () => {
+  it('dims to a stub when the turn ends, and clears wholesale', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'done with phase one'));
     panel.setEnded(true);
@@ -444,20 +455,22 @@ describe('NotifyPanelComponent', () => {
     expect(titleOf(panel)).toContain('explore●');
   });
 
-  it('follows new updates only while unfocused and showing the newest one', () => {
+  it('never changes a manually selected channel when updates arrive', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
-    expect(render(panel).join('\n')).toContain('explore one');
-
-    click(panel, 'main');
-    panel.upsert(entry('a0:c2', 'explore two', 'a0', 'explore'));
     expect(render(panel).join('\n')).toContain('main one');
     expect(titleOf(panel)).toContain('explore●');
 
     click(panel, 'explore●');
     panel.upsert(entry('tc-2', 'main two'));
+    expect(render(panel).join('\n')).toContain('explore one');
+    expect(titleOf(panel)).toContain('main●');
+
+    click(panel, 'main●');
+    panel.upsert(entry('a0:c2', 'explore two', 'a0', 'explore'));
     expect(render(panel).join('\n')).toContain('main two');
+    expect(titleOf(panel)).toContain('explore●');
   });
 
   it('uses horizontal arrows for agents, vertical arrows for updates, and Shift+arrows to scroll', () => {

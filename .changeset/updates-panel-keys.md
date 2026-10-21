@@ -2,4 +2,4 @@
 "@moonshot-ai/kimi-code": patch
 ---
 
-Use ←/→ for agents, ↑/↓ for updates, and Shift-↑/↓ to scroll in the experimental Updates panel; the editor also fades when the terminal loses focus.
+Refine Updates navigation and labels, stop updates from auto-switching the selected agent, and fade the editor when the terminal loses focus.
