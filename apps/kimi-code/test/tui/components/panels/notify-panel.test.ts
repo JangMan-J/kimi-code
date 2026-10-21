@@ -361,7 +361,7 @@ describe('NotifyPanelComponent', () => {
     expect(lines.at(-1)).toContain('row 5');
   });
 
-  it('folds a docked panel while a prompt waits and reopens it afterward', () => {
+  it('folds during a prompt and allows mouse expansion without taking keyboard focus', () => {
     const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
     panel.upsert({ ...entry('a0:c1', 'details', 'a0', 'explore'), title: 'Checking the auth tests' });
     panel.upsert({ ...entry('tc-1', 'main is planning'), time: 1 });
@@ -370,13 +370,22 @@ describe('NotifyPanelComponent', () => {
     panel.setPrompt(true);
     expect(render(panel)).toHaveLength(1);
     expect(titleOf(panel)).toContain('2 updates');
-    expect(titleOf(panel)).toContain('Checking the auth tests');
+    expect(titleOf(panel)).toContain('click to expand');
     expect(titleOf(panel)).not.toContain('Updates');
-    expect(titleOf(panel)).not.toContain('ctrl+n to expand');
+    expect(panel.focused).toBe(false);
+    expect(panel.focus()).toBe(false);
+
+    click(panel, 'click to expand');
+    expect(render(panel).join('\n')).toContain('details');
+    expect(titleOf(panel)).toContain('close');
+    expect(titleOf(panel)).not.toContain('ctrl+n to browse');
     expect(panel.focused).toBe(false);
     expect(panel.focus()).toBe(false);
 
     panel.upsert(entry('tc-2', 'main newer'));
+    expect(render(panel).join('\n')).toContain('details');
+
+    click(panel, 'close');
     expect(render(panel)).toHaveLength(1);
     expect(titleOf(panel)).toContain('3 updates');
 

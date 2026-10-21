@@ -126,8 +126,10 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       }
     }
     this.ended = false;
-    this.collapsed = this.promptPending;
-    this.keptOpen = false;
+    if (!this.promptPending) {
+      this.collapsed = false;
+      this.keptOpen = false;
+    }
   }
 
   remove(id: string): boolean {
@@ -298,12 +300,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     if (this.channels.length === 0) return [];
     if (part === 'foot') return [];
     if (part === 'body') {
-      return this.promptPending || this.collapsed ? [] : this.bodyRows(width);
-    }
-    if (this.promptPending) {
-      const line = this.paintSegments(this.stubSegments(width), width);
-      this.hitTargets = [];
-      return [line];
+      return this.collapsed ? [] : this.bodyRows(width);
     }
     const segments = this.collapsed ? this.stubSegments(width) : this.headSegments(width);
     return [this.paintSegments(segments, width)];
@@ -439,7 +436,11 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     const focusedHints: string[] = [];
     if (this.channels.length > 1) focusedHints.push('← → agent');
     if (ch.entries.length > 1) focusedHints.push('↑ ↓ update');
-    const hint = this.hasFocus ? focusedHints.join(' · ') : 'ctrl+n to browse';
+    const hint = this.hasFocus
+      ? focusedHints.join(' · ')
+      : this.promptPending
+        ? ''
+        : 'ctrl+n to browse';
     const candidates: [HeadSegment[], HeadSegment[]][] = [
       [label(this.tabSegments(), hint), close('esc close')],
       [label([this.tabSegment(ch, true)], ''), close('esc')],
@@ -468,7 +469,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     const total = this.channels.reduce((sum, ch) => sum + ch.entries.length, 0);
     const count = `${String(total)} ${total === 1 ? 'update' : 'updates'}`;
     const tail: HeadSegment = {
-      text: this.promptPending ? '' : ' · ctrl+n to expand',
+      text: this.promptPending ? ' · click to expand' : ' · ctrl+n to expand',
       style: dim,
       action: expand,
     };
