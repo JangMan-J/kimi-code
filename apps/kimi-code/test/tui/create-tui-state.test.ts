@@ -130,8 +130,9 @@ describe('createTUIState', () => {
       state.queueContainer,
       state.btwPanelContainer,
       state.surveyContainer,
-      state.editorContainer,
+      state.editorSlot,
     ]);
+    expect(state.editorSlot?.children).toEqual([state.editorContainer]);
 
     // The layout root is mounted and the root children list stays empty.
     expect((state.ui as TuiAltScreen).getLayoutRoot()).toBeDefined();

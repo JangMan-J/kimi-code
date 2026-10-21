@@ -26,7 +26,8 @@ import * as userMessages from '#/tui/components/messages/user-message';
 import { ActivityPaneComponent } from '#/tui/components/panes/activity-pane';
 import { CHROME_GUTTER } from '#/tui/constant/rendering';
 import { createTUIState, type KimiTUIOptions } from '#/tui/kimi-tui';
-import { mountFooter } from '#/tui/tui-state';
+import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
+import { mountFooter, setEditorSlot } from '#/tui/tui-state';
 import type { AppState, TranscriptEntry } from '#/tui/types';
 import { beginScreenTakeover, endScreenTakeover } from '#/tui/utils/screen-takeover';
 import { markTranscriptComponent } from '#/tui/utils/transcript-component-metadata';
@@ -920,6 +921,64 @@ describe('fullscreen layout', () => {
       '  ▸ main · Rewriting the approval panel',
     ]);
     expect(rows.join('\n')).not.toContain('body 1');
+
+    state.ui.stop();
+  });
+
+  it('keeps a long approval\'s choices on screen and scrolls its request with Shift+↓', async () => {
+    const { state, vt } = await mountFullscreen(24);
+    const pending = pendingApproval();
+    pending.data.display = [
+      {
+        type: 'shell',
+        language: 'bash',
+        command: Array.from({ length: 30 }, (_, i) => `echo step ${String(i + 1)}`).join('\n'),
+      },
+    ];
+    pending.data.choices = [
+      { label: 'Approve once', response: 'approved' },
+      { label: 'Reject', response: 'rejected' },
+    ];
+    const panel = new ApprovalPanelComponent(pending, () => {}, undefined, undefined, {
+      layout: { maxBodyRows: 6 },
+    });
+    state.livePane.pendingApproval = pending;
+    setEditorSlot(state, panel);
+    state.ui.setFocus(panel);
+    state.ui.requestRender();
+    await vt.waitForRender();
+
+    let rows = screenRows(vt);
+    const title = rows.findIndex((row) => row.includes('Run this command?'));
+    expect(rows.slice(title + 2, title + 8).map((row) => row.replace(/[┃│]$/, '').trim())).toEqual([
+      '$ echo step 1',
+      '· echo step 2',
+      '· echo step 3',
+      '· echo step 4',
+      '· echo step 5',
+      '· echo step 6',
+    ]);
+    expect(rows.slice(-5).map((row) => row.trim())).toEqual([
+      '▶ 1. Approve once',
+      '2. Reject',
+      '',
+      '↑/↓ select · 1/2 choose · ↵ confirm · shift+↑/↓ scroll',
+      '─'.repeat(WIDTH - CHROME_GUTTER * 2),
+    ]);
+
+    vt.sendInput('\u001B[1;2B');
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows[title + 2]).toContain('· echo step 2');
+
+    setEditorSlot(state, state.editor);
+    state.livePane.pendingApproval = null;
+    state.ui.setFocus(state.editor);
+    state.ui.requestRender();
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows.join('\n')).not.toContain('Run this command?');
+    expect(rows.join('\n')).toContain('test-model');
 
     state.ui.stop();
   });

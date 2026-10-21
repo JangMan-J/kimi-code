@@ -14,6 +14,19 @@ export {
   TERMINAL_FOCUS_OUT,
 } from '#/tui/constant/terminal';
 
+/**
+ * A click that lands this soon after the terminal regained focus is most
+ * likely the click that focused the window, not a deliberate choice.
+ */
+const FOCUS_CLICK_GUARD_MS = 300;
+
+export function isFocusingClick(
+  state: Pick<TerminalState, 'focusedAt'>,
+  now = Date.now(),
+): boolean {
+  return now - state.focusedAt < FOCUS_CLICK_GUARD_MS;
+}
+
 export function installTerminalFocusTracking(state: TUIState): () => void {
   state.terminalState.focused = true;
   const disposeInputListener = state.ui.addInputListener((data) =>
@@ -29,11 +42,13 @@ export function installTerminalFocusTracking(state: TUIState): () => void {
 }
 
 export function handleTerminalFocusInput(
-  state: Pick<TerminalState, 'focused'>,
+  state: Pick<TerminalState, 'focused' | 'focusedAt'>,
   data: string,
+  now = Date.now(),
 ): { consume: true } | undefined {
   if (data === TERMINAL_FOCUS_IN) {
     state.focused = true;
+    state.focusedAt = now;
     return { consume: true };
   }
   if (data === TERMINAL_FOCUS_OUT) {

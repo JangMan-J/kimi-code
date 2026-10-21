@@ -128,7 +128,7 @@ import {
   SHUTTING_DOWN_HINT,
 } from './constant/kimi-tui';
 import { MEDIA_INGESTION_SUBMIT_WAIT_MS } from './constant/media';
-import { CHROME_GUTTER } from './constant/rendering';
+import { CHROME_GUTTER, DOCK_APPROVAL_ROWS } from './constant/rendering';
 import { MAX_TERMINAL_TITLE_LENGTH } from './constant/terminal';
 import { AuthFlowController } from './controllers/auth-flow';
 import { BtwPanelController } from './controllers/btw-panel';
@@ -152,7 +152,7 @@ import { createQuestionAskHandler } from './reverse-rpc/question/handler';
 import type { ApprovalPanelData, QuestionPanelData } from './reverse-rpc/types';
 import { currentTheme, getColorPalette, getBuiltInPalette, isBuiltInTheme } from './theme';
 import type { ColorToken, ResolvedTheme, ThemeName } from './theme';
-import { createTUIState, mountFooter, type TUIState } from './tui-state';
+import { createTUIState, mountFooter, setEditorSlot, type TUIState } from './tui-state';
 import {
   INITIAL_LIVE_PANE,
   sumTokenUsage,
@@ -202,7 +202,7 @@ import { formatStepRetryDetail, formatStepRetryLabel } from './utils/step-retry'
 import { formatBashOutputForDisplay } from './utils/shell-output';
 import { lazyModelSelection } from './utils/model-switch';
 import { combineStartupNotice, isOAuthLoginRequiredError } from './utils/startup';
-import { installTerminalFocusTracking } from './utils/terminal-focus';
+import { installTerminalFocusTracking, isFocusingClick } from './utils/terminal-focus';
 import { notifyTerminalOnce } from './utils/terminal-notification';
 import { installTerminalThemeTracking } from './utils/terminal-theme';
 import { detectTmuxKeyboardWarning } from './utils/tmux-keyboard';
@@ -773,8 +773,7 @@ export class KimiTUI {
     void this.loadBanner();
     this.setupAutocomplete();
     void this.loadPersistedInputHistory();
-    this.state.editorContainer.clear();
-    this.state.editorContainer.addChild(this.state.editor);
+    setEditorSlot(this.state, this.state.editor);
     this.state.ui.setFocus(this.state.editor);
     this.applyRecommendedEffortInBackground();
     this.refreshModelSwitchConfirmConfigInBackground();
@@ -4336,8 +4335,7 @@ export class KimiTUI {
     this.surveyController.notifyDisplaced();
     if (this.state.activeDialog === 'model-switch-confirm') this.state.activeDialog = null;
     this.state.editorReplacementMounted = true;
-    this.state.editorContainer.clear();
-    this.state.editorContainer.addChild(panel);
+    setEditorSlot(this.state, panel);
     this.state.ui.setFocus(panel);
     this.state.ui.requestRender();
     previousOnDisplaced?.();
@@ -4347,8 +4345,7 @@ export class KimiTUI {
     const onDisplaced = this.editorReplacementOnDisplaced;
     this.editorReplacementOnDisplaced = undefined;
     this.state.editorReplacementMounted = false;
-    this.state.editorContainer.clear();
-    this.state.editorContainer.addChild(this.state.editor);
+    setEditorSlot(this.state, this.state.editor);
     this.state.ui.setFocus(this.state.editor);
     onDisplaced?.();
     this.modelMigration.retry();
@@ -4716,6 +4713,11 @@ export class KimiTUI {
       },
       (block) => {
         this.openApprovalPreview(panel, block);
+      },
+      {
+        layout:
+          this.state.dockContainer === undefined ? undefined : { maxBodyRows: DOCK_APPROVAL_ROWS },
+        isFocusingClick: () => isFocusingClick(this.state.terminalState),
       },
     );
     this.activeApprovalPanel = panel;

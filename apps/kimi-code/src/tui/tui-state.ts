@@ -1,6 +1,7 @@
 import {
   Container,
   ProcessTerminal,
+  type Component,
   TuiAltScreen,
   TuiMainScreen,
   VStack,
@@ -11,6 +12,7 @@ import { TranscriptView } from '#/tui/components/messages/transcript-view';
 import { clipboard } from '#/utils/clipboard/clipboard-native';
 import { openUrl } from '#/utils/open-url';
 
+import { DockSection } from './components/chrome/dock-section';
 import { FooterComponent } from './components/chrome/footer';
 import { GutterContainer } from './components/chrome/gutter-container';
 import type { MoonLoader, SpinnerStyle } from './components/chrome/moon-loader';
@@ -57,6 +59,13 @@ export interface TUIState {
    * mode, where all chrome is a direct child of the root container.
    */
   dockContainer: VStack | undefined;
+  /**
+   * Fullscreen mode only: the dock slot holding either `editorContainer` (the
+   * editor or a panel standing in for it) or a docked section such as the
+   * approval panel, which must join the layout itself to scroll. See
+   * {@link setEditorSlot}.
+   */
+  editorSlot: VStack | undefined;
   footer: FooterComponent;
   editor: CustomEditor;
   theme: Theme;
@@ -155,6 +164,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
   });
 
   let dockContainer: VStack | undefined;
+  let editorSlot: VStack | undefined;
   if (ui instanceof TuiAltScreen) {
     // Fullscreen (alternate screen): the transcript scrolls inside the primary
     // ScrollView while the rest of the chrome stays docked at the bottom. The
@@ -173,7 +183,9 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     dockContainer.addChild(queueContainer, { shrink: 1, minSize: 0, visible: unlessBlocked });
     dockContainer.addChild(btwPanelContainer, { shrink: 1, minSize: 0, visible: unlessBlocked });
     dockContainer.addChild(surveyContainer, { shrink: 0, minSize: 0 });
-    dockContainer.addChild(editorContainer, { shrink: 1, minSize: 3 });
+    editorSlot = new VStack();
+    editorSlot.addChild(editorContainer, EDITOR_SLOT_ENTRY);
+    dockContainer.addChild(editorSlot, EDITOR_SLOT_ENTRY);
     const root = new VStack();
     root.addChild(transcriptView, { basis: 0, grow: 1, shrink: 1, minSize: 1 });
     root.addChild(dockContainer, { basis: 'auto', grow: 0, shrink: 1, minSize: 1 });
@@ -196,6 +208,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     surveyContainer,
     editorContainer,
     dockContainer,
+    editorSlot,
     editor,
     footer,
     theme,
@@ -244,6 +257,34 @@ export function mountFooter(state: TUIState): void {
     minSize: 1,
     visible: () => !isBlockingPromptPending(state),
   });
+}
+
+// The editor never shrinks below its 3 rows (top border / input / bottom
+// border), and neither does whatever stands in for it.
+const EDITOR_SLOT_ENTRY = { shrink: 1, minSize: 3 } as const;
+
+/**
+ * Show `component` where the editor sits. A docked section (fullscreen) joins
+ * the layout directly so its body can scroll; anything else goes through
+ * `editorContainer`, which pads it like the rest of the chrome.
+ */
+export function setEditorSlot(
+  state: Pick<TUIState, 'editorContainer' | 'editorSlot'>,
+  component: Component,
+): void {
+  const { editorContainer, editorSlot } = state;
+  editorContainer.clear();
+  if (editorSlot === undefined) {
+    editorContainer.addChild(component);
+    return;
+  }
+  editorSlot.clear();
+  if (component instanceof DockSection && component.layout !== undefined) {
+    editorSlot.addChild(component, EDITOR_SLOT_ENTRY);
+    return;
+  }
+  editorContainer.addChild(component);
+  editorSlot.addChild(editorContainer, EDITOR_SLOT_ENTRY);
 }
 
 /** An approval or question has replaced the editor and waits for the user. */

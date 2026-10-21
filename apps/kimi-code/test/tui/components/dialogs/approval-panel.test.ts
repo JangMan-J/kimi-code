@@ -1,6 +1,7 @@
-import { CURSOR_MARKER } from '@moonshot-ai/pi-tui';
+import { CURSOR_MARKER, type Component, type TuiMouseEvent } from '@moonshot-ai/pi-tui';
 import { describe, expect, it } from 'vitest';
 
+import type { GutterContainer } from '#/tui/components/chrome/gutter-container';
 import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
 import type {
   DiffDisplayBlock,
@@ -479,5 +480,113 @@ describe('ApprovalPanelComponent', () => {
     expect(responses).toEqual([
       { response: 'rejected', feedback: 'no', selected_label: 'Revise' },
     ]);
+  });
+
+  describe('docked (fullscreen)', () => {
+    function goalPending(): PendingApproval {
+      return {
+        data: {
+          ...makePending().data,
+          tool_name: 'CreateGoal',
+          choices: [
+            {
+              label: 'Switch to Never Ask and start',
+              response: 'approved',
+              description: 'Tools are approved automatically, and questions are skipped.',
+            },
+            { label: 'Start in Always Ask', response: 'approved', description: 'Ask every time.' },
+            { label: 'Do not start', response: 'cancelled' },
+          ],
+        },
+      };
+    }
+
+    function dockedDialog(
+      pending: PendingApproval,
+      isFocusingClick = () => false,
+    ): { dialog: ApprovalPanelComponent; responses: Array<{ response: string }> } {
+      const responses: Array<{ response: string }> = [];
+      const dialog = new ApprovalPanelComponent(
+        pending,
+        (response) => responses.push(response),
+        undefined,
+        undefined,
+        { layout: { maxBodyRows: 6 }, isFocusingClick },
+      );
+      return { dialog, responses };
+    }
+
+    function foot(dialog: ApprovalPanelComponent): string[] {
+      const lines = dialog.render(60).map((line) => strip(line).trimEnd());
+      return lines.slice(lines.findIndex((line) => line.includes('1. ')) - 1);
+    }
+
+    function mouse(type: 'move' | 'press' | 'release' | 'click', y: number): TuiMouseEvent {
+      return {
+        type,
+        button: type === 'move' ? 'none' : 'left',
+        x: 4,
+        y,
+        screenX: 4,
+        screenY: y,
+        width: 58,
+        height: 12,
+        shift: false,
+        alt: false,
+        ctrl: false,
+      };
+    }
+
+    function footRow(dialog: ApprovalPanelComponent, label: string): number {
+      return foot(dialog).findIndex((line) => line.includes(label));
+    }
+
+    function footPart(dialog: ApprovalPanelComponent): Component {
+      return (dialog.children.at(-1) as GutterContainer).children[0]!;
+    }
+
+    it('shows only the selected description in a fixed area so the choices never move', () => {
+      const { dialog } = dockedDialog(goalPending());
+      const first = foot(dialog);
+      expect(first).toEqual([
+        '',
+        '   ▶ 1. Switch to Never Ask and start',
+        '     2. Start in Always Ask',
+        '     3. Do not start',
+        '',
+        '   Tools are approved automatically, and questions are',
+        '   skipped.',
+        '',
+        '   ↑/↓ select · 1/2/3 choose · ↵ confirm',
+        ` ${'─'.repeat(58)}`,
+      ]);
+
+      dialog.handleInput('\u001B[B');
+      dialog.handleInput('\u001B[B');
+      const third = foot(dialog);
+      expect(third).toHaveLength(first.length);
+      expect(third.slice(1, 4)).toEqual([
+        '     1. Switch to Never Ask and start',
+        '     2. Start in Always Ask',
+        '   ▶ 3. Do not start',
+      ]);
+      expect(third.slice(5, 7)).toEqual(['', '']);
+    });
+
+    it('selects a choice on hover and submits it on click, ignoring the click that focused the window', () => {
+      let focusing = true;
+      const { dialog, responses } = dockedDialog(goalPending(), () => focusing);
+      const row = footRow(dialog, 'Start in Always Ask');
+
+      expect(footPart(dialog).handleMouse?.(mouse('move', row))).toEqual({ handled: true, render: true });
+      expect(foot(dialog)[row]).toContain('▶ 2. Start in Always Ask');
+
+      for (const type of ['press', 'release', 'click'] as const) footPart(dialog).handleMouse?.(mouse(type, row));
+      expect(responses).toEqual([]);
+
+      focusing = false;
+      for (const type of ['press', 'release', 'click'] as const) footPart(dialog).handleMouse?.(mouse(type, row));
+      expect(responses).toEqual([{ response: 'approved', feedback: undefined, selected_label: undefined }]);
+    });
   });
 });
