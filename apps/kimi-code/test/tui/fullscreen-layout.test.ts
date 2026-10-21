@@ -25,7 +25,7 @@ import { UserMessageComponent } from '#/tui/components/messages/user-message';
 import * as userMessages from '#/tui/components/messages/user-message';
 import { ActivityPaneComponent } from '#/tui/components/panes/activity-pane';
 import { CHROME_GUTTER } from '#/tui/constant/rendering';
-import { createTUIState, type KimiTUIOptions } from '#/tui/kimi-tui';
+import { createTUIState, KimiTUI, type KimiTUIOptions } from '#/tui/kimi-tui';
 import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
 import { GoalStartPermissionPromptComponent } from '#/tui/components/dialogs/goal-start-permission-prompt';
 import { NotifyController } from '#/tui/controllers/notify';
@@ -103,6 +103,15 @@ async function mountFullscreen(height = HEIGHT): Promise<{
 
 function screenRows(vt: VirtualTerminal): string[] {
   return vt.getViewport().map((row) => stripAnsi(row).trimEnd());
+}
+
+function updateQueueDisplay(state: ReturnType<typeof createTUIState>): void {
+  const host = {
+    state,
+    deferUserMessages: false,
+    isSteeringQueuedMessages: () => false,
+  } as unknown as KimiTUI;
+  KimiTUI.prototype.updateQueueDisplay.call(host);
 }
 
 function pendingApproval(): NonNullable<ReturnType<typeof createTUIState>['livePane']['pendingApproval']> {
@@ -847,18 +856,15 @@ describe('fullscreen layout', () => {
     state.ui.stop();
   });
 
-  it('shows three queued messages, scrolls the rest with the wheel, and gives way to an approval', async () => {
+  it('shows three queued messages, scrolls and resets them, and gives way to an approval', async () => {
     const { state, vt } = await mountFullscreen(24);
     state.transcriptContainer.addChild(
       new Text(Array.from({ length: 40 }, (_, i) => `transcript ${String(i + 1)}`).join('\n'), 0, 0),
     );
-    state.queuePane.setOptions({
-      isCompacting: false,
-      isStreaming: true,
-      canSteerImmediately: true,
-      messages: Array.from({ length: 5 }, (_, i) => ({ text: `queued ${String(i + 1)}` })),
-    });
-    state.queueContainer.addChild(state.queuePane);
+    state.queuedMessages = Array.from({ length: 5 }, (_, i) => ({
+      text: `queued ${String(i + 1)}`,
+    }));
+    updateQueueDisplay(state);
     state.ui.requestRender();
     await vt.waitForRender();
 
@@ -887,6 +893,18 @@ describe('fullscreen layout', () => {
     expect(rows[first]).toContain('❯ queued 3');
     expect(rows[first + 2]).toContain('❯ queued 5');
 
+    state.queuedMessages = [];
+    updateQueueDisplay(state);
+    state.queuedMessages = Array.from({ length: 5 }, (_, i) => ({
+      text: `queued ${String(i + 1)}`,
+    }));
+    updateQueueDisplay(state);
+    state.ui.requestRender();
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows[first]).toContain('❯ queued 1');
+    expect(rows[first + 2]).toContain('❯ queued 3');
+
     state.livePane.pendingApproval = pendingApproval();
     state.ui.requestRender();
     await vt.waitForRender();
@@ -897,7 +915,7 @@ describe('fullscreen layout', () => {
     state.ui.stop();
   });
 
-  it('caps the Updates body at six scrollable rows and folds it to a summary during an approval', async () => {
+  it('caps and scrolls Updates, resets on a new page, and folds to an approval summary', async () => {
     const { state, vt } = await mountFullscreen(24);
     state.notifyPanel.upsert({
       id: 'n1',
@@ -933,13 +951,27 @@ describe('fullscreen layout', () => {
     expect(state.notifyPanel.focused).toBe(true);
     state.ui.setFocus(state.editor);
 
+    state.notifyPanel.upsert({
+      id: 'n2',
+      agentId: 'main',
+      time: 1,
+      title: 'Next update',
+      text: Array.from({ length: 9 }, (_, i) => `- next body ${String(i + 1)}`).join('\n'),
+    });
+    state.ui.requestRender();
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows[head]).toContain('Updates < 2/2 >');
+    expect(rows[head + 1]).toContain('Next update');
+    expect(rows[head + 2]).toContain('next body 1');
+
     state.livePane.pendingApproval = pendingApproval();
     state.notifyPanel.setPrompt({ agentId: 'main' });
     state.ui.requestRender();
     await vt.waitForRender();
     rows = screenRows(vt);
-    expect(rows.filter((row) => row.includes('Running the test suite'))).toEqual([
-      '  ▸ main · Running the test suite',
+    expect(rows.filter((row) => row.includes('Next update'))).toEqual([
+      '  ▸ main · Next update',
     ]);
     expect(rows.join('\n')).not.toContain('body 1');
 

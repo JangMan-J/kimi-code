@@ -3999,6 +3999,7 @@ export class KimiTUI {
   updateQueueDisplay(): void {
     const { queueContainer, queuePane, queuedMessages } = this.state;
     if (queuedMessages.length === 0) {
+      queuePane.scrollBodyToTop();
       queueContainer.clear();
       return;
     }

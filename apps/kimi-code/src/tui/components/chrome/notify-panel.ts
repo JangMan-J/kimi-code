@@ -121,7 +121,10 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     } else {
       ch.entries.push(entry);
       if (ch.key !== this.activeKey) ch.unreadIds.add(entry.id);
-      else if (following) ch.page = ch.entries.length - 1;
+      else if (following) {
+        ch.page = ch.entries.length - 1;
+        this.scrollBodyToTop();
+      }
     }
     this.ended = false;
     this.collapsed = false;
