@@ -14,7 +14,6 @@ The following keys are always available in the input box:
 | `Esc` | Close a popup / cancel completion / interrupt streaming output or context compaction |
 | `Ctrl-C` | Interrupt the current streaming output, or clear the input box |
 | `Ctrl-D` | Exit Kimi Code CLI when the input box is empty |
-| `Ctrl-T` | Open or close the background tasks browser |
 | `Ctrl-N` | Focus the experimental `Updates` panel. While it is focused, `←` / `→` switch agents, `↑` / `↓` page through updates, and `Shift-↑` / `Shift-↓` scroll a long update in fullscreen mode. `Esc` or `Ctrl-N` returns to the input box; typing or any other input-box key also returns there and takes effect |
 
 Pressing `Ctrl-C` **during streaming** cancels immediately — no second confirmation needed.

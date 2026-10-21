@@ -136,8 +136,6 @@ export class CustomEditor extends Editor {
   public onCtrlS?: () => void;
   /** Return `true` to consume Ctrl+B; return `false`/`undefined` to fall through to the editor default (cursor-left). */
   public onCtrlB?: () => boolean;
-  /** Ctrl+T: open the background tasks browser. */
-  public onOpenTasksBrowser?: () => void;
   /** Return true to consume Ctrl+N (the Updates panel took keyboard focus); otherwise use the editor bindings. */
   public onPageNotify?: () => boolean;
   public onUndo?: () => void;
@@ -497,11 +495,6 @@ export class CustomEditor extends Editor {
       // otherwise fall through so readline's backward-char still works at the
       // idle prompt.
       if (this.onCtrlB?.() === true) return;
-    }
-
-    if (matchesKey(normalized, Key.ctrl('t')) && this.onOpenTasksBrowser !== undefined) {
-      this.onOpenTasksBrowser();
-      return;
     }
 
     if (matchesKey(normalized, Key.ctrl('n'))) {

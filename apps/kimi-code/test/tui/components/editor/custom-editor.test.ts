@@ -658,18 +658,6 @@ describe('CustomEditor shortcut telemetry hooks', () => {
     expect(onUndo).toHaveBeenCalledOnce();
   });
 
-  it('opens the tasks browser on Ctrl+T without changing the draft', () => {
-    const editor = makeEditor();
-    const onOpenTasksBrowser = vi.fn();
-    editor.onOpenTasksBrowser = onOpenTasksBrowser;
-    editor.setText('draft');
-
-    editor.handleInput('\u0014');
-
-    expect(onOpenTasksBrowser).toHaveBeenCalledOnce();
-    expect(editor.getText()).toBe('draft');
-  });
-
   it.each(['\u000E', '\u001B[110;5u'] as const)(
     'toggles Updates focus on %j without changing the draft',
     (key) => {

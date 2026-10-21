@@ -303,14 +303,6 @@ export class EditorKeyboardController {
       host.toggleToolOutputExpansion();
     };
 
-    editor.onOpenTasksBrowser = () => {
-      // Disarm a pending double-press exit confirmation so opening the tasks
-      // browser in between two Ctrl-C presses does not accidentally exit.
-      this.clearPendingExit();
-      host.track('shortcut_tasks');
-      host.openTasksBrowser();
-    };
-
     editor.onPageNotify = (): boolean => {
       if (!host.focusNotifyPanel()) return false;
       this.clearPendingExit();
