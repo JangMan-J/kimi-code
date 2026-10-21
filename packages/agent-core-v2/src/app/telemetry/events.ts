@@ -1437,13 +1437,13 @@ export const telemetryEventDefinitions = {
   llm_output_limit_recovery: defineAgentTelemetryEvent<LlmOutputLimitRecoveryEvent>({
     owner: 'kimi-code',
     comment:
-      'A response truncated by the output token limit is continued with a reminder, or left truncated after three consecutive continuations.',
+      'A response cut off by the output token limit while still reasoning is retried with a reminder, or left truncated after three consecutive reminders.',
     properties: {
       turn_id: 'Per-agent turn index (main or subagent); pair with agent_id to locate a turn within a session',
       step_no: 'Step index within the turn',
       action:
-        "How the truncated response was handled: 'nudged' when a continuation reminder is queued, or 'exhausted' when the turn ends truncated after three continuations",
-      attempt: 'Consecutive continuations within the turn, including this one when nudged',
+        "How the truncated response was handled: 'nudged' when a reminder is queued, or 'exhausted' when the turn ends truncated after three reminders",
+      attempt: 'Consecutive reminders within the turn, including this one when nudged',
       model: 'Model alias that produced the truncated response',
     },
   }),

@@ -4528,16 +4528,14 @@ describe('Agent tools', () => {
       );
     });
 
-    it('fails an agent run when the final summary stays truncated after continuations', async () => {
+    it('fails an agent run when the final summary is truncated', async () => {
       await ctx.dispose();
       ctx = createTestAgent();
-      for (let index = 1; index <= 4; index++) {
-        ctx.mockNextProviderResponse({
-          parts: [{ type: 'text', text: 'partial summary' }],
-          finishReason: 'truncated',
-          rawFinishReason: 'length',
-        });
-      }
+      ctx.mockNextProviderResponse({
+        parts: [{ type: 'text', text: 'partial summary' }],
+        finishReason: 'truncated',
+        rawFinishReason: 'length',
+      });
 
       const run = await runAgentTurn(
         currentAgentHandle(ctx, 'agent-child'),

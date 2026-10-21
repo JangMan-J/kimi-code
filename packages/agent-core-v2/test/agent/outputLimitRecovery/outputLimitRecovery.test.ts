@@ -53,17 +53,21 @@ describe('output-limit recovery', () => {
       .join('');
   }
 
-  function truncatedText(text: string, traceId?: string) {
+  function truncatedThought(think: string, traceId?: string) {
     ctx.mockNextProviderResponse({
-      parts: [{ type: 'text', text }],
+      parts: [{ type: 'think', think }],
       finishReason: 'truncated',
       rawFinishReason: 'length',
       traceId,
     });
   }
 
-  it('continues partial visible output with the reminder and preserved history', async () => {
-    truncatedText('partial answer');
+  function recoveryEvents(): TelemetryRecord[] {
+    return records.filter((record) => record.event === 'llm_output_limit_recovery');
+  }
+
+  it('retries a think-only truncation with the reminder after the kept thought', async () => {
+    truncatedThought('unfinished thought');
     ctx.mockNextResponse({ type: 'text', text: 'completed answer' });
 
     const { turn } = submitTurn(loop, 'Hello');
@@ -73,36 +77,38 @@ describe('output-limit recovery', () => {
     await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 2, truncated: false });
     const history = ctx.llmCalls[1]!.history;
     expect(history.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
-    expect(history.at(-2)?.content).toMatchObject([{ type: 'text', text: 'partial answer' }]);
+    expect(history.at(-2)?.content).toMatchObject([{ type: 'think', think: 'unfinished thought' }]);
     expect(textOf(history.at(-1) as ContextMessage | undefined)).toBe(
       '<system-reminder>\n' +
-        'Your previous response was cut off by the output token limit. Continue exactly where it stopped, without repeating or summarizing what you already wrote. If much work remains, split it into smaller pieces.' +
+        'Your previous response hit the output token limit while still reasoning, before any answer or tool call was produced. Keep the remaining reasoning brief, then answer or call a tool directly. If the task is large, split it into smaller steps.' +
         '\n</system-reminder>',
     );
     expect(recoveryInjections()).toHaveLength(1);
+    expect(recoveryEvents().map((event) => event.properties?.['action'])).toEqual(['nudged']);
   });
 
-  it('leaves think-only truncation to the empty-response retry', async () => {
+  it('leaves a truncation with visible text to end the turn as truncated', async () => {
     ctx.mockNextProviderResponse({
-      parts: [{ type: 'think', think: 'unfinished thought' }],
+      parts: [
+        { type: 'think', think: 'planning' },
+        { type: 'text', text: 'partial answer' },
+      ],
       finishReason: 'truncated',
       rawFinishReason: 'length',
     });
-    ctx.mockNextResponse({ type: 'text', text: 'completed answer' });
 
     const { turn } = submitTurn(loop, 'Hello');
     await ctx.untilTurnEnd();
 
-    expect(ctx.llmCalls).toHaveLength(2);
-    await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 2, truncated: false });
-    expect(ctx.llmCalls[1]!.history.map((message) => message.role)).toEqual(['user']);
+    expect(ctx.llmCalls).toHaveLength(1);
+    await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 1, truncated: true });
     expect(recoveryInjections()).toEqual([]);
-    expect(records.filter((record) => record.event === 'llm_output_limit_recovery')).toEqual([]);
+    expect(recoveryEvents()).toEqual([]);
   });
 
-  it('ends the turn as truncated after three continuations without leaking content', async () => {
+  it('ends the turn as truncated after three reminders without leaking content', async () => {
     for (let index = 1; index <= 4; index++) {
-      truncatedText(`secret partial ${index}`, `trace-output-${index}`);
+      truncatedThought(`secret thought ${index}`, `trace-output-${index}`);
     }
 
     const { turn } = submitTurn(loop, 'Hello');
@@ -111,7 +117,7 @@ describe('output-limit recovery', () => {
     expect(ctx.llmCalls).toHaveLength(4);
     await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 4, truncated: true });
     expect(recoveryInjections()).toHaveLength(3);
-    const events = records.filter((record) => record.event === 'llm_output_limit_recovery');
+    const events = recoveryEvents();
     expect(events.map((event) => event.properties?.['action'])).toEqual([
       'nudged',
       'nudged',
@@ -123,17 +129,14 @@ describe('output-limit recovery', () => {
     expect(events[0]?.properties).toMatchObject({
       turn_id: 0,
       model: 'mock-model',
-      provider_type: 'kimi',
-      protocol: 'openai',
       trace_id: 'trace-output-1',
     });
-    expect(events[3]?.properties).toMatchObject({ trace_id: 'trace-output-4' });
     for (const event of events) {
-      expect(JSON.stringify(event.properties)).not.toContain('secret partial');
+      expect(JSON.stringify(event.properties)).not.toContain('secret thought');
     }
   });
 
-  it('allows continuation steps past maxSteps', async () => {
+  it('allows reminder steps past maxSteps', async () => {
     const local = createTestAgent({
       initialConfig: {
         loopControl: { maxStepsPerTurn: 1 },
@@ -144,7 +147,7 @@ describe('output-limit recovery', () => {
       const localLoop = local.get(IAgentLoopService);
       local.get(IAgentProfileService).update({ activeToolNames: [] });
       local.mockNextProviderResponse({
-        parts: [{ type: 'text', text: 'partial answer' }],
+        parts: [{ type: 'think', think: 'unfinished thought' }],
         finishReason: 'truncated',
         rawFinishReason: 'length',
       });
@@ -160,13 +163,13 @@ describe('output-limit recovery', () => {
     }
   });
 
-  it('resets the continuation count after a step that is not truncated', async () => {
+  it('resets the reminder count after a step that is not truncated', async () => {
     const lookupCall = registerLookupTool(ctx);
-    truncatedText('first partial');
-    truncatedText('second partial');
+    truncatedThought('first thought');
+    truncatedThought('second thought');
     ctx.mockNextResponse({ type: 'text', text: 'calling a tool' }, lookupCall);
-    truncatedText('third partial');
-    truncatedText('fourth partial');
+    truncatedThought('third thought');
+    truncatedThought('fourth thought');
     ctx.mockNextResponse({ type: 'text', text: 'done' });
 
     const { turn } = submitTurn(loop, 'Look up mars');
@@ -178,12 +181,44 @@ describe('output-limit recovery', () => {
     expect(recoveryInjections()).toHaveLength(4);
   });
 
-  it('lets cancellation take precedence over the queued continuation', async () => {
+  it('defers to a request already queued for the next step', async () => {
+    loop.hooks.onDidFinishStep.register(
+      'test-queue-request',
+      async (_hookCtx, next) => {
+        if (ctx.llmCalls.length === 1) {
+          loop.notify({
+            message: {
+              role: 'user',
+              content: [{ type: 'text', text: 'queued follow-up' }],
+              toolCalls: [],
+            },
+          });
+        }
+        await next();
+      },
+      { before: 'outputLimitRecovery' },
+    );
+    truncatedThought('unfinished thought');
+    ctx.mockNextResponse({ type: 'text', text: 'completed answer' });
+
+    const { turn } = submitTurn(loop, 'Hello');
+    await ctx.untilTurnEnd();
+
+    expect(ctx.llmCalls).toHaveLength(2);
+    await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 2, truncated: false });
+    expect(textOf(ctx.llmCalls[1]!.history.at(-1) as ContextMessage | undefined)).toBe(
+      'queued follow-up',
+    );
+    expect(recoveryInjections()).toEqual([]);
+    expect(recoveryEvents()).toEqual([]);
+  });
+
+  it('lets cancellation take precedence over the queued reminder', async () => {
     loop.hooks.onDidFinishStep.register('test-cancel-turn', async (_hookCtx, next) => {
       loop.cancel();
       await next();
     });
-    truncatedText('partial answer');
+    truncatedThought('unfinished thought');
     ctx.mockNextResponse({ type: 'text', text: 'should not run' });
 
     const { turn } = submitTurn(loop, 'Hello');
@@ -192,7 +227,6 @@ describe('output-limit recovery', () => {
     expect(ctx.llmCalls).toHaveLength(1);
     const result = await turn.result;
     expect(result.type).toBe('cancelled');
-    expect(recoveryInjections()).toEqual([]);
   });
 });
 

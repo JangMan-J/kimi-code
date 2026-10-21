@@ -1,6 +1,7 @@
 import { Disposable } from '#/_base/di/lifecycle';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
+import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
 import { IAgentLLMRequesterService } from '#/agent/llmRequester/llmRequester';
 import { IAgentLoopService, type AfterStepContext } from '#/agent/loop/loop';
 import type { LlmOutputLimitRecoveryEvent } from '#/app/telemetry/events';
@@ -14,9 +15,9 @@ import {
 
 const MAX_OUTPUT_LIMIT_RECOVERIES = 3;
 const OUTPUT_LIMIT_RECOVERY_REMINDER = [
-  'Your previous response was cut off by the output token limit.',
-  'Continue exactly where it stopped, without repeating or summarizing what you already wrote.',
-  'If much work remains, split it into smaller pieces.',
+  'Your previous response hit the output token limit while still reasoning, before any answer or tool call was produced.',
+  'Keep the remaining reasoning brief, then answer or call a tool directly.',
+  'If the task is large, split it into smaller steps.',
 ].join(' ');
 
 export class AgentOutputLimitRecoveryService
@@ -30,6 +31,7 @@ export class AgentOutputLimitRecoveryService
 
   constructor(
     @IAgentLoopService private readonly loop: IAgentLoopService,
+    @IAgentContextMemoryService private readonly context: IAgentContextMemoryService,
     @IAgentLLMRequesterService private readonly llmRequester: IAgentLLMRequesterService,
     @ITelemetryService private readonly telemetry: ITelemetryService,
   ) {
@@ -43,14 +45,15 @@ export class AgentOutputLimitRecoveryService
   }
 
   private recover(ctx: AfterStepContext): void {
-    if (ctx.finishReason !== 'truncated') {
-      this.consecutiveTruncations = 0;
-      return;
-    }
     if (this.turnId !== ctx.turnId) {
       this.turnId = ctx.turnId;
       this.consecutiveTruncations = 0;
     }
+    if (ctx.finishReason !== 'truncated' || !this.endedWhileReasoning()) {
+      this.consecutiveTruncations = 0;
+      return;
+    }
+    if (this.loop.snapshot().hasPendingRequests) return;
     if (this.consecutiveTruncations >= MAX_OUTPUT_LIMIT_RECOVERIES) {
       this.track(ctx, 'exhausted');
       return;
@@ -70,6 +73,16 @@ export class AgentOutputLimitRecoveryService
       bypassMaxSteps: true,
     });
     this.track(ctx, 'nudged');
+  }
+
+  private endedWhileReasoning(): boolean {
+    const message = this.context.get().findLast((entry) => entry.role === 'assistant');
+    return (
+      message !== undefined &&
+      message.toolCalls.length === 0 &&
+      message.content.some((part) => part.type === 'think') &&
+      !message.content.some((part) => part.type === 'text' && part.text.trim().length > 0)
+    );
   }
 
   private track(ctx: AfterStepContext, action: LlmOutputLimitRecoveryEvent['action']): void {

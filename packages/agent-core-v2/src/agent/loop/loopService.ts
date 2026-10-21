@@ -213,6 +213,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
       toolExecutor: this.toolExecutor,
       toolInfos: () => this.toolRegistry.list(),
       maxAttemptsPerStep: this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.maxAttemptsPerStep,
+      allowTruncatedThinkOnly: true,
       initialTurnId: this.states.get(turnKey).nextTurnId,
       journal: wireStoreJournal(this.wire, ENGINE_JOURNAL_DOMAIN),
       trace: () => this.activeRequestTrace,
