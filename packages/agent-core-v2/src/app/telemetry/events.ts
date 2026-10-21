@@ -621,7 +621,6 @@ export interface LlmOutputLimitRecoveryEvent {
   step_no: number;
   action: 'nudged' | 'exhausted';
   attempt: number;
-  model?: string;
 }
 
 export interface SessionIndexDegradedEvent {
@@ -1437,14 +1436,13 @@ export const telemetryEventDefinitions = {
   llm_output_limit_recovery: defineAgentTelemetryEvent<LlmOutputLimitRecoveryEvent>({
     owner: 'kimi-code',
     comment:
-      'A response cut off by the output token limit while still reasoning is retried with a reminder, or left truncated after three consecutive reminders.',
+      'A response cut off by the output token limit while still reasoning is retried with a reminder, or left truncated once the consecutive reminder limit is reached.',
     properties: {
       turn_id: 'Per-agent turn index (main or subagent); pair with agent_id to locate a turn within a session',
       step_no: 'Step index within the turn',
       action:
-        "How the truncated response was handled: 'nudged' when a reminder is queued, or 'exhausted' when the turn ends truncated after three reminders",
+        "How the truncated response was handled: 'nudged' when a reminder is queued, or 'exhausted' when the turn ends truncated at the reminder limit",
       attempt: 'Consecutive reminders within the turn, including this one when nudged',
-      model: 'Model alias that produced the truncated response',
     },
   }),
   session_index_degraded: defineTelemetryEvent<SessionIndexDegradedEvent>({

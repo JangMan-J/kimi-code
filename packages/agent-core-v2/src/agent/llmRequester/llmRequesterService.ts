@@ -738,7 +738,6 @@ export class AgentLLMRequesterService implements IAgentLLMRequesterService {
       params: {
         ...baseParams,
         ...budgetParams,
-        allowTruncatedThinkOnly: overrides.source?.type === 'turn' ? true : undefined,
         ...(usedContextTokens === undefined ? {} : { usedContextTokens }),
         ...(optedOut ? { maxCompletionTokens: maxCompletionTokensCap } : {}),
       },

@@ -3,7 +3,7 @@ import type { IDisposable } from '#/_base/di/lifecycle';
 import { Error2, isError2, type Error2Options } from '#/_base/errors/errors';
 import type { ContextMessage } from '#/agent/contextMemory/types';
 import type { FinishReason } from '#human/llm/finish-reason';
-import type { ContentPart, TextPart } from '#human/llm/message';
+import type { AssistantMessage, ContentPart, TextPart } from '#human/llm/message';
 import type { TokenUsage } from '#human/llm/usage';
 import type { Hooks } from '#/hooks';
 import type { UserEntry } from '#human/agent/turn';
@@ -73,6 +73,7 @@ export interface BeforeStepContext {
 }
 
 export interface AfterStepContext extends BeforeStepContext {
+  readonly message?: AssistantMessage;
   readonly usage: TokenUsage;
   readonly finishReason: FinishReason;
   stopTurn: boolean;

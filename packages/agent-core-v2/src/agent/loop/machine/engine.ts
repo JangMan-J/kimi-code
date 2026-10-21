@@ -121,7 +121,6 @@ export interface CreateMachineEngineOptions {
   readonly toolExecutor: IAgentToolExecutorService;
   readonly toolInfos: () => readonly ToolInfo[];
   readonly maxAttemptsPerStep?: number;
-  readonly allowTruncatedThinkOnly?: boolean;
   readonly recovery?: LlmRecovery;
   readonly abortTimeoutMs?: number;
   readonly initialTurnId?: number;
@@ -333,7 +332,6 @@ export function machineEngineAttachBundle(options: CreateMachineEngineOptions): 
     store,
     turnLogic: createTurnMachine(requester.requester, {
       retry: { maxAttemptsPerStep: options.maxAttemptsPerStep },
-      allowTruncatedThinkOnly: options.allowTruncatedThinkOnly,
       recovery: {
         propose: (ctx) => credentialsRecovery.propose(ctx) ?? options.recovery?.propose(ctx),
       },

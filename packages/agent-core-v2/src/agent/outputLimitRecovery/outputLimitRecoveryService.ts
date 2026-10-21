@@ -1,12 +1,11 @@
 import { Disposable } from '#/_base/di/lifecycle';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
-import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
-import { IAgentLLMRequesterService } from '#/agent/llmRequester/llmRequester';
 import { IAgentLoopService, type AfterStepContext } from '#/agent/loop/loop';
 import type { LlmOutputLimitRecoveryEvent } from '#/app/telemetry/events';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
 import { wrapSystemReminder } from '#/features/reminder/systemReminder';
+import { isThinkOnlyMessage } from '#human/llm/empty-response';
 
 import {
   IAgentOutputLimitRecoveryService,
@@ -26,13 +25,10 @@ export class AgentOutputLimitRecoveryService
 {
   declare readonly _serviceBrand: undefined;
 
-  private turnId: number | undefined;
   private consecutiveTruncations = 0;
 
   constructor(
     @IAgentLoopService private readonly loop: IAgentLoopService,
-    @IAgentContextMemoryService private readonly context: IAgentContextMemoryService,
-    @IAgentLLMRequesterService private readonly llmRequester: IAgentLLMRequesterService,
     @ITelemetryService private readonly telemetry: ITelemetryService,
   ) {
     super();
@@ -45,15 +41,17 @@ export class AgentOutputLimitRecoveryService
   }
 
   private recover(ctx: AfterStepContext): void {
-    if (this.turnId !== ctx.turnId) {
-      this.turnId = ctx.turnId;
-      this.consecutiveTruncations = 0;
-    }
-    if (ctx.finishReason !== 'truncated' || !this.endedWhileReasoning()) {
+    if (ctx.firstStepOfTurn) this.consecutiveTruncations = 0;
+    if (
+      ctx.finishReason !== 'truncated' ||
+      ctx.message === undefined ||
+      !isThinkOnlyMessage(ctx.message)
+    ) {
       this.consecutiveTruncations = 0;
       return;
     }
-    if (this.loop.snapshot().hasPendingRequests) return;
+    const snapshot = this.loop.snapshot();
+    if (snapshot.hasPendingRequests) return;
     if (this.consecutiveTruncations >= MAX_OUTPUT_LIMIT_RECOVERIES) {
       this.track(ctx, 'exhausted');
       return;
@@ -67,22 +65,12 @@ export class AgentOutputLimitRecoveryService
         origin: {
           kind: 'injection',
           variant: OUTPUT_LIMIT_RECOVERY_VARIANT,
-          ownerPromptId: this.loop.snapshot().activePromptId,
+          ownerPromptId: snapshot.activePromptId,
         },
       },
       bypassMaxSteps: true,
     });
     this.track(ctx, 'nudged');
-  }
-
-  private endedWhileReasoning(): boolean {
-    const message = this.context.get().findLast((entry) => entry.role === 'assistant');
-    return (
-      message !== undefined &&
-      message.toolCalls.length === 0 &&
-      message.content.some((part) => part.type === 'think') &&
-      !message.content.some((part) => part.type === 'text' && part.text.trim().length > 0)
-    );
   }
 
   private track(ctx: AfterStepContext, action: LlmOutputLimitRecoveryEvent['action']): void {
@@ -91,7 +79,6 @@ export class AgentOutputLimitRecoveryService
       step_no: ctx.step,
       action,
       attempt: this.consecutiveTruncations,
-      model: this.llmRequester.lastTurnRequest()?.modelAlias,
     };
     this.telemetry.track2('llm_output_limit_recovery', properties);
   }

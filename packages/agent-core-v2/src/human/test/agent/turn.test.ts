@@ -422,7 +422,7 @@ describe('turn machine llm retry', () => {
   });
 });
 
-describe('turn machine output-limit recovery', () => {
+describe('turn machine think-only truncation', () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -431,10 +431,9 @@ describe('turn machine output-limit recovery', () => {
     vi.useRealTimers();
   });
 
-  it('completes a truncated think-only step when recovery is enabled', async () => {
+  it('completes a truncated think-only step without retrying', async () => {
     const { requester, calls } = createStubRequester(['think_only_truncated']);
     const { actor, retrying, failed } = startTurnActor(requester, {
-      allowTruncatedThinkOnly: true,
       retry: { maxAttemptsPerStep: 3 },
     });
 
