@@ -39,6 +39,7 @@ export interface LoopSnapshot {
   readonly notificationCount: number;
   readonly paused: boolean;
   readonly hasPendingRequests: boolean;
+  readonly hasLiveNudges: boolean;
   readonly turn?: AgentActivityTurnSnapshot;
   readonly activeTraceId?: string;
 }
@@ -77,6 +78,7 @@ export interface AfterStepContext extends BeforeStepContext {
   readonly usage: TokenUsage;
   readonly finishReason: FinishReason;
   stopTurn: boolean;
+  failTurn?: unknown;
 }
 
 export interface LoopErrorContext {

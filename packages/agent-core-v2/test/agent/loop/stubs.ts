@@ -193,6 +193,7 @@ export function stubLoopWithHooks(options: StubLoopOptions = {}): StubLoop {
         notificationCount: 0,
         paused: false,
         hasPendingRequests: hasPending(),
+        hasLiveNudges: pending.length > 0,
         turn: undefined,
         activeTraceId: undefined,
       };

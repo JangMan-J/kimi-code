@@ -240,6 +240,7 @@ export class AgentExternalHooksService extends Service implements IAgentExternal
         if (
           ctx.finishReason === 'tool_calls' ||
           ctx.finishReason === 'filtered' ||
+          ctx.failTurn !== undefined ||
           loop.snapshot().hasPendingRequests
         ) {
           return;

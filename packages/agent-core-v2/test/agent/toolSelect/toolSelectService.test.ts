@@ -237,6 +237,7 @@ class FakeLoopService implements IAgentLoopService {
       notificationCount: 0,
       paused: false,
       hasPendingRequests: false,
+      hasLiveNudges: false,
       turn: undefined,
       activeTraceId: undefined,
     };

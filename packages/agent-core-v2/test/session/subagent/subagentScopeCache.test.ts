@@ -469,6 +469,7 @@ describe('SessionSubagentScopeCacheService', () => {
         notificationCount: 0,
         paused: false,
         hasPendingRequests: false,
+        hasLiveNudges: false,
       }),
       cancel: () => true,
       settled: async () => {},
@@ -986,6 +987,7 @@ describe('SessionSubagentScopeCacheService eviction guards', () => {
       notificationCount: 0,
       paused: false,
       hasPendingRequests: false,
+      hasLiveNudges: false,
     }));
   }
 
@@ -1000,6 +1002,7 @@ describe('SessionSubagentScopeCacheService eviction guards', () => {
         notificationCount: 0,
         paused: false,
         hasPendingRequests: true,
+        hasLiveNudges: false,
       })),
     );
     handles.set('agent-2', idleHandle('agent-2'));
@@ -1030,6 +1033,7 @@ describe('SessionSubagentScopeCacheService eviction guards', () => {
       notificationCount: 0,
       paused: false,
       hasPendingRequests: true,
+      hasLiveNudges: false,
     } as const;
     const idleSnapshot = {
       state: 'idle',
@@ -1037,6 +1041,7 @@ describe('SessionSubagentScopeCacheService eviction guards', () => {
       notificationCount: 0,
       paused: false,
       hasPendingRequests: false,
+      hasLiveNudges: false,
     } as const;
     let agent1Busy = true;
     handles.set(
@@ -1232,6 +1237,7 @@ describe('SessionSubagentScopeCacheService eviction guards', () => {
       notificationCount: 0,
       paused: false,
       hasPendingRequests: false,
+      hasLiveNudges: false,
     });
     handles.set('agent-1', loopHandle('agent-1', idle, flush));
     handles.set('agent-2', idleHandle('agent-2'));

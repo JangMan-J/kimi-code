@@ -377,6 +377,14 @@ describe('IExternalHooksRunnerService integration', () => {
       expect(stopInputs).toEqual([]);
       expect(context.messages).toEqual([]);
 
+      const failing: AfterStepContext = {
+        ...makeAfterStep(signal),
+        failTurn: new Error('turn failed'),
+      };
+      await loop.hooks.onDidFinishStep.run(failing);
+      expect(stopInputs).toEqual([]);
+      expect(context.messages).toEqual([]);
+
       const first = makeAfterStep(signal);
       await loop.hooks.onDidFinishStep.run(first);
       expect(loop.snapshot().hasPendingRequests).toBe(true);

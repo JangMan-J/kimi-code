@@ -4,6 +4,7 @@ import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
 import { IAgentLoopService, type AfterStepContext } from '#/agent/loop/loop';
 import type { LlmOutputLimitRecoveryEvent } from '#/app/telemetry/events';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
+import { Error2, ErrorCodes } from '#/errors';
 import { wrapSystemReminder } from '#/features/reminder/systemReminder';
 import { isThinkOnlyMessage } from '#human/llm/empty-response';
 
@@ -14,10 +15,12 @@ import {
 
 const MAX_OUTPUT_LIMIT_RECOVERIES = 3;
 const OUTPUT_LIMIT_RECOVERY_REMINDER = [
-  'Your previous response hit the output token limit while still reasoning, before any answer or tool call was produced.',
-  'Keep the remaining reasoning brief, then answer or call a tool directly.',
-  'If the task is large, split it into smaller steps.',
+  'Output token limit hit while you were still reasoning, before this response produced any text or tool call.',
+  'That reasoning was not kept and is not part of this conversation, so there is nothing to resume.',
+  'Continue from the conversation above: reason much more briefly and produce your answer or next tool call well within the output limit.',
 ].join(' ');
+const OUTPUT_LIMIT_EXHAUSTED_MESSAGE =
+  'The model hit the output token limit while still reasoning on every attempt and produced no answer. Lower the thinking effort or raise the output token limit.';
 
 export class AgentOutputLimitRecoveryService
   extends Disposable
@@ -25,7 +28,7 @@ export class AgentOutputLimitRecoveryService
 {
   declare readonly _serviceBrand: undefined;
 
-  private consecutiveTruncations = 0;
+  private consecutiveRecoveries = 0;
 
   constructor(
     @IAgentLoopService private readonly loop: IAgentLoopService,
@@ -41,22 +44,22 @@ export class AgentOutputLimitRecoveryService
   }
 
   private recover(ctx: AfterStepContext): void {
-    if (ctx.firstStepOfTurn) this.consecutiveTruncations = 0;
+    if (ctx.firstStepOfTurn) this.consecutiveRecoveries = 0;
     if (
       ctx.finishReason !== 'truncated' ||
       ctx.message === undefined ||
       !isThinkOnlyMessage(ctx.message)
     ) {
-      this.consecutiveTruncations = 0;
+      this.consecutiveRecoveries = 0;
       return;
     }
     const snapshot = this.loop.snapshot();
-    if (snapshot.hasPendingRequests) return;
-    if (this.consecutiveTruncations >= MAX_OUTPUT_LIMIT_RECOVERIES) {
+    if (snapshot.hasLiveNudges) return;
+    if (this.consecutiveRecoveries >= MAX_OUTPUT_LIMIT_RECOVERIES) {
+      ctx.failTurn = new Error2(ErrorCodes.AGENT_MAX_TOKENS_EXCEEDED, OUTPUT_LIMIT_EXHAUSTED_MESSAGE);
       this.track(ctx, 'exhausted');
       return;
     }
-    this.consecutiveTruncations += 1;
     this.loop.notify({
       message: {
         role: 'user',
@@ -68,9 +71,11 @@ export class AgentOutputLimitRecoveryService
           ownerPromptId: snapshot.activePromptId,
         },
       },
-      bypassMaxSteps: true,
+      onConsume: () => {
+        this.consecutiveRecoveries += 1;
+        this.track(ctx, 'nudged');
+      },
     });
-    this.track(ctx, 'nudged');
   }
 
   private track(ctx: AfterStepContext, action: LlmOutputLimitRecoveryEvent['action']): void {
@@ -78,7 +83,7 @@ export class AgentOutputLimitRecoveryService
       turn_id: ctx.turnId,
       step_no: ctx.step,
       action,
-      attempt: this.consecutiveTruncations,
+      attempt: this.consecutiveRecoveries,
     };
     this.telemetry.track2('llm_output_limit_recovery', properties);
   }
