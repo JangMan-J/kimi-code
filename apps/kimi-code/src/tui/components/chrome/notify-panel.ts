@@ -95,12 +95,6 @@ interface HitTarget {
 
 const BODY_INDENT = '  ';
 
-function sameAction(left: HeadAction | undefined, right: HeadAction | undefined): boolean {
-  if (left === undefined || right === undefined) return left === right;
-  if (left.kind === 'channel' && right.kind === 'channel') return left.key === right.key;
-  return left.kind === right.kind;
-}
-
 export class NotifyPanelComponent extends DockSection {
   private readonly channels: NotifyChannel[] = [];
   /** Key of the channel on display; channels themselves are append-only. */
@@ -112,7 +106,6 @@ export class NotifyPanelComponent extends DockSection {
   /** Set while an approval or question waits: the panel shrinks to a summary of this agent. */
   private prompt: { readonly agentId: string | undefined } | undefined;
   private hitTargets: readonly HitTarget[] = [];
-  private hovered: HeadAction | undefined;
 
   /**
    * Add or update an entry in a channel. A repeated `id` updates the entry in
@@ -161,7 +154,6 @@ export class NotifyPanelComponent extends DockSection {
     this.focused = false;
     this.ended = false;
     this.collapsed = false;
-    this.hovered = undefined;
   }
 
   isEmpty(): boolean {
@@ -280,11 +272,6 @@ export class NotifyPanelComponent extends DockSection {
   ): TuiMouseEventResult | undefined {
     if (part !== 'head' || event.y !== 0) return undefined;
     const target = this.hitTargets.find((hit) => event.x >= hit.from && event.x < hit.to);
-    if (event.type === 'move') {
-      if (sameAction(this.hovered, target?.action)) return target ? { handled: true } : undefined;
-      this.hovered = target?.action;
-      return { handled: true, render: true };
-    }
     if (target === undefined || event.button !== 'left') return undefined;
     if (event.type === 'press' || event.type === 'release') return { handled: true };
     if (event.type !== 'click') return undefined;
@@ -349,9 +336,7 @@ export class NotifyPanelComponent extends DockSection {
     let line = '';
     for (const segment of segments) {
       const segmentWidth = visibleWidth(segment.text);
-      const hovered = segment.action !== undefined && sameAction(segment.action, this.hovered);
-      const styled = segment.style(segment.text);
-      line += hovered ? currentTheme.underline(styled) : styled;
+      line += segment.style(segment.text);
       if (segment.action !== undefined) {
         targets.push({ from: x, to: x + segmentWidth, action: segment.action });
       }
@@ -381,9 +366,9 @@ export class NotifyPanelComponent extends DockSection {
       if (ch.entries.length > 1) {
         segments.push(
           { text: ' ', style: strong },
-          { text: '←', style: strong, action: { kind: 'prev' } },
+          { text: this.focused ? '←' : '<', style: strong, action: { kind: 'prev' } },
           { text: ` ${String(ch.page + 1)}/${String(ch.entries.length)} `, style: strong },
-          { text: '→', style: strong, action: { kind: 'next' } },
+          { text: this.focused ? '→' : '>', style: strong, action: { kind: 'next' } },
         );
       }
       if (this.ended) segments.push({ text: ' · turn ended', style: strong });

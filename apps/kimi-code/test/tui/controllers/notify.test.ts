@@ -541,7 +541,7 @@ describe('NotifyController', () => {
         h.ui.renderNow();
         const editorCursor = h.editor.getCursor();
         const root = h.ui instanceof TuiAltScreen ? h.ui.getLayoutRoot() : [...h.ui.children];
-        expect(h.rendered()).toContain('Updates ← 3/3 →');
+        expect(h.rendered()).toContain('Updates < 3/3 >');
         h.input('\u000E');
         expect(h.rendered()).toContain('esc close');
         h.input('\u001B[D');

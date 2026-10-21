@@ -1229,7 +1229,7 @@ describe('KimiTUI message flow', () => {
     const cursor = driver.state.editor.getCursor();
     const setFocus = vi.spyOn(driver.state.ui, 'setFocus');
     const head = (): string => driver.state.notifyPanel.render(100)[0]!;
-    expect(head()).toContain('Updates ← 3/3 →');
+    expect(head()).toContain('Updates < 3/3 >');
     driver.state.editor.handleInput('\u000E');
     expect(head()).toContain('esc close');
     driver.state.editor.handleInput('\u001B[D');

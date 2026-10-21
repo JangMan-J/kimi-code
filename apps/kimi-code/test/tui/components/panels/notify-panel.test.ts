@@ -1,6 +1,5 @@
 import type { TuiMouseEvent } from '@moonshot-ai/pi-tui';
-import chalk from 'chalk';
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import {
   NotifyPanelComponent,
@@ -85,7 +84,7 @@ describe('NotifyPanelComponent', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main phase one'));
     panel.upsert(entry('tc-2', 'main phase two'));
-    expect(titleOf(panel)).toContain('Updates ← 2/2 →');
+    expect(titleOf(panel)).toContain('Updates < 2/2 > · ctrl+n to browse');
 
     panel.upsert(entry('a0:c1', 'explore finding', 'a0', 'explore'));
     const lines = render(panel);
@@ -252,7 +251,7 @@ describe('NotifyPanelComponent', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'first'));
     panel.upsert(entry('tc-2', 'second'));
-    expect(titleOf(panel)).toContain('Updates ← 2/2 →');
+    expect(titleOf(panel)).toContain('Updates < 2/2 >');
 
     expect(panel.remove('tc-2')).toBe(true);
     expect(titleOf(panel)).toContain('Updates · ctrl+n to browse');
@@ -395,23 +394,4 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('phase one');
   });
 
-  it('underlines the head segment under the pointer', () => {
-    const previousLevel = chalk.level;
-    chalk.level = 3;
-    onTestFinished(() => {
-      chalk.level = previousLevel;
-    });
-    const panel = new NotifyPanelComponent();
-    panel.upsert(entry('tc-1', 'main one'));
-    panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
-    const underline = '\u001B[4m';
-    expect(panel.render(80)[0]).not.toContain(underline);
-
-    const x = titleOf(panel).indexOf('main');
-    expect(panel.handleMouse(mouse('move', x))).toMatchObject({ handled: true, render: true });
-    expect(panel.render(80)[0]).toContain(underline);
-    expect(strip(panel.render(80)[0]!)).toBe(titleOf(panel));
-    expect(panel.handleMouse(mouse('move', 0))).toMatchObject({ handled: true, render: true });
-    expect(panel.render(80)[0]).not.toContain(underline);
-  });
 });
