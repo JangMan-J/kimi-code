@@ -550,9 +550,11 @@ describe('NotifyController', () => {
         expect(h.rendered()).toContain('Updates ← 1/3 →');
         h.input('\u001B[C');
         expect(h.rendered()).toContain('Updates ← 2/3 →');
-        h.input('\u001B[A');
-        h.input('\u001B[B');
-        expect(h.rendered()).toContain('Updates ← 2/3 →');
+        if (fullscreen) {
+          h.input('\u001B[A');
+          h.input('\u001B[B');
+          expect(h.rendered()).toContain('Updates ← 2/3 →');
+        }
         h.emit('turn.ended', { reason: 'completed' });
         expect(h.rendered()).toContain('Updates ← 2/3 →');
         expect(h.rendered()).toContain('update two');
@@ -574,6 +576,23 @@ describe('NotifyController', () => {
       }
     },
   );
+
+  it('leaves ↑/↓ to the editor while an inline panel is focused', () => {
+    const h = makeHarness(true, false);
+    h.send('first', 'update one');
+    h.editor.setText('line one\nline two');
+    h.ui.start();
+    try {
+      h.input('\u000E');
+      expect(h.notifyPanel.isFocused()).toBe(true);
+      const before = h.editor.getCursor();
+      h.input('\u001B[A');
+      expect(h.editor.getCursor().line).toBe(before.line - 1);
+      expect(h.notifyPanel.isFocused()).toBe(true);
+    } finally {
+      h.ui.stop();
+    }
+  });
 
   it('ignores delayed turn boundaries without erasing the new turn messages', () => {
     const h = makeHarness();

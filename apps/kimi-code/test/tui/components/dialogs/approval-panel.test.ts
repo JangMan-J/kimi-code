@@ -573,6 +573,19 @@ describe('ApprovalPanelComponent', () => {
       expect(third.slice(5, 7)).toEqual(['', '']);
     });
 
+    it('cuts a long description to three rows so the key hint stays below it', () => {
+      const pending = goalPending();
+      pending.data.choices[0] = {
+        ...pending.data.choices[0]!,
+        description: Array.from({ length: 30 }, (_, i) => `word${String(i)}`).join(' '),
+      };
+      const { dialog } = dockedDialog(pending);
+      const lines = foot(dialog);
+      expect(lines.slice(4, 9).map((line) => line.length > 0)).toEqual([false, true, true, true, false]);
+      expect(lines[7]).toMatch(/…$/);
+      expect(lines[9]).toBe('   ↑/↓ select · 1/2/3 choose · ↵ confirm');
+    });
+
     it('selects a choice on hover and submits it on click, ignoring the click that focused the window', () => {
       let focusing = true;
       const { dialog, responses } = dockedDialog(goalPending(), () => focusing);

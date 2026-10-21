@@ -92,7 +92,7 @@ export class NotifyController {
     return true;
   }
 
-  /** Keys for a focused panel; ↑/↓ scroll a docked body and are swallowed inline. */
+  /** Keys for a focused panel; ↑/↓ scroll a docked body and stay with the editor inline. */
   handlePanelKey(key: NotifyPanelKey): boolean {
     if (!this.enabled || !this.state.notifyPanel.isFocused()) return false;
     const panel = this.state.notifyPanel;
@@ -113,10 +113,9 @@ export class NotifyController {
         panel.nextChannel();
         break;
       case 'up':
-        panel.scrollBody(-1);
-        break;
       case 'down':
-        panel.scrollBody(1);
+        if (panel.layout === undefined) return false;
+        panel.scrollBody(key === 'up' ? -1 : 1);
         break;
     }
     this.state.ui.requestRender();

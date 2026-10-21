@@ -43,6 +43,9 @@ function truncateOneLine(text: string, max: number): string {
 }
 
 const DIFF_SUMMARY_MAX_LINES = 10;
+// Rows of the docked description area; a longer description is cut so the
+// key hint below it stays on screen.
+const DESCRIPTION_AREA_MAX_ROWS = 3;
 const CONTENT_SUMMARY_MAX_LINES = 10;
 
 interface BlockStyles {
@@ -446,13 +449,18 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
 
     if (docked) {
       const areaWidth = Math.max(1, width - 2);
-      const areaHeight = Math.max(0, ...data.choices.map((c) => descriptionRows(c, areaWidth).length));
+      const areaHeight = Math.min(
+        DESCRIPTION_AREA_MAX_ROWS,
+        Math.max(0, ...data.choices.map((choice) => descriptionRows(choice, areaWidth).length)),
+      );
       if (areaHeight > 0) {
         const selected = data.choices[this.selectedIndex];
-        const shown = selected === undefined ? [] : descriptionRows(selected, areaWidth);
+        const rows = selected === undefined ? [] : descriptionRows(selected, areaWidth);
         lines.push('');
         for (let row = 0; row < areaHeight; row++) {
-          lines.push(indent(currentTheme.fg('text', shown[row] ?? '')));
+          const cut = row === areaHeight - 1 && rows.length > areaHeight;
+          const text = cut ? `${truncateToWidth(rows[row]!, areaWidth - 1, '')}…` : (rows[row] ?? '');
+          lines.push(indent(currentTheme.fg('text', text)));
         }
       }
     }

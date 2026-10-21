@@ -95,10 +95,10 @@ interface HitTarget {
 
 const BODY_INDENT = '  ';
 
-function sameAction(a: HeadAction | undefined, b: HeadAction | undefined): boolean {
-  if (a === undefined || b === undefined) return a === b;
-  if (a.kind === 'channel' && b.kind === 'channel') return a.key === b.key;
-  return a.kind === b.kind;
+function sameAction(left: HeadAction | undefined, right: HeadAction | undefined): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.kind === 'channel' && right.kind === 'channel') return left.key === right.key;
+  return left.kind === right.kind;
 }
 
 export class NotifyPanelComponent extends DockSection {
@@ -195,10 +195,11 @@ export class NotifyPanelComponent extends DockSection {
   /**
    * An approval or question from `agentId` is waiting (`undefined` agent when
    * the client did not say who asks), or nothing is (`undefined` prompt).
-   * While one waits the panel is a read-only summary line and cannot take
-   * focus.
+   * While one waits a docked panel is a read-only summary line and cannot
+   * take focus; an inline panel stays as it is.
    */
   setPrompt(prompt: { readonly agentId: string | undefined } | undefined): void {
+    if (this.layout === undefined) return;
     this.prompt = prompt;
     if (prompt !== undefined) this.blur();
   }

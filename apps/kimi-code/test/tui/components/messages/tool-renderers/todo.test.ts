@@ -11,7 +11,7 @@ function strip(text: string): string {
   return text.replaceAll(/\u001B\[[0-9;]*m/g, '');
 }
 
-const T = (title: string, status: TodoItem['status']): TodoItem => ({ title, status });
+const todo = (title: string, status: TodoItem['status']): TodoItem => ({ title, status });
 
 function todoCard(todos: readonly TodoItem[] | undefined, isError = false): ToolCallComponent {
   return new ToolCallComponent(
@@ -29,18 +29,18 @@ function cardLines(card: ToolCallComponent): string[] {
 
 describe('TodoList card', () => {
   it('shows every item of a short list and has nothing to expand', () => {
-    const card = todoCard([T('Read the code', 'done'), T('Fix it', 'in_progress'), T('Test', 'pending')]);
+    const card = todoCard([todo('Read the code', 'done'), todo('Fix it', 'in_progress'), todo('Test', 'pending')]);
     expect(cardLines(card).slice(1)).toEqual(['  ✓ Read the code', '  ● Fix it', '  ○ Test']);
     expect(card.hasHiddenContent()).toBe(false);
   });
 
   it('shows two items plus a summary of the rest when collapsed, and every item when expanded', () => {
     const card = todoCard([
-      T('d1', 'done'),
-      T('ip', 'in_progress'),
-      T('p1', 'pending'),
-      T('p2', 'pending'),
-      T('p3', 'pending'),
+      todo('d1', 'done'),
+      todo('ip', 'in_progress'),
+      todo('p1', 'pending'),
+      todo('p2', 'pending'),
+      todo('p3', 'pending'),
     ]);
     expect(cardLines(card).slice(1)).toEqual([
       '  ✓ d1',
@@ -55,13 +55,13 @@ describe('TodoList card', () => {
 
   it('keeps only the headline for a read-only call and for a failed call', () => {
     expect(cardLines(todoCard(undefined))).toHaveLength(1);
-    expect(cardLines(todoCard([T('a', 'pending')], true)).join('\n')).not.toContain('○ a');
+    expect(cardLines(todoCard([todo('a', 'pending')], true)).join('\n')).not.toContain('○ a');
   });
 });
 
 describe('selectVisibleTodos', () => {
   it('keeps a list of up to three items whole', () => {
-    const todos = [T('a', 'done'), T('b', 'in_progress'), T('c', 'pending')];
+    const todos = [todo('a', 'done'), todo('b', 'in_progress'), todo('c', 'pending')];
     expect(selectVisibleTodos(todos)).toEqual({
       rows: todos,
       hidden: 0,
@@ -70,7 +70,7 @@ describe('selectVisibleTodos', () => {
   });
 
   it('pairs the in-progress item with the latest done item', () => {
-    const todos = [T('d1', 'done'), T('d2', 'done'), T('ip', 'in_progress'), T('p1', 'pending')];
+    const todos = [todo('d1', 'done'), todo('d2', 'done'), todo('ip', 'in_progress'), todo('p1', 'pending')];
     const { rows, hidden, hiddenCounts } = selectVisibleTodos(todos);
     expect(rows.map((r) => r.title)).toEqual(['d2', 'ip']);
     expect(hidden).toBe(2);
@@ -78,22 +78,22 @@ describe('selectVisibleTodos', () => {
   });
 
   it('fills with the earliest pending items when nothing is done', () => {
-    const todos = [T('ip', 'in_progress'), T('p1', 'pending'), T('p2', 'pending'), T('p3', 'pending')];
+    const todos = [todo('ip', 'in_progress'), todo('p1', 'pending'), todo('p2', 'pending'), todo('p3', 'pending')];
     expect(selectVisibleTodos(todos).rows.map((r) => r.title)).toEqual(['ip', 'p1']);
   });
 
   it('shows the latest done and the earliest pending item without an in-progress item', () => {
-    const todos = [T('p0', 'pending'), T('d0', 'done'), T('p1', 'pending'), T('d1', 'done')];
+    const todos = [todo('p0', 'pending'), todo('d0', 'done'), todo('p1', 'pending'), todo('d1', 'done')];
     expect(selectVisibleTodos(todos).rows.map((r) => r.title)).toEqual(['p0', 'd1']);
   });
 
   it('shows the last two items of an all-done list', () => {
-    const todos = Array.from({ length: 5 }, (_, i) => T(`d${String(i)}`, 'done'));
+    const todos = Array.from({ length: 5 }, (_, i) => todo(`d${String(i)}`, 'done'));
     expect(selectVisibleTodos(todos).rows.map((r) => r.title)).toEqual(['d3', 'd4']);
   });
 
   it('caps in-progress items at two, keeping the earliest', () => {
-    const todos = Array.from({ length: 5 }, (_, i) => T(`ip${String(i)}`, 'in_progress'));
+    const todos = Array.from({ length: 5 }, (_, i) => todo(`ip${String(i)}`, 'in_progress'));
     const { rows, hiddenCounts } = selectVisibleTodos(todos);
     expect(rows.map((r) => r.title)).toEqual(['ip0', 'ip1']);
     expect(hiddenCounts).toEqual({ done: 0, in_progress: 3, pending: 0 });

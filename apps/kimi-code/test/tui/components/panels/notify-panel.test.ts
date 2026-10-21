@@ -339,23 +339,34 @@ describe('NotifyPanelComponent', () => {
     expect(lines.at(-1)).toContain('row 5');
   });
 
-  it('shrinks to a summary of the asking agent while a prompt waits, and refuses focus', () => {
-    const panel = new NotifyPanelComponent();
+  it('shrinks a docked panel to a summary of the asking agent while a prompt waits, and refuses focus', () => {
+    const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
     panel.upsert({ ...entry('a0:c1', 'details', 'a0', 'explore'), title: 'Checking the auth tests' });
     panel.upsert({ ...entry('tc-1', 'main is planning'), time: 1 });
     panel.focus();
 
     panel.setPrompt({ agentId: 'a0' });
-    expect(render(panel)).toEqual([' ▸ explore · Checking the auth tests']);
+    expect(render(panel)).toEqual(['  ▸ explore · Checking the auth tests']);
     expect(panel.isFocused()).toBe(false);
     expect(panel.focus()).toBe(false);
 
     panel.setPrompt({ agentId: 'agent-without-updates' });
-    expect(render(panel)).toEqual([' ▸ main · main is planning']);
+    expect(render(panel)).toEqual(['  ▸ main · main is planning']);
 
     panel.setPrompt(undefined);
     expect(titleOf(panel)).toContain('Updates · ctrl+n to browse');
     expect(panel.focus()).toBe(true);
+  });
+
+  it('keeps an inline panel whole while a prompt waits', () => {
+    const panel = new NotifyPanelComponent();
+    panel.upsert({ ...entry('tc-1', 'IMPORTANT body'), title: 'Latest update' });
+    panel.setPrompt({ agentId: 'main' });
+    expect(render(panel).map((line) => line.trimEnd())).toEqual([
+      expect.stringMatching(/^─ main · Updates · ctrl\+n to browse ─+$/),
+      '  Latest update',
+      '  IMPORTANT body',
+    ]);
   });
 
   it('switches channel, pages and closes on clicks in the head, focusing the panel', () => {
