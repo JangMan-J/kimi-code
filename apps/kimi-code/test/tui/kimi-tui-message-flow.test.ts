@@ -1234,10 +1234,10 @@ describe('KimiTUI message flow', () => {
     expect(notifyPanel.focused).toBe(true);
     expect(editor.focused).toBe(false);
     expect(head()).toContain('esc close');
-    notifyPanel.handleInput('\u001B[D');
-    expect(head()).toContain('Updates ← 2/3 →');
-    notifyPanel.handleInput('\u001B[C');
-    expect(head()).toContain('Updates ← 3/3 →');
+    notifyPanel.handleInput('\u001B[A');
+    expect(head()).toContain('Updates < 2/3 >');
+    notifyPanel.handleInput('\u001B[B');
+    expect(head()).toContain('Updates < 3/3 >');
     notifyPanel.handleInput('\u001B');
     expect(editor.focused).toBe(true);
     expect(notifyPanel.focused).toBe(false);

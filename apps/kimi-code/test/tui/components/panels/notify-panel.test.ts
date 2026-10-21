@@ -1,10 +1,12 @@
 import type { TuiMouseEvent } from '@moonshot-ai/pi-tui';
-import { describe, expect, it } from 'vitest';
+import chalk from 'chalk';
+import { describe, expect, it, onTestFinished } from 'vitest';
 
 import {
   NotifyPanelComponent,
   type NotifyEntry,
 } from '#/tui/components/chrome/notify-panel';
+import { currentTheme } from '#/tui/theme';
 
 function strip(text: string): string {
   return text.replaceAll(/\u001B\[[0-9;]*m/g, '');
@@ -103,11 +105,11 @@ describe('NotifyPanelComponent', () => {
     expect(panel.nextChannel()).toBe(false);
 
     expect(panel.prevChannel()).toBe(true);
-    expect(titleOf(panel)).toContain('Updates ← 2/2 →');
+    expect(titleOf(panel)).toContain('Updates < 2/2 >');
     expect(render(panel).join('\n')).toContain('main two');
 
     expect(panel.prevPage()).toBe(true);
-    expect(titleOf(panel)).toContain('Updates ← 1/2 →');
+    expect(titleOf(panel)).toContain('Updates < 1/2 >');
     expect(render(panel).join('\n')).toContain('main one');
     expect(panel.prevPage()).toBe(false);
 
@@ -116,6 +118,11 @@ describe('NotifyPanelComponent', () => {
   });
 
   it('collects an unread dot on background channels while focused, cleared on visit', () => {
+    const previousLevel = chalk.level;
+    chalk.level = 3;
+    onTestFinished(() => {
+      chalk.level = previousLevel;
+    });
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
@@ -126,11 +133,15 @@ describe('NotifyPanelComponent', () => {
 
     panel.upsert(entry('a0:c2', 'explore two', 'a0', 'explore'));
     expect(titleOf(panel)).toContain('explore●');
+    expect(panel.render(80)[0]).toContain(
+      currentTheme.fg('textDim', 'explore') + currentTheme.fg('primary', '●'),
+    );
+    expect(panel.render(80)[0]).not.toContain(currentTheme.fg('primary', 'explore●'));
     expect(render(panel).join('\n')).toContain('main one');
 
     expect(panel.nextChannel()).toBe(true);
     expect(titleOf(panel)).not.toContain('●');
-    expect(titleOf(panel)).toContain('Updates ← 2/2 →');
+    expect(titleOf(panel)).toContain('Updates < 2/2 >');
     expect(render(panel).join('\n')).toContain('explore two');
   });
 
@@ -165,9 +176,9 @@ describe('NotifyPanelComponent', () => {
 
     expect(titleOf(panel)).toContain('Updates · ctrl+n to browse');
     panel.focus();
-    expect(titleOf(panel)).toMatch(/^─ main · Updates ─+ esc close ─$/);
+    expect(titleOf(panel)).toMatch(/^─ main · Updates · ↑ ↓ update ─+ esc close ─$/);
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
-    expect(titleOf(panel)).toMatch(/^─ main · explore● · Updates · shift\+←→ agent ─+ esc close ─$/);
+    expect(titleOf(panel)).toContain('← → agent · ↑ ↓ update');
     expect(titleOf(panel, 30)).toMatch(/^─ main · Updates ─+ esc ─$/);
     panel.blur();
     expect(panel.blur()).toBe(false);
@@ -449,21 +460,28 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('main two');
   });
 
-  it('pages with arrow keys while focused and hands every other key back', () => {
+  it('uses horizontal arrows for agents, vertical arrows for updates, and Shift+arrows to scroll', () => {
     const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
     const returned: (string | undefined)[] = [];
     panel.onReturnFocus = (key) => returned.push(key);
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('tc-2', 'main two'));
-    panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    panel.upsert(entry('a0:c1', listRows(10), 'a0', 'explore'));
     panel.focused = true;
-    expect(titleOf(panel)).toMatch(/Updates · shift\+←→ agent ─+ esc close ─$/);
+    expect(titleOf(panel)).toContain('← → agent · ↑ ↓ update');
+    expect(titleOf(panel)).not.toContain('Updates ←');
 
-    panel.handleInput('\u001B[1;2D');
-    expect(titleOf(panel)).toContain('Updates ← 2/2 →');
     panel.handleInput('\u001B[D');
+    expect(titleOf(panel)).toContain('Updates < 2/2 >');
+    expect(render(panel).join('\n')).toContain('main two');
+    panel.handleInput('\u001B[A');
+    expect(titleOf(panel)).toContain('Updates < 1/2 >');
     expect(render(panel).join('\n')).toContain('main one');
     panel.handleInput('\u001B[B');
+    expect(render(panel).join('\n')).toContain('main two');
+    panel.handleInput('\u001B[C');
+    expect(titleOf(panel)).toContain('main · explore · Updates');
+    panel.handleInput('\u001B[1;2B');
     expect(returned).toEqual([]);
 
     panel.handleInput('x');

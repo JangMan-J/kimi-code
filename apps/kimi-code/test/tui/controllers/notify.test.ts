@@ -287,7 +287,7 @@ describe('NotifyController', () => {
     h.send('n2', 'background finding', 'agent-1');
     expect(h.texts()).toEqual(['main done', 'background finding']);
     expect(h.rendered()).toContain('coder●');
-    h.notifyPanel.handleInput('\u001B[1;2C');
+    h.notifyPanel.handleInput('\u001B[C');
     expect(h.rendered()).toContain('background finding');
     h.emit('subagent.completed', { subagentId: 'agent-1' });
     expect(h.rendered()).toContain('background finding');
@@ -544,19 +544,19 @@ describe('NotifyController', () => {
         h.input('\u000E');
         expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
         expect(h.rendered()).toContain('esc close');
-        h.input('\u001B[D');
-        expect(h.rendered()).toContain('Updates ← 2/3 →');
-        h.input('\u001B[D');
-        expect(h.rendered()).toContain('Updates ← 1/3 →');
-        h.input('\u001B[C');
-        expect(h.rendered()).toContain('Updates ← 2/3 →');
+        h.input('\u001B[A');
+        expect(h.rendered()).toContain('Updates < 2/3 >');
+        h.input('\u001B[A');
+        expect(h.rendered()).toContain('Updates < 1/3 >');
+        h.input('\u001B[B');
+        expect(h.rendered()).toContain('Updates < 2/3 >');
         if (fullscreen) {
-          h.input('\u001B[A');
-          h.input('\u001B[B');
+          h.input('\u001B[1;2A');
+          h.input('\u001B[1;2B');
           expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
         }
         h.emit('turn.ended', { reason: 'completed' });
-        expect(h.rendered()).toContain('Updates ← 2/3 →');
+        expect(h.rendered()).toContain('Updates < 2/3 >');
         expect(h.rendered()).toContain('update two');
         expect(h.notifyPanelContainer.children).toEqual([h.notifyPanel]);
         if (h.ui instanceof TuiAltScreen) expect(h.ui.getLayoutRoot()).toBe(root);
@@ -585,16 +585,15 @@ describe('NotifyController', () => {
     try {
       h.input('\u000E');
       expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
-      const before = h.editor.getCursor();
-      h.input('\u001B[A');
+      h.input('x');
       expect(h.ui.getFocusedComponent()).toBe(h.editor);
-      expect(h.editor.getCursor().line).toBe(before.line - 1);
+      expect(h.editor.getText()).toBe('line one\nline twox');
 
       h.input('\u000E');
       expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
-      h.input('x');
+      h.input('y');
       expect(h.ui.getFocusedComponent()).toBe(h.editor);
-      expect(h.editor.getText()).toBe('line onex\nline two');
+      expect(h.editor.getText()).toBe('line one\nline twoxy');
     } finally {
       h.ui.stop();
     }

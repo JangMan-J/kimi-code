@@ -924,6 +924,15 @@ describe('fullscreen layout', () => {
     expect(rows[head + 1]).toContain('body 1');
     expect(rows[head + 6]).toContain('body 6');
 
+    state.ui.setFocus(state.notifyPanel);
+    vt.sendInput('\u001B[1;2B');
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows[head + 1]).toContain('body 2');
+    expect(rows[head + 6]).toContain('body 7');
+    expect(state.notifyPanel.focused).toBe(true);
+    state.ui.setFocus(state.editor);
+
     state.livePane.pendingApproval = pendingApproval();
     state.notifyPanel.setPrompt({ agentId: 'main' });
     state.ui.requestRender();

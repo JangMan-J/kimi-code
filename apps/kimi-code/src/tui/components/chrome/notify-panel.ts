@@ -4,8 +4,8 @@
  * Updates are grouped into CHANNELS, one per agent: the main agent plus one
  * channel per subagent that posts a `NotifyUser` update. The head is a rule
  * labelled with the channel tabs and a pager; the body is the current update.
- * `Ctrl+N` gives the panel keyboard focus, then `←`/`→` page through the
- * channel's updates, `Shift+←`/`→` switch channels, `↑`/`↓` scroll a docked
+ * `Ctrl+N` gives the panel keyboard focus, then `←`/`→` switch channels,
+ * `↑`/`↓` page through the channel's updates, `Shift+↑`/`↓` scroll a docked
  * body, and `Esc`/`Ctrl+N` hand focus back to the editor; any other key hands
  * focus back and goes to the editor. Docked (fullscreen), clicks on the head's
  * tabs, pager and stub change the view without taking focus. A new update
@@ -243,24 +243,24 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     const key = normalizeCapsLockedCtrl(data);
     if (matchesKey(key, Key.escape) || matchesKey(key, Key.ctrl('n'))) {
       this.onReturnFocus?.(undefined);
-    } else if (matchesKey(key, 'shift+left')) {
-      this.prevChannel();
-    } else if (matchesKey(key, 'shift+right')) {
-      this.nextChannel();
     } else if (matchesKey(key, Key.left)) {
-      this.prevPage();
+      this.prevChannel();
     } else if (matchesKey(key, Key.right)) {
+      this.nextChannel();
+    } else if (matchesKey(key, Key.up)) {
+      this.prevPage();
+    } else if (matchesKey(key, Key.down)) {
       this.nextPage();
-    } else if (this.layout !== undefined && matchesKey(key, Key.up)) {
+    } else if (this.layout !== undefined && matchesKey(key, 'shift+up')) {
       this.scrollBody(-1);
-    } else if (this.layout !== undefined && matchesKey(key, Key.down)) {
+    } else if (this.layout !== undefined && matchesKey(key, 'shift+down')) {
       this.scrollBody(1);
     } else {
       this.onReturnFocus?.(data);
     }
   }
 
-  /** Older channel (`Shift+←`), landing on its latest update; false on the leftmost tab. */
+  /** Older channel (`←`), landing on its latest update; false on the leftmost tab. */
   prevChannel(): boolean {
     const index = this.activeIndex();
     if (index <= 0) return false;
@@ -268,7 +268,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     return true;
   }
 
-  /** Newer channel (`Shift+→`), landing on its latest update; false on the rightmost tab. */
+  /** Newer channel (`→`), landing on its latest update; false on the rightmost tab. */
   nextChannel(): boolean {
     const index = this.activeIndex();
     if (index >= this.channels.length - 1) return false;
@@ -276,7 +276,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     return true;
   }
 
-  /** Older update in the current channel (`←`); false on the first page. */
+  /** Older update in the current channel (`↑`); false on the first page. */
   prevPage(): boolean {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
@@ -286,7 +286,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     return true;
   }
 
-  /** Newer update in the current channel (`→`); false on the latest page. */
+  /** Newer update in the current channel (`↓`); false on the latest page. */
   nextPage(): boolean {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
@@ -419,9 +419,9 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       if (ch.entries.length > 1) {
         segments.push(
           { text: ' ', style: strong },
-          { text: this.hasFocus ? '←' : '<', style: strong, action: { kind: 'prev' } },
+          { text: '<', style: strong, action: { kind: 'prev' } },
           { text: ` ${String(ch.page + 1)}/${String(ch.entries.length)} `, style: strong },
-          { text: this.hasFocus ? '→' : '>', style: strong, action: { kind: 'next' } },
+          { text: '>', style: strong, action: { kind: 'next' } },
         );
       }
       if (this.ended) segments.push({ text: ' · turn ended', style: strong });
@@ -439,8 +439,8 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     };
     const hint = this.hasFocus
       ? this.channels.length > 1
-        ? 'shift+←→ agent'
-        : ''
+        ? '← → agent · ↑ ↓ update'
+        : '↑ ↓ update'
       : 'ctrl+n to browse';
     const candidates: [HeadSegment[], HeadSegment[]][] = [
       [label(this.tabSegments(), hint), close('esc close')],
@@ -513,10 +513,13 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     if (active) {
       return { text: channel.label, style: (text) => currentTheme.boldFg('primary', text), action };
     }
-    const unread = channel.unreadIds.size > 0;
+    if (channel.unreadIds.size === 0) {
+      return { text: channel.label, style: (text) => currentTheme.fg('textDim', text), action };
+    }
     return {
-      text: unread ? `${channel.label}●` : channel.label,
-      style: (text) => currentTheme.fg(unread ? 'primary' : 'textDim', text),
+      text: `${channel.label}●`,
+      style: (text) =>
+        currentTheme.fg('textDim', text.slice(0, -1)) + currentTheme.fg('primary', '●'),
       action,
     };
   }
