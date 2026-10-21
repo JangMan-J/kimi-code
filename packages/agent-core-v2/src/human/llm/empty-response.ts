@@ -30,23 +30,20 @@ export function createEmptyResponseError(
   };
 }
 
-export function isThinkOnlyMessage(message: AssistantMessage): boolean {
-  return (
-    message.toolCalls.length === 0 &&
-    message.content.some((part) => part.type === 'think') &&
-    !message.content.some((part) => part.type === 'text' && part.text.trim().length > 0)
-  );
-}
-
 export function emptyResponseError(
   message: AssistantMessage,
   model: LlmModel,
   finish: FinishInfo,
 ): LlmErrorMessage<'empty_response'> | null {
-  if (message.content.length === 0 && message.toolCalls.length === 0) {
+  const hasToolCalls = message.toolCalls.length > 0;
+  if (message.content.length === 0 && !hasToolCalls) {
     return createEmptyResponseError(model, finish, false);
   }
-  if (isThinkOnlyMessage(message) && finish.finishReason !== 'truncated') {
+  const hasThink = message.content.some((part) => part.type === 'think');
+  const hasText = message.content.some(
+    (part) => part.type === 'text' && part.text.trim().length > 0,
+  );
+  if (hasThink && !hasText && !hasToolCalls) {
     return createEmptyResponseError(model, finish, true);
   }
   return null;

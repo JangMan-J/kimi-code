@@ -1,12 +1,13 @@
 import { Disposable } from '#/_base/di/lifecycle';
 import { LifecycleScope } from '#/app/scopes';
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
-import { IAgentLoopService, type AfterStepContext } from '#/agent/loop/loop';
+import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
+import { IAgentLoopService, type LoopErrorContext } from '#/agent/loop/loop';
 import type { LlmOutputLimitRecoveryEvent } from '#/app/telemetry/events';
 import { ITelemetryService } from '#/app/telemetry/telemetry';
-import { Error2, ErrorCodes } from '#/errors';
+import { Error2, ErrorCodes, unwrapErrorCause } from '#/errors';
 import { wrapSystemReminder } from '#/features/reminder/systemReminder';
-import { isThinkOnlyMessage } from '#human/llm/empty-response';
+import { APIEmptyResponseError } from '#/llm-adapter/contract/errors';
 
 import {
   IAgentOutputLimitRecoveryService,
@@ -32,61 +33,68 @@ export class AgentOutputLimitRecoveryService
 
   constructor(
     @IAgentLoopService private readonly loop: IAgentLoopService,
+    @IAgentContextMemoryService private readonly context: IAgentContextMemoryService,
     @ITelemetryService private readonly telemetry: ITelemetryService,
   ) {
     super();
     this._register(
-      loop.hooks.onDidFinishStep.register('outputLimitRecovery', async (ctx, next) => {
-        this.recover(ctx);
+      loop.hooks.onWillBeginStep.register('outputLimitRecovery', async (ctx, next) => {
+        if (ctx.firstStepOfTurn) this.consecutiveRecoveries = 0;
         await next();
+      }),
+    );
+    this._register(
+      loop.hooks.onDidFinishStep.register('outputLimitRecovery', async (_ctx, next) => {
+        this.consecutiveRecoveries = 0;
+        await next();
+      }),
+    );
+    this._register(
+      loop.registerLoopErrorHandler({
+        id: 'outputLimitRecovery',
+        match: (ctx) => isOutputLimitBeforeAnswer(ctx.error),
+        handle: async (ctx) => this.recover(ctx),
       }),
     );
   }
 
-  private recover(ctx: AfterStepContext): void {
-    if (ctx.firstStepOfTurn) this.consecutiveRecoveries = 0;
-    if (
-      ctx.finishReason !== 'truncated' ||
-      ctx.message === undefined ||
-      !isThinkOnlyMessage(ctx.message)
-    ) {
-      this.consecutiveRecoveries = 0;
-      return;
-    }
-    const snapshot = this.loop.snapshot();
-    if (snapshot.hasPendingRequests && snapshot.queue.length === 0) return;
+  private recover(ctx: LoopErrorContext): boolean {
+    if (ctx.signal.aborted) return false;
     if (this.consecutiveRecoveries >= MAX_OUTPUT_LIMIT_RECOVERIES) {
-      ctx.failTurn = new Error2(ErrorCodes.AGENT_MAX_TOKENS_EXCEEDED, OUTPUT_LIMIT_EXHAUSTED_MESSAGE);
       this.track(ctx, 'exhausted');
-      return;
+      this.consecutiveRecoveries = 0;
+      throw new Error2(ErrorCodes.AGENT_MAX_TOKENS_EXCEEDED, OUTPUT_LIMIT_EXHAUSTED_MESSAGE);
     }
-    this.loop.notify({
-      message: {
-        role: 'user',
-        content: [{ type: 'text', text: wrapSystemReminder(OUTPUT_LIMIT_RECOVERY_REMINDER) }],
-        toolCalls: [],
-        origin: {
-          kind: 'injection',
-          variant: OUTPUT_LIMIT_RECOVERY_VARIANT,
-          ownerPromptId: snapshot.activePromptId,
-        },
-      },
-      onConsume: () => {
-        this.consecutiveRecoveries += 1;
-        this.track(ctx, 'nudged');
+    this.consecutiveRecoveries += 1;
+    this.context.append({
+      role: 'user',
+      content: [{ type: 'text', text: wrapSystemReminder(OUTPUT_LIMIT_RECOVERY_REMINDER) }],
+      toolCalls: [],
+      origin: {
+        kind: 'injection',
+        variant: OUTPUT_LIMIT_RECOVERY_VARIANT,
+        ownerPromptId: this.loop.snapshot().activePromptId,
       },
     });
+    this.track(ctx, 'nudged');
+    ctx.retry();
+    return true;
   }
 
-  private track(ctx: AfterStepContext, action: LlmOutputLimitRecoveryEvent['action']): void {
+  private track(ctx: LoopErrorContext, action: LlmOutputLimitRecoveryEvent['action']): void {
     const properties: LlmOutputLimitRecoveryEvent = {
       turn_id: ctx.turnId,
-      step_no: ctx.step,
+      step_no: ctx.step ?? 0,
       action,
       attempt: this.consecutiveRecoveries,
     };
     this.telemetry.track2('llm_output_limit_recovery', properties);
   }
+}
+
+function isOutputLimitBeforeAnswer(error: unknown): boolean {
+  const unwrapped = unwrapErrorCause(error);
+  return unwrapped instanceof APIEmptyResponseError && unwrapped.finishReason === 'truncated';
 }
 
 registerScopedService(

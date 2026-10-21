@@ -1441,8 +1441,8 @@ export const telemetryEventDefinitions = {
       turn_id: 'Per-agent turn index (main or subagent); pair with agent_id to locate a turn within a session',
       step_no: 'Step index within the turn',
       action:
-        "How the truncated response was handled: 'nudged' when the next step picks up a reminder, or 'exhausted' when the turn fails at the reminder limit",
-      attempt: 'Consecutive reminders picked up within the turn, including this one when nudged',
+        "How the truncated response was handled: 'nudged' when the step is retried with a reminder, or 'exhausted' when the turn fails at the reminder limit",
+      attempt: 'Consecutive reminders within the turn, including this one when nudged',
     },
   }),
   session_index_degraded: defineTelemetryEvent<SessionIndexDegradedEvent>({

@@ -337,6 +337,20 @@ describe('turn machine llm retry', () => {
       finishReason: 'filtered',
       rawFinishReason: 'content_filter',
     });
+
+    const truncated = createStubRequester(['think_only_truncated', 'ok']);
+    const truncatedRun = startTurnActor(truncated.requester, { retry: { maxAttemptsPerStep: 5 } });
+
+    await flush();
+
+    expect(truncatedRun.retrying).toHaveLength(0);
+    expect(truncated.calls()).toBe(1);
+    expect(truncatedRun.actor.getSnapshot().context.turnOutput).toMatchObject({ type: 'failed' });
+    expect(truncatedRun.failed[0]).toMatchObject({
+      kind: 'empty_response',
+      finishReason: 'truncated',
+      rawFinishReason: 'length',
+    });
   });
 
   it('retries a non-retryable error when infiniteRetry is on', async () => {
@@ -418,35 +432,6 @@ describe('turn machine llm retry', () => {
 
     expect(actor.getSnapshot().context.turnOutput).toMatchObject({ type: 'done' });
     expect(retrying).toHaveLength(0);
-    expect(calls()).toBe(1);
-  });
-});
-
-describe('turn machine think-only truncation', () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('completes a truncated think-only step without retrying', async () => {
-    const { requester, calls } = createStubRequester(['think_only_truncated']);
-    const { actor, retrying, failed } = startTurnActor(requester, {
-      retry: { maxAttemptsPerStep: 3 },
-    });
-
-    await flush();
-
-    const output = actor.getSnapshot().context.turnOutput;
-    expect(output).toMatchObject({ type: 'done' });
-    const produced = output?.type === 'done' ? output.produced : [];
-    expect(produced).toHaveLength(1);
-    expect(produced[0]?.message.content).toEqual([{ type: 'think', think: 'reasoning' }]);
-    expect(produced[0]?.meta?.finish).toMatchObject({ finishReason: 'truncated' });
-    expect(retrying).toHaveLength(0);
-    expect(failed).toHaveLength(0);
     expect(calls()).toBe(1);
   });
 });

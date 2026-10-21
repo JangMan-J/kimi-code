@@ -84,21 +84,4 @@ describe('emptyResponseError', () => {
       ),
     ).toBeNull();
   });
-
-  it('treats a think-only truncation as truncated rather than empty', () => {
-    const thinkOnly = accumulatedMessage([{ type: 'think', think: 'reasoning' }]);
-    expect(
-      emptyResponseError(thinkOnly, model, { finishReason: 'truncated', rawFinishReason: 'length' }),
-    ).toBeNull();
-    expect(
-      emptyResponseError(thinkOnly, model, { finishReason: 'completed', rawFinishReason: 'stop' })
-        ?.kind,
-    ).toBe('empty_response');
-    expect(
-      emptyResponseError(accumulatedMessage([]), model, {
-        finishReason: 'truncated',
-        rawFinishReason: 'length',
-      })?.kind,
-    ).toBe('empty_response');
-  });
 });

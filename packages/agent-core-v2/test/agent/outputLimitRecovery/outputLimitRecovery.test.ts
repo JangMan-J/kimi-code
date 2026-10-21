@@ -66,7 +66,7 @@ describe('output-limit recovery', () => {
     return records.filter((record) => record.event === 'llm_output_limit_recovery');
   }
 
-  it('retries a think-only truncation with the reminder after the kept thought', async () => {
+  it('retries a think-only truncation with the reminder', async () => {
     truncatedThought('unfinished thought');
     ctx.mockNextResponse({ type: 'text', text: 'completed answer' });
 
@@ -76,8 +76,7 @@ describe('output-limit recovery', () => {
     expect(ctx.llmCalls).toHaveLength(2);
     await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 2, truncated: false });
     const history = ctx.llmCalls[1]!.history;
-    expect(history.map((message) => message.role)).toEqual(['user', 'assistant', 'user']);
-    expect(history.at(-2)?.content).toMatchObject([{ type: 'think', think: 'unfinished thought' }]);
+    expect(history.map((message) => message.role)).toEqual(['user', 'user']);
     expect(textOf(history.at(-1) as ContextMessage | undefined)).toBe(
       '<system-reminder>\n' +
         'Output token limit hit while you were still reasoning, before this response produced any text or tool call. That reasoning was not kept and is not part of this conversation, so there is nothing to resume. Continue from the conversation above: reason much more briefly and produce your answer or next tool call well within the output limit.' +
@@ -189,23 +188,21 @@ describe('output-limit recovery', () => {
     expect(recoveryInjections()).toHaveLength(4);
   });
 
-  it('defers to a request already continuing the turn', async () => {
-    loop.hooks.onDidFinishStep.register(
-      'test-queue-request',
-      async (_hookCtx, next) => {
-        if (ctx.llmCalls.length === 1) {
-          loop.notify({
-            message: {
-              role: 'user',
-              content: [{ type: 'text', text: 'queued follow-up' }],
-              toolCalls: [],
-            },
-          });
-        }
-        await next();
-      },
-      { before: 'outputLimitRecovery' },
-    );
+  it('keeps a pending notification alongside the reminder', async () => {
+    let notified = false;
+    loop.hooks.onWillBeginStep.register('test-notify', async (_hookCtx, next) => {
+      if (!notified) {
+        notified = true;
+        loop.notify({
+          message: {
+            role: 'user',
+            content: [{ type: 'text', text: 'queued follow-up' }],
+            toolCalls: [],
+          },
+        });
+      }
+      await next();
+    });
     truncatedThought('unfinished thought');
     ctx.mockNextResponse({ type: 'text', text: 'completed answer' });
 
@@ -214,39 +211,32 @@ describe('output-limit recovery', () => {
 
     expect(ctx.llmCalls).toHaveLength(2);
     await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 2, truncated: false });
-    expect(textOf(ctx.llmCalls[1]!.history.at(-1) as ContextMessage | undefined)).toBe(
+    const history = ctx.llmCalls[1]!.history as ContextMessage[];
+    expect(history.slice(-2).map(textOf)).toEqual([
+      expect.stringContaining('Output token limit hit while you were still reasoning'),
       'queued follow-up',
-    );
-    expect(recoveryInjections()).toEqual([]);
-    expect(recoveryEvents()).toEqual([]);
+    ]);
+    expect(recoveryInjections()).toHaveLength(1);
   });
 
-  it('still retries when only a separate prompt is queued behind the turn', async () => {
-    let queued: Turn | undefined;
-    loop.hooks.onDidFinishStep.register(
-      'test-queue-prompt',
-      async (_hookCtx, next) => {
-        if (ctx.llmCalls.length === 1) queued = submitTurn(loop, 'Next question').turn;
-        await next();
-      },
-      { before: 'outputLimitRecovery' },
-    );
+  it('retries before a separate prompt queued behind the turn', async () => {
     truncatedThought('unfinished thought');
     ctx.mockNextResponse({ type: 'text', text: 'completed answer' });
     ctx.mockNextResponse({ type: 'text', text: 'next answer' });
 
     const { turn } = submitTurn(loop, 'Hello');
+    const queued = submitTurn(loop, 'Next question').turn;
     await expect(turn.result).resolves.toEqual({ type: 'completed', steps: 2, truncated: false });
-    await expect(queued!.result).resolves.toMatchObject({ type: 'completed' });
+    await expect(queued.result).resolves.toMatchObject({ type: 'completed' });
 
     expect(ctx.llmCalls).toHaveLength(3);
     expect(recoveryInjections()).toHaveLength(1);
     expect(recoveryEvents().map((event) => event.properties?.['action'])).toEqual(['nudged']);
   });
 
-  it('lets cancellation take precedence over the queued reminder', async () => {
-    loop.hooks.onDidFinishStep.register('test-cancel-turn', async (_hookCtx, next) => {
-      loop.cancel();
+  it('lets cancellation stop the retried step', async () => {
+    loop.hooks.onWillBeginStep.register('test-cancel-turn', async (hookCtx, next) => {
+      if (hookCtx.step === 2) loop.cancel();
       await next();
     });
     truncatedThought('unfinished thought');
@@ -258,7 +248,6 @@ describe('output-limit recovery', () => {
     expect(ctx.llmCalls).toHaveLength(1);
     const result = await turn.result;
     expect(result.type).toBe('cancelled');
-    expect(recoveryEvents()).toEqual([]);
   });
 });
 
