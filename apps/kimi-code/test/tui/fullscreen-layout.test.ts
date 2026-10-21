@@ -27,6 +27,7 @@ import { ActivityPaneComponent } from '#/tui/components/panes/activity-pane';
 import { CHROME_GUTTER } from '#/tui/constant/rendering';
 import { createTUIState, type KimiTUIOptions } from '#/tui/kimi-tui';
 import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
+import { GoalStartPermissionPromptComponent } from '#/tui/components/dialogs/goal-start-permission-prompt';
 import { NotifyController } from '#/tui/controllers/notify';
 import { mountFooter, setEditorSlot } from '#/tui/tui-state';
 import type { AppState, TranscriptEntry } from '#/tui/types';
@@ -1000,6 +1001,45 @@ describe('fullscreen layout', () => {
     rows = screenRows(vt);
     expect(rows.join('\n')).not.toContain('Run this command?');
     expect(rows.join('\n')).toContain('test-model');
+
+    state.ui.stop();
+  });
+
+  it('docks the local goal start prompt and keeps its choices and hint visible', async () => {
+    const { state, vt } = await mountFullscreen(24);
+    vt.resize(80, 24);
+    const onSelect = vi.fn();
+    const panel = new GoalStartPermissionPromptComponent({
+      mode: 'manual',
+      onSelect,
+      onCancel: vi.fn(),
+      layout: { maxBodyRows: 6 },
+    });
+    setEditorSlot(state, panel);
+    state.ui.setFocus(panel);
+    state.ui.requestRender();
+    await vt.waitForRender();
+
+    let rows = screenRows(vt);
+    const secondChoice = rows.findIndex((row) => row.includes('Switch to Ask When Needed and start'));
+    expect(secondChoice).toBeGreaterThan(0);
+    expect(rows.join('\n')).toContain('Start in Always Ask');
+    expect(rows.join('\n')).toContain('Do not start');
+    expect(rows.join('\n')).toContain('Esc cancel · shift+↑/↓ scroll');
+    expect(rows.join('\n')).toContain('Best if you want Kimi Code to keep working while you are away');
+    expect(rows.join('\n')).not.toContain('Tools and plan changes are approved automatically');
+
+    vt.sendInput(`\u001B[<35;5;${String(secondChoice + 1)}M`);
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows.findIndex((row) => row.includes('Switch to Ask When Needed and start'))).toBe(secondChoice);
+    expect(rows.join('\n')).toContain('Tools and plan changes are approved automatically');
+    expect(rows.join('\n')).not.toContain('Best if you want Kimi Code to keep working while you are away');
+
+    vt.sendInput(`\u001B[<0;5;${String(secondChoice + 1)}M`);
+    vt.sendInput(`\u001B[<0;5;${String(secondChoice + 1)}m`);
+    await vt.waitForRender();
+    expect(onSelect).toHaveBeenCalledWith('yolo');
 
     state.ui.stop();
   });
