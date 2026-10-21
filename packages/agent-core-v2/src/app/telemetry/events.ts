@@ -619,7 +619,7 @@ export interface LlmRequestProjectionFallbackEvent {
 export interface LlmOutputLimitRecoveryEvent {
   turn_id: number;
   step_no: number;
-  action: 'resumed' | 'nudged' | 'exhausted';
+  action: 'nudged' | 'exhausted';
   attempt: number;
   model?: string;
 }
@@ -1437,13 +1437,13 @@ export const telemetryEventDefinitions = {
   llm_output_limit_recovery: defineAgentTelemetryEvent<LlmOutputLimitRecoveryEvent>({
     owner: 'kimi-code',
     comment:
-      'A truncated LLM response is continued directly, continued with an output-limit reminder, or fails after three recovery steps.',
+      'A response truncated by the output token limit is continued with a reminder, or left truncated after three consecutive continuations.',
     properties: {
       turn_id: 'Per-agent turn index (main or subagent); pair with agent_id to locate a turn within a session',
       step_no: 'Step index within the turn',
       action:
-        "How the truncated response was handled: 'resumed' for direct signed-thinking continuation, 'nudged' for reminder continuation, or 'exhausted' after the third recovery step",
-      attempt: 'One-based output-limit recovery index within the current recovery sequence',
+        "How the truncated response was handled: 'nudged' when a continuation reminder is queued, or 'exhausted' when the turn ends truncated after three continuations",
+      attempt: 'Consecutive continuations within the turn, including this one when nudged',
       model: 'Model alias that produced the truncated response',
     },
   }),

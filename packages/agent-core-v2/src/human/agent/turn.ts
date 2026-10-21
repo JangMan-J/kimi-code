@@ -338,16 +338,12 @@ function llmRecoveringEvent(
   };
 }
 
-function emptyErrorOf(
-  context: TurnMachineContext,
-  allowTruncatedThinkOnly: boolean,
-): LlmErrorMessage<'empty_response'> | null {
+function emptyErrorOf(context: TurnMachineContext): LlmErrorMessage<'empty_response'> | null {
   const entry = context.accumulator.finish();
   return emptyResponseError(
     entry.message,
     context.input.request.model,
     entry.meta?.finish ?? NO_FINISH,
-    allowTruncatedThinkOnly,
   );
 }
 
@@ -364,7 +360,6 @@ export interface CreateTurnMachineOptions {
   readonly abortGraceMs?: number;
   readonly messageResolvers?: readonly MessageResolver[];
   readonly onBeforeStep?: TurnBeforeStep;
-  readonly allowTruncatedThinkOnly?: boolean;
 }
 
 export function createTurnMachine(
@@ -597,15 +592,11 @@ export function createTurnMachine(
               ],
             },
             {
-              guard: ({ context }) =>
-                emptyErrorOf(context, options?.allowTruncatedThinkOnly === true) !== null,
+              guard: ({ context }) => emptyErrorOf(context) !== null,
               actions: [
                 raise(({ context }) => ({
                   type: 'llm.failed.remote' as const,
-                  error: emptyErrorOf(
-                    context,
-                    options?.allowTruncatedThinkOnly === true,
-                  ) as LlmErrorMessage<'empty_response'>,
+                  error: emptyErrorOf(context) as LlmErrorMessage<'empty_response'>,
                 })),
               ],
             },

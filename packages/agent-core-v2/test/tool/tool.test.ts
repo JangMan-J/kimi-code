@@ -4528,7 +4528,7 @@ describe('Agent tools', () => {
       );
     });
 
-    it('fails an agent run when the final summary stays truncated after recovery attempts', async () => {
+    it('fails an agent run when the final summary stays truncated after continuations', async () => {
       await ctx.dispose();
       ctx = createTestAgent();
       for (let index = 1; index <= 4; index++) {
@@ -4546,7 +4546,7 @@ describe('Agent tools', () => {
       );
 
       await expect(run.completion).rejects.toThrow(
-        'The model did not complete the response after three output-limit recovery attempts.',
+        'Subagent turn failed before completing its final summary: reason=max_tokens',
       );
     });
   });

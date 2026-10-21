@@ -213,7 +213,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
       toolExecutor: this.toolExecutor,
       toolInfos: () => this.toolRegistry.list(),
       maxAttemptsPerStep: this.config.get<LoopControl>(LOOP_CONTROL_SECTION)?.maxAttemptsPerStep,
-      allowTruncatedThinkOnly: true,
       initialTurnId: this.states.get(turnKey).nextTurnId,
       journal: wireStoreJournal(this.wire, ENGINE_JOURNAL_DOMAIN),
       trace: () => this.activeRequestTrace,
@@ -998,7 +997,7 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
     if (turn === undefined) return { type: 'fail' };
     if (turn.controller.signal.aborted || machineSignal.aborted) return { type: 'fail' };
     if (turn.stopRequested) return { type: 'fail' };
-    if (turn.failedStep !== undefined || turn.failTurn !== undefined) return { type: 'fail' };
+    if (turn.failedStep !== undefined) return { type: 'fail' };
     const consumed = this.mirrorConsumedNudges(turn);
     if (turn.steerController.signal.aborted) {
       turn.steerController = new AbortController();
@@ -1250,7 +1249,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
       lastStopReason: undefined,
       filtered: false,
       maxStepsError: undefined,
-      failTurn: undefined,
       abortReason: undefined,
       retryRequested: false,
       afterChain: Promise.resolve(),
@@ -1959,7 +1957,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
     }
     turn.interruptStep = undefined;
     if (context.stopTurn) turn.stopRequested = true;
-    if (context.failTurn !== undefined) turn.failTurn = context.failTurn;
     if (finishReason === 'filtered') turn.filtered = true;
   }
 
@@ -1994,10 +1991,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
           details: { finishReason: 'filtered' },
         }),
       });
-      return;
-    }
-    if (turn.failTurn !== undefined) {
-      await this.endTurn(turn, { type: 'failed', steps: turn.steps, error: turn.failTurn });
       return;
     }
     if (turn.maxStepsError !== undefined) {
@@ -2349,7 +2342,6 @@ interface ActiveTurn {
   lastStopReason: FinishReason | undefined;
   filtered: boolean;
   maxStepsError: LoopError | undefined;
-  failTurn: unknown;
   abortReason: unknown;
   retryRequested: boolean;
   afterChain: Promise<void>;

@@ -34,7 +34,6 @@ export function emptyResponseError(
   message: AssistantMessage,
   model: LlmModel,
   finish: FinishInfo,
-  allowTruncatedThinkOnly = false,
 ): LlmErrorMessage<'empty_response'> | null {
   const hasToolCalls = message.toolCalls.length > 0;
   if (message.content.length === 0 && !hasToolCalls) {
@@ -44,8 +43,7 @@ export function emptyResponseError(
   const hasText = message.content.some(
     (part) => part.type === 'text' && part.text.trim().length > 0,
   );
-  const recoverableTruncation = allowTruncatedThinkOnly && finish.finishReason === 'truncated';
-  if (hasThink && !hasText && !hasToolCalls && !recoverableTruncation) {
+  if (hasThink && !hasText && !hasToolCalls) {
     return createEmptyResponseError(model, finish, true);
   }
   return null;

@@ -257,12 +257,7 @@ export class ModelRequesterImpl implements ModelRequester {
       throw errorFromLlmMessage(failed);
     }
 
-    const emptyError = emptyResponseError(
-      accumulator.finish(),
-      config.model,
-      finish ?? NO_FINISH,
-      params?.allowTruncatedThinkOnly === true,
-    );
+    const emptyError = emptyResponseError(accumulator.finish(), config.model, finish ?? NO_FINISH);
     if (emptyError !== null) {
       throw errorFromLlmMessage(emptyError);
     }
