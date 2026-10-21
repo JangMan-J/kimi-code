@@ -26,6 +26,7 @@ import * as userMessages from '#/tui/components/messages/user-message';
 import { ActivityPaneComponent } from '#/tui/components/panes/activity-pane';
 import { CHROME_GUTTER } from '#/tui/constant/rendering';
 import { createTUIState, type KimiTUIOptions } from '#/tui/kimi-tui';
+import { mountFooter } from '#/tui/tui-state';
 import type { AppState, TranscriptEntry } from '#/tui/types';
 import { beginScreenTakeover, endScreenTakeover } from '#/tui/utils/screen-takeover';
 import { markTranscriptComponent } from '#/tui/utils/transcript-component-metadata';
@@ -89,15 +90,30 @@ async function mountFullscreen(height = HEIGHT): Promise<{
   const vt = new VirtualTerminal(WIDTH, height);
   (state.ui as { terminal: Terminal }).terminal = vt;
 
-  // Footer is mounted into the dock after init (mirrors mountFooter()).
-  const footerWrap = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
-  footerWrap.addChild(state.footer);
-  state.dockContainer?.addChild(footerWrap, { shrink: 1, minSize: 1 });
+  mountFooter(state);
   state.editorContainer.addChild(state.editor);
   state.ui.setFocus(state.editor);
   state.ui.start();
   await vt.waitForRender();
   return { state, vt };
+}
+
+function screenRows(vt: VirtualTerminal): string[] {
+  return vt.getViewport().map((row) => stripAnsi(row).trimEnd());
+}
+
+function pendingApproval(): NonNullable<ReturnType<typeof createTUIState>['livePane']['pendingApproval']> {
+  return {
+    data: {
+      id: 'call-1',
+      tool_call_id: 'call-1',
+      tool_name: 'Bash',
+      action: 'run',
+      description: '',
+      display: [],
+      choices: [{ label: 'Approve once', response: 'approved' }],
+    },
+  };
 }
 
 function pillLines(state: ReturnType<typeof createTUIState>): string[] {
@@ -824,6 +840,46 @@ describe('fullscreen layout', () => {
     await vt.waitForRender();
     expect(pillLines(state)).toHaveLength(1);
     expect(vt.getViewport()[1]).toContain('body 30');
+
+    state.ui.stop();
+  });
+
+  it('shows three queued messages, scrolls the rest with the wheel, and gives way to an approval', async () => {
+    const { state, vt } = await mountFullscreen(24);
+    state.queuePane.setOptions({
+      isCompacting: false,
+      isStreaming: true,
+      canSteerImmediately: true,
+      messages: Array.from({ length: 5 }, (_, i) => ({ text: `queued ${String(i + 1)}` })),
+    });
+    state.queueContainer.addChild(state.queuePane);
+    state.ui.requestRender();
+    await vt.waitForRender();
+
+    let rows = screenRows(vt);
+    const first = rows.findIndex((row) => row.includes('❯ queued 1'));
+    expect(rows.slice(first, first + 4).map((row) => row.replace(/[┃│]$/, '').trim())).toEqual([
+      '❯ queued 1',
+      '❯ queued 2',
+      '❯ queued 3',
+      '5 queued · ↑ to edit · ctrl-s to steer immediately',
+    ]);
+    expect(rows[first]!.at(-1)).toBe('┃');
+    expect(rows.join('\n')).toContain('test-model');
+
+    vt.sendInput(`\u001B[<65;5;${String(first + 1)}M`);
+    vt.sendInput(`\u001B[<65;5;${String(first + 1)}M`);
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows[first]).toContain('❯ queued 3');
+    expect(rows[first + 2]).toContain('❯ queued 5');
+
+    state.livePane.pendingApproval = pendingApproval();
+    state.ui.requestRender();
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows.join('\n')).not.toContain('queued');
+    expect(rows.join('\n')).not.toContain('test-model');
 
     state.ui.stop();
   });

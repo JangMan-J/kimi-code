@@ -15,10 +15,11 @@ import { FooterComponent } from './components/chrome/footer';
 import { GutterContainer } from './components/chrome/gutter-container';
 import type { MoonLoader, SpinnerStyle } from './components/chrome/moon-loader';
 import { NotifyPanelComponent } from './components/chrome/notify-panel';
+import { QueuePaneComponent } from './components/panes/queue-pane';
 import type { SessionRow } from './components/dialogs/session-picker';
 import { CustomEditor } from './components/editor/custom-editor';
 import { DEFAULT_MARKDOWN_CONFIG, DEFAULT_TUI_CONFIG } from './config';
-import { CHROME_GUTTER } from './constant/rendering';
+import { CHROME_GUTTER, DOCK_QUEUE_ROWS } from './constant/rendering';
 import type { TasksBrowserState } from './controllers/tasks-browser';
 import { currentTheme, type Theme } from './theme';
 import {
@@ -46,6 +47,7 @@ export interface TUIState {
   notifyPanelContainer: Container;
   notifyPanel: NotifyPanelComponent;
   queueContainer: Container;
+  queuePane: QueuePaneComponent;
   btwPanelContainer: Container;
   surveyContainer: Container;
   editorContainer: Container;
@@ -135,7 +137,12 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
   const activityContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const notifyPanelContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const notifyPanel = new NotifyPanelComponent();
-  const queueContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
+  const fullscreen = initialAppState.tuiMode === 'fullscreen';
+  // Docked panels carry their own gutter, so their fullscreen slot is a
+  // layout node rather than a GutterContainer (which the layout treats as one
+  // opaque block and could only clip, not scroll).
+  const queueContainer = fullscreen ? new VStack() : new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
+  const queuePane = new QueuePaneComponent(fullscreen ? { maxBodyRows: DOCK_QUEUE_ROWS } : undefined);
   const btwPanelContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const surveyContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const editorContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
@@ -159,8 +166,11 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     dockContainer = new VStack();
     dockContainer.addChild(activityContainer, { shrink: 1, minSize: 0 });
     dockContainer.addChild(notifyPanelContainer, { shrink: 1, minSize: 0 });
-    dockContainer.addChild(queueContainer, { shrink: 1, minSize: 0 });
-    dockContainer.addChild(btwPanelContainer, { shrink: 1, minSize: 0 });
+    // A blocking prompt (approval or question) takes the space of the queue,
+    // the btw panel and the footer, so its options stay on screen.
+    const unlessBlocked = (): boolean => !isBlockingPromptPending(state);
+    dockContainer.addChild(queueContainer, { shrink: 1, minSize: 0, visible: unlessBlocked });
+    dockContainer.addChild(btwPanelContainer, { shrink: 1, minSize: 0, visible: unlessBlocked });
     dockContainer.addChild(surveyContainer, { shrink: 0, minSize: 0 });
     dockContainer.addChild(editorContainer, { shrink: 1, minSize: 3 });
     const root = new VStack();
@@ -172,7 +182,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     });
   }
 
-  return {
+  const state: TUIState = {
     ui,
     terminal,
     transcriptContainer,
@@ -180,6 +190,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     notifyPanelContainer,
     notifyPanel,
     queueContainer,
+    queuePane,
     btwPanelContainer,
     surveyContainer,
     editorContainer,
@@ -207,4 +218,34 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     queuedMessageDispatchPending: false,
     swarmModeEntry: undefined,
   };
+  return state;
+}
+
+/**
+ * Footer is the only chrome with content before a session is ready, so
+ * mounting it at construction lets a stray pre-start render leak it to the
+ * terminal — e.g. above the error when resuming a missing session. The host
+ * mounts it only once init() succeeds. FooterComponent isn't a Container, so
+ * wrap it to pick up the same outer gutter as the panels above.
+ */
+export function mountFooter(state: TUIState): void {
+  const footerWrap = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
+  footerWrap.addChild(state.footer);
+  const dock = state.dockContainer;
+  if (dock === undefined) {
+    state.ui.addChild(footerWrap);
+    return;
+  }
+  // Dock sizing contract: the footer may shrink to 1 row under extreme height
+  // pressure, and only gives way to a blocking prompt.
+  dock.addChild(footerWrap, {
+    shrink: 1,
+    minSize: 1,
+    visible: () => !isBlockingPromptPending(state),
+  });
+}
+
+/** An approval or question has replaced the editor and waits for the user. */
+export function isBlockingPromptPending(state: Pick<TUIState, 'livePane'>): boolean {
+  return state.livePane.pendingApproval !== null || state.livePane.pendingQuestion !== null;
 }

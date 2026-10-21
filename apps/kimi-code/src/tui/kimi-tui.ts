@@ -115,7 +115,6 @@ import {
   UserMessageComponent,
 } from './components/messages/user-message';
 import { ActivityPaneComponent, type ActivityPaneMode } from './components/panes/activity-pane';
-import { QueuePaneComponent } from './components/panes/queue-pane';
 import { removeLegacySurveySetting, type TuiConfig } from './config';
 import {
   LLM_NOT_SET_MESSAGE,
@@ -152,7 +151,7 @@ import { createQuestionAskHandler } from './reverse-rpc/question/handler';
 import type { ApprovalPanelData, QuestionPanelData } from './reverse-rpc/types';
 import { currentTheme, getColorPalette, getBuiltInPalette, isBuiltInTheme } from './theme';
 import type { ColorToken, ResolvedTheme, ThemeName } from './theme';
-import { createTUIState, type TUIState } from './tui-state';
+import { createTUIState, mountFooter, type TUIState } from './tui-state';
 import {
   INITIAL_LIVE_PANE,
   sumTokenUsage,
@@ -768,7 +767,7 @@ export class KimiTUI {
     const shouldReplayHistory = await this.init();
 
     // Mount only after init() succeeds; see mountFooter().
-    this.mountFooter();
+    mountFooter(this.state);
     this.renderWelcome();
     void this.loadBanner();
     this.setupAutocomplete();
@@ -1254,24 +1253,6 @@ export class KimiTUI {
     ui.addChild(this.state.surveyContainer);
     ui.addChild(this.state.editorContainer);
     // Footer is mounted later (mountFooter), not here.
-  }
-
-  // Footer is the only chrome with content before a session is ready, so
-  // mounting it at construction lets a stray pre-start render leak it to the
-  // terminal — e.g. above the error when resuming a missing session. Mount it
-  // only once init() succeeds. FooterComponent isn't a Container, so wrap it to
-  // pick up the same outer gutter as the panels above.
-  private mountFooter(): void {
-    const footerWrap = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
-    footerWrap.addChild(this.state.footer);
-    const dock = this.state.dockContainer;
-    if (dock !== undefined) {
-      // Dock sizing contract: the footer may shrink to 1 row under extreme
-      // height pressure, but never disappears (see createTUIState).
-      dock.addChild(footerWrap, { shrink: 1, minSize: 1 });
-      return;
-    }
-    this.state.ui.addChild(footerWrap);
   }
 
   // Fullscreen exit: leave the alternate screen with the frame preserved,
@@ -4017,18 +3998,19 @@ export class KimiTUI {
   }
 
   updateQueueDisplay(): void {
-    this.state.queueContainer.clear();
-    const queued = this.state.queuedMessages;
-    if (queued.length === 0) return;
-
-    this.state.queueContainer.addChild(
-      new QueuePaneComponent({
-        messages: queued,
-        isCompacting: this.state.appState.isCompacting,
-        isStreaming: this.state.appState.streamingPhase !== 'idle',
-        canSteerImmediately: !this.deferUserMessages && !this.isSteeringQueuedMessages(),
-      }),
-    );
+    const { queueContainer, queuePane, queuedMessages } = this.state;
+    if (queuedMessages.length === 0) {
+      queueContainer.clear();
+      return;
+    }
+    // The pane is long-lived so a docked list keeps its scroll position.
+    queuePane.setOptions({
+      messages: queuedMessages,
+      isCompacting: this.state.appState.isCompacting,
+      isStreaming: this.state.appState.streamingPhase !== 'idle',
+      canSteerImmediately: !this.deferUserMessages && !this.isSteeringQueuedMessages(),
+    });
+    if (queueContainer.children.length === 0) queueContainer.addChild(queuePane);
   }
 
   /**
