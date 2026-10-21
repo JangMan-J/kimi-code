@@ -96,7 +96,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   private ended = false;
   /** Turn ended and no one is reading: the panel folds to a one-line stub. */
   private collapsed = false;
-  /** The user clicked the ended panel open: it stays open until the next update. */
+  /** The user clicked the panel open: show a close action while it is unfocused. */
   private keptOpen = false;
   /** Set while an approval or question waits: the panel folds and cannot take focus. */
   private promptPending = false;
@@ -177,9 +177,8 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   /**
    * The turn that produced these updates has ended: dim the title and fold
    * the panel down to a one-line stub so the final reply owns the screen. A
-   * focused user keeps reading — the fold lands when they blur. Only the turn
-   * ending folds it: a stub the user clicked open stays open until the next
-   * update, focus or not.
+   * focused user keeps reading, and an ordinary blur does not fold it. Only
+   * an explicit Escape, Ctrl+N or close action folds it after the turn ends.
    */
   setEnded(ended: boolean): void {
     if (ended && !this.ended && !this.hasFocus) this.collapsed = true;
@@ -227,7 +226,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   blur(): boolean {
     if (!this.hasFocus) return false;
     this.hasFocus = false;
-    if (this.ended && !this.keptOpen) this.collapsed = true;
     return true;
   }
 
@@ -241,6 +239,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   handleInput(data: string): void {
     const key = normalizeCapsLockedCtrl(data);
     if (matchesKey(key, Key.escape) || matchesKey(key, Key.ctrl('n'))) {
+      if (this.ended) this.collapsed = true;
       this.keptOpen = false;
       this.onReturnFocus?.(undefined);
     } else if (matchesKey(key, Key.left)) {
@@ -336,6 +335,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
         return;
       case 'close':
         if (this.hasFocus) {
+          if (this.ended) this.collapsed = true;
           this.keptOpen = false;
           this.onReturnFocus?.(undefined);
         } else {

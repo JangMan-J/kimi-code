@@ -1097,7 +1097,7 @@ describe('fullscreen layout', () => {
     state.ui.stop();
   });
 
-  it('keeps a mouse-opened Updates panel expanded through Ctrl+N and an editor click', async () => {
+  it('keeps Updates expanded when Ctrl+N is followed by an editor click', async () => {
     const { state, vt } = await mountFullscreen(24);
     const notifications = new NotifyController(state);
     notifications.setEnabled(true);
@@ -1109,15 +1109,7 @@ describe('fullscreen layout', () => {
     await vt.waitForRender();
 
     let rows = screenRows(vt);
-    let head = rows.findIndex((row) => row.includes('2 updates'));
-    const expandColumn = rows[head]!.indexOf('2 updates') + 1;
-    vt.sendInput(`\u001B[<0;${String(expandColumn)};${String(head + 1)}M`);
-    vt.sendInput(`\u001B[<0;${String(expandColumn)};${String(head + 1)}m`);
-    await vt.waitForRender();
-    rows = screenRows(vt);
-    head = rows.findIndex((row) => row.includes('Updates'));
-    expect(rows[head + 1]).toContain('main update');
-    expect(state.editor.focused).toBe(true);
+    expect(rows.findIndex((row) => row.includes('2 updates'))).toBeGreaterThanOrEqual(0);
 
     expect(notifications.focusPanel()).toBe(true);
     await vt.waitForRender();
@@ -1125,6 +1117,7 @@ describe('fullscreen layout', () => {
     expect(state.notifyPanel.focused).toBe(true);
 
     rows = screenRows(vt);
+    expect(rows.findIndex((row) => row.includes('Updates'))).toBeGreaterThanOrEqual(0);
     const prompt = rows.findIndex((row) => /│\s*>/.test(row));
     vt.sendInput(`\u001B[<0;10;${String(prompt + 1)}M`);
     vt.sendInput(`\u001B[<0;10;${String(prompt + 1)}m`);

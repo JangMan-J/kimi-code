@@ -194,7 +194,7 @@ describe('NotifyPanelComponent', () => {
     expect(titleOf(panel)).toContain('ctrl+n to browse');
   });
 
-  it('folds to a one-line preview stub when the turn ends, expands on focus', () => {
+  it('folds to a stub when the turn ends, expands on focus, and folds on an explicit close', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'phase one intro\n\n- detail one\n- detail two'));
     panel.setEnded(true);
@@ -206,6 +206,7 @@ describe('NotifyPanelComponent', () => {
     expect(expanded.join('\n')).toContain('detail one');
     expect(expanded.length).toBeGreaterThan(2);
 
+    panel.handleInput('\u001B');
     panel.blur();
     expect(render(panel)).toHaveLength(1);
   });
@@ -233,7 +234,7 @@ describe('NotifyPanelComponent', () => {
     expect(collapsed[0]).not.toContain('Two refreshes');
   });
 
-  it('stays expanded without a turn-ended label while reading, then folds on blur', () => {
+  it('stays expanded without a turn-ended label while reading and after an ordinary blur', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'phase one'));
     panel.focus();
@@ -243,7 +244,8 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('phase one');
 
     panel.blur();
-    expect(render(panel)).toHaveLength(1);
+    expect(render(panel).join('\n')).toContain('phase one');
+    expect(titleOf(panel)).toContain('Updates');
   });
 
   it('unfolds and undims when a fresh update arrives after the turn ended', () => {
