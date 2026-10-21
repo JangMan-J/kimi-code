@@ -368,30 +368,70 @@ describe('NotifyPanelComponent', () => {
     ]);
   });
 
-  it('switches channel, pages and closes on clicks in the head, focusing the panel', () => {
+  it('switches channel and pages on clicks in the head without taking focus', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('tc-2', 'main two'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
 
     click(panel, 'main');
-    expect(panel.isFocused()).toBe(true);
-    expect(titleOf(panel)).toContain('Updates ← 2/2 →');
-    click(panel, '←');
-    expect(render(panel).join('\n')).toContain('main one');
-    click(panel, '→');
-    expect(render(panel).join('\n')).toContain('main two');
-    click(panel, 'esc close');
     expect(panel.isFocused()).toBe(false);
+    expect(titleOf(panel)).toContain('Updates < 2/2 >');
+    click(panel, '<');
+    expect(render(panel).join('\n')).toContain('main one');
+    click(panel, '>');
+    expect(render(panel).join('\n')).toContain('main two');
   });
 
-  it('opens the folded stub on a click', () => {
+  it('opens the folded stub on a click without taking focus, and keeps it open', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'phase one'));
     panel.setEnded(true);
     click(panel, 'ctrl+n to expand');
-    expect(panel.isFocused()).toBe(true);
+    expect(panel.isFocused()).toBe(false);
+    expect(render(panel).join('\n')).toContain('phase one');
+    panel.setEnded(true);
     expect(render(panel).join('\n')).toContain('phase one');
   });
+
+  it('follows new updates only while unfocused and showing the newest one', () => {
+    const panel = new NotifyPanelComponent();
+    panel.upsert(entry('tc-1', 'main one'));
+    panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    expect(render(panel).join('\n')).toContain('explore one');
+
+    click(panel, 'main');
+    panel.upsert(entry('a0:c2', 'explore two', 'a0', 'explore'));
+    expect(render(panel).join('\n')).toContain('main one');
+    expect(titleOf(panel)).toContain('explore●');
+
+    click(panel, 'explore●');
+    panel.upsert(entry('tc-2', 'main two'));
+    expect(render(panel).join('\n')).toContain('main two');
+  });
+
+  it('pages with arrow keys while focused and hands every other key back', () => {
+    const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
+    const returned: (string | undefined)[] = [];
+    panel.onReturnFocus = (key) => returned.push(key);
+    panel.upsert(entry('tc-1', 'main one'));
+    panel.upsert(entry('tc-2', 'main two'));
+    panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    panel.focused = true;
+    expect(titleOf(panel)).toMatch(/Updates · shift\+←→ agent ─+ esc close ─$/);
+
+    panel.handleInput('\u001B[1;2D');
+    expect(titleOf(panel)).toContain('Updates ← 2/2 →');
+    panel.handleInput('\u001B[D');
+    expect(render(panel).join('\n')).toContain('main one');
+    panel.handleInput('\u001B[B');
+    expect(returned).toEqual([]);
+
+    panel.handleInput('x');
+    panel.handleInput('\u001B');
+    click(panel, 'esc close');
+    expect(returned).toEqual(['x', undefined, undefined]);
+  });
+
 
 });

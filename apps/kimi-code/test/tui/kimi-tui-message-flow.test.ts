@@ -1212,7 +1212,7 @@ describe('KimiTUI message flow', () => {
     expect(stripSgr(renderTranscript(driver))).not.toContain('skill card');
   });
 
-  it('pages Updates with Ctrl+N and arrow keys while keeping the editor focused', async () => {
+  it('focuses Updates with Ctrl+N, pages with arrow keys, and returns focus to the editor on Esc', async () => {
     const { driver } = await makeDriver(makeSession());
     const notifications = driver.sessionEventHandler.notifications;
     notifications.setEnabled(true);
@@ -1227,18 +1227,21 @@ describe('KimiTUI message flow', () => {
     }
     driver.state.editor.setText('unsent follow-up');
     const cursor = driver.state.editor.getCursor();
-    const setFocus = vi.spyOn(driver.state.ui, 'setFocus');
-    const head = (): string => driver.state.notifyPanel.render(100)[0]!;
+    const { notifyPanel, editor } = driver.state;
+    const head = (): string => notifyPanel.render(100)[0]!;
     expect(head()).toContain('Updates < 3/3 >');
-    driver.state.editor.handleInput('\u000E');
+    editor.handleInput('\u000E');
+    expect(notifyPanel.focused).toBe(true);
+    expect(editor.focused).toBe(false);
     expect(head()).toContain('esc close');
-    driver.state.editor.handleInput('\u001B[D');
+    notifyPanel.handleInput('\u001B[D');
     expect(head()).toContain('Updates ← 2/3 →');
-    driver.state.editor.handleInput('\u001B[C');
+    notifyPanel.handleInput('\u001B[C');
     expect(head()).toContain('Updates ← 3/3 →');
-    driver.state.editor.handleInput('\u001B');
+    notifyPanel.handleInput('\u001B');
+    expect(editor.focused).toBe(true);
+    expect(notifyPanel.focused).toBe(false);
     expect(head()).toContain('ctrl+n to browse');
-    expect(setFocus).not.toHaveBeenCalled();
     expect(driver.state.editor.getText()).toBe('unsent follow-up');
     expect(driver.state.editor.getCursor()).toEqual(cursor);
   });

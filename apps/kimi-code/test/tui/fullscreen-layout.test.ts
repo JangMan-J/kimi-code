@@ -27,6 +27,7 @@ import { ActivityPaneComponent } from '#/tui/components/panes/activity-pane';
 import { CHROME_GUTTER } from '#/tui/constant/rendering';
 import { createTUIState, type KimiTUIOptions } from '#/tui/kimi-tui';
 import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
+import { NotifyController } from '#/tui/controllers/notify';
 import { mountFooter, setEditorSlot } from '#/tui/tui-state';
 import type { AppState, TranscriptEntry } from '#/tui/types';
 import { beginScreenTakeover, endScreenTakeover } from '#/tui/utils/screen-takeover';
@@ -979,6 +980,41 @@ describe('fullscreen layout', () => {
     rows = screenRows(vt);
     expect(rows.join('\n')).not.toContain('Run this command?');
     expect(rows.join('\n')).toContain('test-model');
+
+    state.ui.stop();
+  });
+
+  it('keeps keyboard focus on the editor for clicks on Updates, and takes it back on a click after Ctrl+N', async () => {
+    const { state, vt } = await mountFullscreen(24);
+    const notifications = new NotifyController(state);
+    notifications.setEnabled(true);
+    state.notifyPanel.upsert({ id: 'n1', agentId: 'main', time: 0, text: 'main update' });
+    state.notifyPanel.upsert({ id: 'n2', agentId: 'agent-1', agentName: 'explore', time: 1, text: 'explore update' });
+    state.notifyPanelContainer.addChild(state.notifyPanel);
+    state.ui.requestRender();
+    await vt.waitForRender();
+
+    let rows = screenRows(vt);
+    const head = rows.findIndex((row) => row.includes('Updates'));
+    const mainColumn = rows[head]!.indexOf('main') + 1;
+    vt.sendInput(`\u001B[<0;${String(mainColumn)};${String(head + 1)}M`);
+    vt.sendInput(`\u001B[<0;${String(mainColumn)};${String(head + 1)}m`);
+    await vt.waitForRender();
+    expect(screenRows(vt)[head + 1]).toContain('main update');
+    expect(state.editor.focused).toBe(true);
+
+    expect(notifications.focusPanel()).toBe(true);
+    await vt.waitForRender();
+    expect(state.editor.focused).toBe(false);
+    expect(state.notifyPanel.focused).toBe(true);
+
+    rows = screenRows(vt);
+    const prompt = rows.findIndex((row) => /│\s*>/.test(row));
+    vt.sendInput(`\u001B[<0;10;${String(prompt + 1)}M`);
+    vt.sendInput(`\u001B[<0;10;${String(prompt + 1)}m`);
+    await vt.waitForRender();
+    expect(state.editor.focused).toBe(true);
+    expect(state.notifyPanel.focused).toBe(false);
 
     state.ui.stop();
   });

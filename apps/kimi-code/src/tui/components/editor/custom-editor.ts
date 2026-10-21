@@ -13,7 +13,6 @@ import {
   type TUI,
 } from '@moonshot-ai/pi-tui';
 
-import { NOTIFY_PANEL_KEYS, type NotifyPanelKey } from '#/tui/components/chrome/notify-panel';
 import { currentTheme } from '#/tui/theme';
 import { createEditorTheme } from '#/tui/theme/pi-tui-theme';
 import { printableChar } from '#/tui/utils/printable-key';
@@ -119,6 +118,9 @@ interface CustomEditorOptions {
   disablePasteBurst?: boolean;
 }
 
+// pi-tui's fake cursor: the grapheme under the caret in reverse video.
+const BLOCK_CURSOR = /\u001B\[7m(.*?)\u001B\[0m/u;
+
 export class CustomEditor extends Editor {
   public onEscape?: () => void;
   /**
@@ -136,10 +138,8 @@ export class CustomEditor extends Editor {
   public onCtrlB?: () => boolean;
   /** Ctrl+T: open the background tasks browser. */
   public onOpenTasksBrowser?: () => void;
-  /** Return true to consume Ctrl+N (the Updates panel grabbed or released focus); otherwise use the editor bindings. */
+  /** Return true to consume Ctrl+N (the Updates panel took keyboard focus); otherwise use the editor bindings. */
   public onPageNotify?: () => boolean;
-  /** Route `←`/`→`/`↑`/`↓`/`Esc` to the focused Updates panel; return `true` to consume. */
-  public onNotifyPanelKey?: (key: NotifyPanelKey) => boolean;
   public onUndo?: () => void;
   public onTextPaste?: () => void;
   /**
@@ -338,11 +338,25 @@ export class CustomEditor extends Editor {
         lines[firstContentIdx] = withPrompt;
       }
     }
+    // While another component holds the keyboard (the Updates panel), the
+    // editor looks inactive: no block cursor (pi-tui draws it focused or
+    // not), plain text and the border fade, highlighted tokens keep their
+    // colors.
+    if (!this.focused) {
+      for (let i = firstContentIdx; i < lines.length - 1; i++) {
+        const line = lines[i]?.replace(BLOCK_CURSOR, '$1');
+        if (line === undefined || line.length < 2 || !line.startsWith(' ') || !line.endsWith(' ')) continue;
+        lines[i] = ` ${currentTheme.fg('textDim', line.slice(1, -1))} `;
+      }
+    }
     // `this.borderColor` is pi-tui's per-render paint function. The host may
     // overwrite it (e.g. plan-mode / slash-context highlight via
     // `editor.borderColor = chalk.hex(primary)`), so we route corners and
     // side bars through the same hook to stay in sync.
-    return wrapWithSideBorders(lines, (s) => this.borderColor(s), {
+    const paintBorder = this.focused
+      ? (s: string) => this.borderColor(s)
+      : (s: string) => currentTheme.dim(this.borderColor(s));
+    return wrapWithSideBorders(lines, paintBorder, {
       connectedAbove: this.connectedAbove && !this.borderHighlighted,
       label: isBash ? ` ${currentTheme.boldFg('shellMode', '! shell mode')} ` : undefined,
     });
@@ -488,20 +502,9 @@ export class CustomEditor extends Editor {
     }
 
     if (matchesKey(normalized, Key.ctrl('n'))) {
-      // Only consume the key when the Updates panel grabbed or released
-      // focus; otherwise fall through to the editor default.
+      // Only consume the key when the Updates panel took focus; otherwise
+      // fall through to the editor default.
       if (this.onPageNotify?.() === true) return;
-    }
-
-    // A focused Updates panel owns ←/→ (paging the channel's updates),
-    // Shift+←/→ (channel switching), ↑/↓ (scrolling the update) and Esc
-    // (release focus); when it is not focused the handler returns false and
-    // every key falls through to the normal editor behavior below. Active
-    // autocomplete outranks the panel: its menu needs the same keys for
-    // selection and dismissal.
-    if (!this.hasAutocompleteActivity()) {
-      const panelKey = NOTIFY_PANEL_KEYS.find((key) => matchesKey(normalized, key));
-      if (panelKey !== undefined && this.onNotifyPanelKey?.(panelKey) === true) return;
     }
 
     if (matchesKey(normalized, 'shift+tab')) {

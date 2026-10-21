@@ -4,12 +4,13 @@
  * Updates are grouped into CHANNELS, one per agent: the main agent plus one
  * channel per subagent that posts a `NotifyUser` update. The head is a rule
  * labelled with the channel tabs and a pager; the body is the current update.
- * `Ctrl+N` focuses the panel, then `←`/`→` page through the channel's updates,
- * `Shift+←`/`→` switch channels, `↑`/`↓` scroll a docked body and `Esc`
- * releases. While the user is not focused, the view follows the latest
- * activity across channels; while focused it stays put and other channels
- * collect an unread dot. Docked (fullscreen) the body scrolls past a few rows
- * and the head's tabs, arrows and close button take clicks.
+ * `Ctrl+N` gives the panel keyboard focus, then `←`/`→` page through the
+ * channel's updates, `Shift+←`/`→` switch channels, `↑`/`↓` scroll a docked
+ * body, and `Esc`/`Ctrl+N` hand focus back to the editor; any other key hands
+ * focus back and goes to the editor. Docked (fullscreen), clicks on the head's
+ * tabs, pager and stub change the view without taking focus. A new update
+ * pulls the view along only while the panel is unfocused and showing the
+ * newest update; otherwise other channels collect an unread dot.
  *
  * When the turn ends the panel folds to a one-line stub until the user focuses
  * it; while an approval or question waits it shrinks to a one-line summary of
@@ -18,9 +19,12 @@
  */
 
 import {
+  Key,
+  matchesKey,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
+  type Focusable,
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from '@moonshot-ai/pi-tui';
@@ -60,19 +64,6 @@ interface NotifyChannel {
   readonly unreadIds: Set<string>;
 }
 
-/** Keys a focused panel takes from the editor. */
-export const NOTIFY_PANEL_KEYS = [
-  'left',
-  'right',
-  'shift+left',
-  'shift+right',
-  'up',
-  'down',
-  'escape',
-] as const;
-
-export type NotifyPanelKey = (typeof NOTIFY_PANEL_KEYS)[number];
-
 /** What a click on a head segment does. */
 type HeadAction =
   | { readonly kind: 'channel'; readonly key: string }
@@ -95,38 +86,40 @@ interface HitTarget {
 
 const BODY_INDENT = '  ';
 
-export class NotifyPanelComponent extends DockSection {
+export class NotifyPanelComponent extends DockSection implements Focusable {
   private readonly channels: NotifyChannel[] = [];
   /** Key of the channel on display; channels themselves are append-only. */
   private activeKey = MAIN_AGENT_ID;
-  private focused = false;
+  private hasFocus = false;
+  /** Id of the update that arrived last; the view follows it while it shows it. */
+  private newestId: string | undefined;
   private ended = false;
   /** Turn ended and no one is reading: the panel folds to a one-line stub. */
   private collapsed = false;
   /** Set while an approval or question waits: the panel shrinks to a summary of this agent. */
   private prompt: { readonly agentId: string | undefined } | undefined;
   private hitTargets: readonly HitTarget[] = [];
+  /** Hands keyboard focus back to the editor, forwarding `key` when the panel does not own it. */
+  onReturnFocus: ((key: string | undefined) => void) | undefined;
 
   /**
    * Add or update an entry in a channel. A repeated `id` updates the entry in
-   * place; a new id appends. While unfocused the view jumps to the entry's
-   * channel and its tail — the latest activity always wins; while focused the
-   * user's page stays put and background channels collect unread instead.
+   * place; a new id appends. A new entry pulls the view to its channel's tail
+   * only while the panel is unfocused and showing the newest update, the way
+   * a scrolled-up transcript stops following; otherwise a background channel
+   * collects an unread dot and the pager simply grows.
    */
   upsert(entry: NotifyEntry): void {
+    const following = !this.hasFocus && this.showsNewest();
     const ch = this.channelFor(entry);
     const existing = ch.entries.find((item) => item.id === entry.id);
-    const isNew = existing === undefined;
-    if (existing !== undefined) ch.entries[ch.entries.indexOf(existing)] = entry;
-    else ch.entries.push(entry);
-    if (!this.focused) {
-      const moved = this.activeKey !== ch.key || ch.page !== ch.entries.length - 1;
-      this.activeKey = ch.key;
-      ch.page = ch.entries.length - 1;
-      ch.unreadIds.clear();
-      if (moved) this.scrollBodyToTop();
-    } else if (isNew && ch.key !== this.activeKey) {
-      ch.unreadIds.add(entry.id);
+    if (existing !== undefined) {
+      ch.entries[ch.entries.indexOf(existing)] = entry;
+    } else {
+      ch.entries.push(entry);
+      this.newestId = entry.id;
+      if (following) this.showChannel(ch.key);
+      else if (ch.key !== this.activeKey) ch.unreadIds.add(entry.id);
     }
     this.ended = false;
     this.collapsed = false;
@@ -144,14 +137,16 @@ export class NotifyPanelComponent extends DockSection {
       ch.page = Math.min(ch.page, ch.entries.length - 1);
       ch.unreadIds.delete(id);
     }
-    if (this.channels.length === 0) this.focused = false;
+    if (id === this.newestId) this.newestId = undefined;
+    if (this.channels.length === 0) this.dropFocus();
     return true;
   }
 
   clearUpdates(): void {
     this.channels.length = 0;
     this.activeKey = MAIN_AGENT_ID;
-    this.focused = false;
+    this.dropFocus();
+    this.newestId = undefined;
     this.ended = false;
     this.collapsed = false;
   }
@@ -176,12 +171,13 @@ export class NotifyPanelComponent extends DockSection {
   /**
    * The turn that produced these updates has ended: dim the title and fold
    * the panel down to a one-line stub so the final reply owns the screen. A
-   * focused user keeps reading — the fold lands when they blur.
+   * focused user keeps reading — the fold lands when they blur. Only the turn
+   * ending folds it: a stub the user clicked open stays open.
    */
   setEnded(ended: boolean): void {
-    this.ended = ended;
-    if (ended && !this.focused) this.collapsed = true;
+    if (ended && !this.ended && !this.hasFocus) this.collapsed = true;
     if (!ended) this.collapsed = false;
+    this.ended = ended;
   }
 
   /**
@@ -196,24 +192,63 @@ export class NotifyPanelComponent extends DockSection {
     if (prompt !== undefined) this.blur();
   }
 
-  /** Grab keyboard paging for the panel; returns false when there is nothing to read. */
+  /** Set by the TUI when keyboard focus moves to or away from the panel. */
+  get focused(): boolean {
+    return this.hasFocus;
+  }
+
+  set focused(value: boolean) {
+    if (value) this.focus();
+    else this.blur();
+  }
+
+  /** Whether there is something to read and no prompt holds the keyboard. */
+  canFocus(): boolean {
+    return this.channels.length > 0 && this.prompt === undefined;
+  }
+
   focus(): boolean {
-    if (this.channels.length === 0 || this.prompt !== undefined) return false;
-    this.focused = true;
+    if (!this.canFocus()) return false;
+    this.hasFocus = true;
     this.collapsed = false;
     this.activeChannel().unreadIds.clear();
     return true;
   }
 
   blur(): boolean {
-    if (!this.focused) return false;
-    this.focused = false;
+    if (!this.hasFocus) return false;
+    this.hasFocus = false;
     if (this.ended) this.collapsed = true;
     return true;
   }
 
   isFocused(): boolean {
-    return this.focused;
+    return this.hasFocus;
+  }
+
+  /** Nothing is left to read: hand the keyboard back to the editor. */
+  private dropFocus(): void {
+    if (!this.hasFocus) return;
+    this.hasFocus = false;
+    this.onReturnFocus?.(undefined);
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('n'))) {
+      this.onReturnFocus?.(undefined);
+    } else if (matchesKey(data, 'shift+left')) {
+      this.prevChannel();
+    } else if (matchesKey(data, 'shift+right')) {
+      this.nextChannel();
+    } else if (matchesKey(data, Key.left)) {
+      this.prevPage();
+    } else if (matchesKey(data, Key.right)) {
+      this.nextPage();
+    } else if ((matchesKey(data, Key.up) || matchesKey(data, Key.down)) && this.layout !== undefined) {
+      this.scrollBody(matchesKey(data, Key.up) ? -1 : 1);
+    } else {
+      this.onReturnFocus?.(data);
+    }
   }
 
   /** Older channel (`Shift+←`), landing on its latest update; false on the leftmost tab. */
@@ -283,21 +318,18 @@ export class NotifyPanelComponent extends DockSection {
     switch (action.kind) {
       case 'channel':
         this.showChannel(action.key);
-        this.focus();
         return;
       case 'prev':
         this.prevPage();
-        this.focus();
         return;
       case 'next':
         this.nextPage();
-        this.focus();
         return;
       case 'expand':
-        this.focus();
+        this.collapsed = false;
         return;
       case 'close':
-        this.blur();
+        this.onReturnFocus?.(undefined);
         return;
     }
   }
@@ -352,7 +384,7 @@ export class NotifyPanelComponent extends DockSection {
    * first the other tabs and the hint go, then the label altogether.
    */
   private headSegments(width: number): HeadSegment[] {
-    const rule = (text: string) => currentTheme.fg(this.focused ? 'primary' : 'border', text);
+    const rule = (text: string) => currentTheme.fg(this.hasFocus ? 'primary' : 'border', text);
     const dim = (text: string) => currentTheme.fg('textDim', text);
     const strong = (text: string) =>
       this.ended ? currentTheme.boldFg('textDim', text) : currentTheme.boldFg('primary', text);
@@ -366,9 +398,9 @@ export class NotifyPanelComponent extends DockSection {
       if (ch.entries.length > 1) {
         segments.push(
           { text: ' ', style: strong },
-          { text: this.focused ? '←' : '<', style: strong, action: { kind: 'prev' } },
+          { text: this.hasFocus ? '←' : '<', style: strong, action: { kind: 'prev' } },
           { text: ` ${String(ch.page + 1)}/${String(ch.entries.length)} `, style: strong },
-          { text: this.focused ? '→' : '>', style: strong, action: { kind: 'next' } },
+          { text: this.hasFocus ? '→' : '>', style: strong, action: { kind: 'next' } },
         );
       }
       if (this.ended) segments.push({ text: ' · turn ended', style: strong });
@@ -377,14 +409,14 @@ export class NotifyPanelComponent extends DockSection {
       return segments;
     };
     const close = (text: string): HeadSegment[] =>
-      this.focused
+      this.hasFocus
         ? [
             { text: ' ', style: rule },
             { text, style: dim, action: { kind: 'close' } },
             { text: ' ─', style: rule },
           ]
         : [];
-    const hint = this.focused
+    const hint = this.hasFocus
       ? this.channels.length > 1
         ? 'shift+←→ agent'
         : ''
@@ -479,6 +511,10 @@ export class NotifyPanelComponent extends DockSection {
       .replace(/^[-*#>\s]+/, '')
       .replaceAll('**', '');
     return firstLine === undefined || firstLine.length === 0 ? undefined : firstLine;
+  }
+
+  private showsNewest(): boolean {
+    return this.channels.length === 0 || this.newestId === undefined || this.currentEntry().id === this.newestId;
   }
 
   private currentEntry(): NotifyEntry {

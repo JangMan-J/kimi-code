@@ -60,8 +60,7 @@ function makeHarness(enabled = true, fullscreen = false) {
     editor,
   } as never);
   controller.setEnabled(enabled);
-  editor.onPageNotify = () => controller.toggleFocus();
-  editor.onNotifyPanelKey = (key) => controller.handlePanelKey(key);
+  editor.onPageNotify = () => controller.focusPanel();
   const emit = (
     type: string,
     fields: Record<string, unknown> = {},
@@ -118,7 +117,7 @@ describe('NotifyController', () => {
     h.controller.restore(snapshot());
     expect(h.texts()).toEqual([]);
     expect(h.notifyPanelContainer.children).toEqual([]);
-    expect(h.controller.toggleFocus()).toBe(false);
+    expect(h.controller.focusPanel()).toBe(false);
     expect(h.requestRender).not.toHaveBeenCalled();
   });
 
@@ -283,12 +282,12 @@ describe('NotifyController', () => {
     h.send('n1', 'main done');
     h.emit('turn.ended', { reason: 'completed' });
     expect(h.rendered()).toContain('ctrl+n');
-    h.controller.toggleFocus();
+    h.controller.focusPanel();
     expect(h.rendered()).toContain('main done');
     h.send('n2', 'background finding', 'agent-1');
     expect(h.texts()).toEqual(['main done', 'background finding']);
     expect(h.rendered()).toContain('coder●');
-    h.controller.handlePanelKey('shift+right');
+    h.notifyPanel.handleInput('\u001B[1;2C');
     expect(h.rendered()).toContain('background finding');
     h.emit('subagent.completed', { subagentId: 'agent-1' });
     expect(h.rendered()).toContain('background finding');
@@ -530,7 +529,7 @@ describe('NotifyController', () => {
     expect(h.notifyPanel.getChannels().map((ch) => ch.label)).toEqual(['explore', 'agent-2']);
   });
   it.each([false, true])(
-    'focuses and pages with the keyboard in regular/fullscreen mode without touching the editor: %s',
+    'takes keyboard focus on Ctrl+N, pages, and hands it back on Esc in regular/fullscreen mode: %s',
     (fullscreen) => {
       const h = makeHarness(true, fullscreen);
       h.send('first', 'update one');
@@ -543,6 +542,7 @@ describe('NotifyController', () => {
         const root = h.ui instanceof TuiAltScreen ? h.ui.getLayoutRoot() : [...h.ui.children];
         expect(h.rendered()).toContain('Updates < 3/3 >');
         h.input('\u000E');
+        expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
         expect(h.rendered()).toContain('esc close');
         h.input('\u001B[D');
         expect(h.rendered()).toContain('Updates ← 2/3 →');
@@ -553,18 +553,18 @@ describe('NotifyController', () => {
         if (fullscreen) {
           h.input('\u001B[A');
           h.input('\u001B[B');
-          expect(h.rendered()).toContain('Updates ← 2/3 →');
+          expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
         }
         h.emit('turn.ended', { reason: 'completed' });
         expect(h.rendered()).toContain('Updates ← 2/3 →');
         expect(h.rendered()).toContain('update two');
         expect(h.notifyPanelContainer.children).toEqual([h.notifyPanel]);
-        expect(h.ui.getFocusedComponent()).toBe(h.editor);
-        expect(h.editor.getText()).toBe('unsent draft');
-        expect(h.editor.getCursor()).toEqual(editorCursor);
         if (h.ui instanceof TuiAltScreen) expect(h.ui.getLayoutRoot()).toBe(root);
         else expect(h.ui.children).toEqual(root);
         h.input('\u001B');
+        expect(h.ui.getFocusedComponent()).toBe(h.editor);
+        expect(h.editor.getText()).toBe('unsent draft');
+        expect(h.editor.getCursor()).toEqual(editorCursor);
         expect(h.rendered()).toContain('ctrl+n');
         expect(h.rendered()).toContain('update two');
         expect(h.rendered()).not.toContain('update three');
@@ -577,18 +577,24 @@ describe('NotifyController', () => {
     },
   );
 
-  it('leaves ↑/↓ to the editor while an inline panel is focused', () => {
+  it('hands focus back and lets the editor handle a key the panel does not own', () => {
     const h = makeHarness(true, false);
     h.send('first', 'update one');
     h.editor.setText('line one\nline two');
     h.ui.start();
     try {
       h.input('\u000E');
-      expect(h.notifyPanel.isFocused()).toBe(true);
+      expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
       const before = h.editor.getCursor();
       h.input('\u001B[A');
+      expect(h.ui.getFocusedComponent()).toBe(h.editor);
       expect(h.editor.getCursor().line).toBe(before.line - 1);
-      expect(h.notifyPanel.isFocused()).toBe(true);
+
+      h.input('\u000E');
+      expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
+      h.input('x');
+      expect(h.ui.getFocusedComponent()).toBe(h.editor);
+      expect(h.editor.getText()).toBe('line onex\nline two');
     } finally {
       h.ui.stop();
     }
@@ -636,13 +642,13 @@ describe('NotifyController', () => {
   it('disabling clears retained messages and focus without touching input focus', () => {
     const h = makeHarness();
     h.send('done', 'done update');
-    h.controller.toggleFocus();
+    h.controller.focusPanel();
+    expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
     h.emit('turn.ended', { reason: 'completed' });
     h.controller.setEnabled(false);
     expect(h.ui.getFocusedComponent()).toBe(h.editor);
     expect(h.texts()).toEqual([]);
-    expect(h.controller.toggleFocus()).toBe(false);
-    expect(h.controller.handlePanelKey('left')).toBe(false);
+    expect(h.controller.focusPanel()).toBe(false);
   });
 
   it('mirrors Agent and AgentSwarm delegations into the panel immediately', () => {
@@ -726,14 +732,14 @@ describe('NotifyController', () => {
       name: 'Agent',
       args: { description: 'doomed launch', prompt: '…' },
     });
-    expect(h.controller.toggleFocus()).toBe(true);
+    expect(h.controller.focusPanel()).toBe(true);
+    expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
 
     h.emit('tool.result', { toolCallId: 'a1', isError: true, output: 'unknown profile' });
     expect(h.notifyPanel.isEmpty()).toBe(true);
     expect(h.notifyPanel.isFocused()).toBe(false);
     expect(h.notifyPanelContainer.children).toEqual([]);
-    expect(h.controller.handlePanelKey('up')).toBe(false);
-    expect(h.controller.handlePanelKey('down')).toBe(false);
+    expect(h.ui.getFocusedComponent()).toBe(h.editor);
   });
 
   it('keeps the delegation entry when another agent errors with the same tool call id', () => {
@@ -757,9 +763,9 @@ describe('NotifyController', () => {
     expect(h.rendered()).toContain('phase report intro');
     expect(h.rendered()).not.toContain('detail A');
 
-    h.controller.toggleFocus();
+    h.controller.focusPanel();
     expect(h.rendered()).toContain('detail A');
-    h.controller.handlePanelKey('escape');
+    h.notifyPanel.handleInput('\u001B');
     expect(h.rendered()).toContain('ctrl+n');
     expect(h.rendered()).not.toContain('detail A');
   });

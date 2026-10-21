@@ -29,7 +29,6 @@ import type {
 import { extractMediaAttachments, imageExtensionForMime } from '../utils/image-placeholder';
 import { resolveUserInput } from '../commands/resolve';
 import type { PendingExit, QueuedMessage } from '../types';
-import type { NotifyPanelKey } from '../components/chrome/notify-panel';
 import type { TUIState } from '../tui-state';
 import type { BtwPanelController } from './btw-panel';
 import type { SurveyController } from './survey-controller';
@@ -69,9 +68,8 @@ export interface EditorKeyboardHost {
   updateQueueDisplay(): void;
   toggleToolOutputExpansion(): void;
   openTasksBrowser(): void;
-  /** Returns true when the Updates panel grabbed or released focus. */
-  toggleNotifyPanelFocus(): boolean;
-  handleNotifyPanelKey(key: NotifyPanelKey): boolean;
+  /** Returns true when the Updates panel took keyboard focus. */
+  focusNotifyPanel(): boolean;
   detachCurrentForegroundTask(): void;
   cancelRunningShellCommand(): void;
   hideSessionPicker(): void;
@@ -314,13 +312,11 @@ export class EditorKeyboardController {
     };
 
     editor.onPageNotify = (): boolean => {
-      if (!host.toggleNotifyPanelFocus()) return false;
+      if (!host.focusNotifyPanel()) return false;
       this.clearPendingExit();
       host.track('shortcut_notify_page');
       return true;
     };
-
-    editor.onNotifyPanelKey = (key) => host.handleNotifyPanelKey(key);
 
     editor.onCtrlS = () => {
       if (

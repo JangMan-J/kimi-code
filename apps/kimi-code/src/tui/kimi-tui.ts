@@ -73,7 +73,6 @@ import { BannerComponent } from './components/chrome/banner';
 import { DeviceCodeBoxComponent } from './components/chrome/device-code-box';
 import { GutterContainer } from './components/chrome/gutter-container';
 import { MoonLoader, type SpinnerStyle } from './components/chrome/moon-loader';
-import type { NotifyPanelKey } from './components/chrome/notify-panel';
 import { WelcomeComponent } from './components/chrome/welcome';
 import { pickRandomWorkingTip } from './components/chrome/working-tips';
 import {
@@ -4087,12 +4086,8 @@ export class KimiTUI {
     void this.tasksBrowserController.show();
   }
 
-  toggleNotifyPanelFocus(): boolean {
-    return this.sessionEventHandler.notifications.toggleFocus();
-  }
-
-  handleNotifyPanelKey(key: NotifyPanelKey): boolean {
-    return this.sessionEventHandler.notifications.handlePanelKey(key);
+  focusNotifyPanel(): boolean {
+    return this.sessionEventHandler.notifications.focusPanel();
   }
 
   private async detachRunningShellCommand(): Promise<void> {

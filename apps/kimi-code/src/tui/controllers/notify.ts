@@ -1,6 +1,6 @@
 import type { Event, ResumedSessionState } from '@moonshot-ai/kimi-code-sdk';
 
-import type { NotifyEntry, NotifyPanelKey } from '#/tui/components/chrome/notify-panel';
+import type { NotifyEntry } from '#/tui/components/chrome/notify-panel';
 import { MAIN_AGENT_ID } from '#/tui/constant/kimi-tui';
 import type { TUIState } from '#/tui/tui-state';
 import { argsRecord } from '#/tui/utils/event-payload';
@@ -52,7 +52,7 @@ export class NotifyController {
   private readonly agentNames = new Map<string, string>();
 
   constructor(
-    private readonly state: Pick<TUIState, 'notifyPanel' | 'notifyPanelContainer' | 'ui'>,
+    private readonly state: Pick<TUIState, 'notifyPanel' | 'notifyPanelContainer' | 'ui' | 'editor'>,
   ) {}
 
   setEnabled(enabled: boolean): void {
@@ -83,43 +83,23 @@ export class NotifyController {
     this.state.ui.requestRender();
   }
 
-  toggleFocus(): boolean {
-    if (!this.enabled) return false;
-    const panel = this.state.notifyPanel;
-    const changed = panel.isFocused() ? panel.blur() : panel.focus();
-    if (!changed) return false;
-    this.state.ui.requestRender();
+  /** Ctrl+N from the editor: give the panel keyboard focus; false when there is nothing to read. */
+  focusPanel(): boolean {
+    const { notifyPanel, ui } = this.state;
+    if (!this.enabled || !notifyPanel.canFocus()) return false;
+    notifyPanel.onReturnFocus = (key) => {
+      this.returnFocus(key);
+    };
+    ui.setFocus(notifyPanel);
+    ui.requestRender();
     return true;
   }
 
-  /** Keys for a focused panel; ↑/↓ scroll a docked body and stay with the editor inline. */
-  handlePanelKey(key: NotifyPanelKey): boolean {
-    if (!this.enabled || !this.state.notifyPanel.isFocused()) return false;
-    const panel = this.state.notifyPanel;
-    switch (key) {
-      case 'escape':
-        panel.blur();
-        break;
-      case 'left':
-        panel.prevPage();
-        break;
-      case 'right':
-        panel.nextPage();
-        break;
-      case 'shift+left':
-        panel.prevChannel();
-        break;
-      case 'shift+right':
-        panel.nextChannel();
-        break;
-      case 'up':
-      case 'down':
-        if (panel.layout === undefined) return false;
-        panel.scrollBody(key === 'up' ? -1 : 1);
-        break;
-    }
-    this.state.ui.requestRender();
-    return true;
+  private returnFocus(key: string | undefined): void {
+    const { editor, ui } = this.state;
+    ui.setFocus(editor);
+    if (key !== undefined) editor.handleInput(key);
+    ui.requestRender();
   }
 
   /**

@@ -4,10 +4,12 @@ import type {
   AutocompleteSuggestions,
   TUI,
 } from '@moonshot-ai/pi-tui';
-import { describe, expect, it, vi } from 'vitest';
+import chalk from 'chalk';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { CustomEditor } from '#/tui/components/editor/custom-editor';
 import { FileMentionProvider } from '#/tui/components/editor/file-mention-provider';
+import { currentTheme } from '#/tui/theme';
 
 function makeEditor(): CustomEditor {
   const tui = {
@@ -683,40 +685,30 @@ describe('CustomEditor shortcut telemetry hooks', () => {
     },
   );
 
-  it.each([
-    ['\u001B[D', 'left'],
-    ['\u001B[C', 'right'],
-    ['\u001B[1;2D', 'shift+left'],
-    ['\u001B[1;2C', 'shift+right'],
-    ['\u001B[A', 'up'],
-    ['\u001B[B', 'down'],
-    ['\u001B', 'escape'],
-  ] as const)('routes %j to the focused Updates panel as %s', (key, panelKey) => {
+  it('fades plain text and the border while another component holds focus, keeping highlighted tokens', () => {
+    const previousLevel = chalk.level;
+    chalk.level = 3;
+    onTestFinished(() => {
+      chalk.level = previousLevel;
+    });
+    const openCode = (token: 'textDim' | 'primary'): string => currentTheme.fg(token, 'x').split('x')[0]!;
     const editor = makeEditor();
-    const onNotifyPanelKey = vi.fn().mockReturnValue(true);
-    editor.onNotifyPanelKey = onNotifyPanelKey;
-    editor.setText('draft');
-    editor.handleInput(key);
-    expect(onNotifyPanelKey).toHaveBeenCalledWith(panelKey);
-    expect(editor.getText()).toBe('draft');
-  });
+    editor.setText('/help me');
 
-  it.each(['\u001B[D', '\u001B[A', '\u001B'] as const)(
-    'leaves %j to autocomplete even when the Updates panel is focused',
-    (key) => {
-      const editor = makeEditor();
-      const onNotifyPanelKey = vi.fn();
-      editor.onNotifyPanelKey = onNotifyPanelKey;
-      const internals = editor as unknown as { cancelAutocompleteActivity: () => void };
-      const cancelAutocomplete = vi.spyOn(internals, 'cancelAutocompleteActivity');
-      cancelAutocomplete.mockImplementation(() => {});
-      vi.spyOn(editor, 'hasAutocompleteActivity').mockReturnValue(true);
-      editor.setText('/rev');
-      editor.handleInput(key);
-      expect(onNotifyPanelKey).not.toHaveBeenCalled();
-      if (key === '\u001B') expect(cancelAutocomplete).toHaveBeenCalledOnce();
-    },
-  );
+    editor.focused = true;
+    const focused = editor.render(40);
+    expect(focused[1]).not.toContain(openCode('textDim'));
+    expect(focused[0]).not.toContain('\u001B[2m');
+
+    editor.focused = false;
+    const unfocused = editor.render(40);
+    const token = (line: string): string =>
+      line.slice(line.indexOf(openCode('primary')), line.indexOf('/help') + '/help'.length);
+    expect(token(unfocused[1]!)).toBe(token(focused[1]!));
+    expect(unfocused[1]).toContain(`${openCode('textDim')} me`);
+    expect(unfocused[1]).not.toContain('\u001B[7m');
+    expect(unfocused[0]).toContain('\u001B[2m');
+  });
 
   it('keeps the original editor bindings when Updates paging is unavailable', () => {
     const editor = makeEditor();

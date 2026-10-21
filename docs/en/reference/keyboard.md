@@ -15,7 +15,7 @@ The following keys are always available in the input box:
 | `Ctrl-C` | Interrupt the current streaming output, or clear the input box |
 | `Ctrl-D` | Exit Kimi Code CLI when the input box is empty |
 | `Ctrl-T` | Open or close the background tasks browser |
-| `Ctrl-N` | Focus or release the experimental `Updates` panel. While it is focused, `←` / `→` page through updates, `Shift-←` / `Shift-→` switch agents, `↑` / `↓` scroll a long update in fullscreen mode, and `Esc` releases it |
+| `Ctrl-N` | Focus the experimental `Updates` panel. While it is focused, `←` / `→` page through updates, `Shift-←` / `Shift-→` switch agents, and `↑` / `↓` scroll a long update in fullscreen mode. `Esc` or `Ctrl-N` returns to the input box; any other key also returns to the input box and takes effect there |
 
 Pressing `Ctrl-C` **during streaming** cancels immediately — no second confirmation needed.
 
