@@ -892,7 +892,7 @@ describe('fullscreen layout', () => {
       id: 'n1',
       agentId: 'main',
       time: 0,
-      title: 'Rewriting the approval panel',
+      title: 'Running the test suite',
       text: Array.from({ length: 9 }, (_, i) => `- body ${String(i + 1)}`).join('\n'),
     });
     state.notifyPanelContainer.addChild(state.notifyPanel);
@@ -902,7 +902,7 @@ describe('fullscreen layout', () => {
     let rows = screenRows(vt);
     const head = rows.findIndex((row) => row.includes('main · Updates'));
     expect(rows[head]).toContain('ctrl+n to browse');
-    expect(rows[head + 1]).toContain('Rewriting the approval panel');
+    expect(rows[head + 1]).toContain('Running the test suite');
     expect(rows[head + 6]).toContain('body 5');
     expect(rows[head + 7]).not.toContain('body 6');
     expect(rows[head + 1]!.at(-1)).toBe('┃');
@@ -918,8 +918,8 @@ describe('fullscreen layout', () => {
     state.ui.requestRender();
     await vt.waitForRender();
     rows = screenRows(vt);
-    expect(rows.filter((row) => row.includes('Rewriting the approval panel'))).toEqual([
-      '  ▸ main · Rewriting the approval panel',
+    expect(rows.filter((row) => row.includes('Running the test suite'))).toEqual([
+      '  ▸ main · Running the test suite',
     ]);
     expect(rows.join('\n')).not.toContain('body 1');
 
