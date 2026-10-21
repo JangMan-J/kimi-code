@@ -60,6 +60,8 @@ describe('Event public types', () => {
     expectTypeOf<ApprovalRequest['turnId']>().toEqualTypeOf<number | undefined>();
     expectTypeOf<ApprovalRequest['toolName']>().toEqualTypeOf<string>();
     expectTypeOf<QuestionRequest['questions'][number]['question']>().toEqualTypeOf<string>();
+    expectTypeOf<ApprovalRequest['agentId']>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<QuestionRequest['agentId']>().toEqualTypeOf<string | undefined>();
   });
 
   it('exposes optional session scope on approval responses', () => {

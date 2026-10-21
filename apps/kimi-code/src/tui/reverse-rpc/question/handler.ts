@@ -37,6 +37,7 @@ export function adaptQuestionRequest(event: QuestionRequest): QuestionPanelData 
         description: option.description,
       })),
     })),
+    agent_id: event.agentId,
   };
 }
 
