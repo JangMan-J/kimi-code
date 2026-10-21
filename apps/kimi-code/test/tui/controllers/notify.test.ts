@@ -737,7 +737,7 @@ describe('NotifyController', () => {
 
     h.emit('tool.result', { toolCallId: 'a1', isError: true, output: 'unknown profile' });
     expect(h.notifyPanel.isEmpty()).toBe(true);
-    expect(h.notifyPanel.isFocused()).toBe(false);
+    expect(h.notifyPanel.focused).toBe(false);
     expect(h.notifyPanelContainer.children).toEqual([]);
     expect(h.ui.getFocusedComponent()).toBe(h.editor);
   });

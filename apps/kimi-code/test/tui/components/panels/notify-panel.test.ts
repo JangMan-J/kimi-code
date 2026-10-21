@@ -265,7 +265,7 @@ describe('NotifyPanelComponent', () => {
 
     expect(panel.remove('tc-1')).toBe(true);
     expect(panel.isEmpty()).toBe(true);
-    expect(panel.isFocused()).toBe(false);
+    expect(panel.focused).toBe(false);
     expect(panel.prevPage()).toBe(false);
     expect(panel.nextPage()).toBe(false);
   });
@@ -346,7 +346,7 @@ describe('NotifyPanelComponent', () => {
 
     panel.setPrompt({ agentId: 'a0' });
     expect(render(panel)).toEqual(['  ▸ explore · Checking the auth tests']);
-    expect(panel.isFocused()).toBe(false);
+    expect(panel.focused).toBe(false);
     expect(panel.focus()).toBe(false);
 
     panel.setPrompt({ agentId: 'agent-without-updates' });
@@ -375,7 +375,7 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
 
     click(panel, 'main');
-    expect(panel.isFocused()).toBe(false);
+    expect(panel.focused).toBe(false);
     expect(titleOf(panel)).toContain('Updates < 2/2 >');
     click(panel, '<');
     expect(render(panel).join('\n')).toContain('main one');
@@ -388,10 +388,44 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('tc-1', 'phase one'));
     panel.setEnded(true);
     click(panel, 'ctrl+n to expand');
-    expect(panel.isFocused()).toBe(false);
+    expect(panel.focused).toBe(false);
     expect(render(panel).join('\n')).toContain('phase one');
     panel.setEnded(true);
     expect(render(panel).join('\n')).toContain('phase one');
+  });
+
+  it('opens the folded stub on a tab click, and keeps a clicked-open panel open across a focus round trip', () => {
+    const panel = new NotifyPanelComponent();
+    panel.upsert(entry('tc-1', 'main one'));
+    panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    panel.setEnded(true);
+    const body = (): string[] => render(panel).slice(1).map((line) => line.trimEnd());
+    expect(body()).toEqual([]);
+    click(panel, 'main');
+    expect(body()).toEqual(['  main one']);
+
+    panel.focused = true;
+    panel.focused = false;
+    expect(body()).toEqual(['  main one']);
+
+    panel.upsert(entry('tc-2', 'main two'));
+    panel.setEnded(true);
+    expect(render(panel)).toHaveLength(1);
+  });
+
+  it('keeps an older page when the newest update is retracted and another arrives', () => {
+    const panel = new NotifyPanelComponent();
+    panel.upsert(entry('tc-1', 'main old'));
+    panel.upsert(entry('tc-2', 'main newer'));
+    panel.upsert(entry('delegation:1', 'delegated'));
+    click(panel, '<');
+    click(panel, '<');
+    expect(render(panel).join('\n')).toContain('main old');
+
+    panel.remove('delegation:1');
+    panel.upsert(entry('a0:c1', 'explore update', 'a0', 'explore'));
+    expect(render(panel).join('\n')).toContain('main old');
+    expect(titleOf(panel)).toContain('explore●');
   });
 
   it('follows new updates only while unfocused and showing the newest one', () => {
@@ -429,9 +463,8 @@ describe('NotifyPanelComponent', () => {
 
     panel.handleInput('x');
     panel.handleInput('\u001B');
+    panel.handleInput('\u001B[78;69u');
     click(panel, 'esc close');
-    expect(returned).toEqual(['x', undefined, undefined]);
+    expect(returned).toEqual(['x', undefined, undefined, undefined]);
   });
-
-
 });

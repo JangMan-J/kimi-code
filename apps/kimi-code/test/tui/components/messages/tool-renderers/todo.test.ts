@@ -71,6 +71,22 @@ describe('TodoList card', () => {
     expect(cardLines(todoCard(todos))[0]).toBe('● Used TodoList');
   });
 
+  it('keeps only the headline when a row does not parse, instead of inventing items', () => {
+    const output = [
+      'Todo list updated.',
+      'Current todo list:',
+      '  [in_progress] Update docs',
+      '[pending] quoted status',
+      '',
+      '"Update docs" is the last open item.',
+    ].join('\n');
+    const card = new ToolCallComponent(
+      { id: 'call_multi', name: 'TodoList', args: { todos: [] } },
+      { tool_call_id: 'call_multi', output, is_error: false },
+    );
+    expect(cardLines(card)).toEqual(['● Used TodoList']);
+  });
+
   it('keeps only the headline for a cleared list and for a failed call', () => {
     const cleared = new ToolCallComponent(
       { id: 'call_clear', name: 'TodoList', args: { todos: [] } },

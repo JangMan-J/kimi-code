@@ -25,17 +25,31 @@ export interface VisibleTodos {
   readonly hiddenCounts: Record<TodoStatus, number>;
 }
 
-// One row of the list a TodoList result reports. Reads and writes print the
-// list the same way, and a resumed session keeps only this text, not the
-// structured display, so the card parses it for both.
-const RESULT_ROW = /^\s*\[(pending|in_progress|done)\] (.+)$/;
+// A TodoList result prints the list as a header line followed by one
+// `  [status] title` row per item, for reads and writes alike; a resumed
+// session keeps only this text, not the structured display, so the card
+// parses it for both. Rows end at the first blank line (a write appends a
+// hint after one).
+const LIST_HEADER = 'Current todo list:';
+const RESULT_ROW = /^ {2}\[(pending|in_progress|done)\] (.+)$/;
 
-/** The list a successful TodoList result reports; empty when it reports none (e.g. a cleared list). */
+/**
+ * The list a successful TodoList result reports. Empty when it reports none
+ * (a cleared list) or when a row does not parse (e.g. a title spanning lines),
+ * so the card falls back to its headline instead of showing a wrong list.
+ */
 export function todoListFromResult(output: string): TodoItem[] {
-  return output.split('\n').flatMap((line) => {
+  const lines = output.split('\n');
+  const start = lines.indexOf(LIST_HEADER);
+  if (start === -1) return [];
+  const end = lines.indexOf('', start + 1);
+  const todos: TodoItem[] = [];
+  for (const line of lines.slice(start + 1, end === -1 ? undefined : end)) {
     const match = RESULT_ROW.exec(line);
-    return match === null ? [] : [{ status: match[1] as TodoStatus, title: match[2]! }];
-  });
+    if (match === null) return [];
+    todos.push({ status: match[1] as TodoStatus, title: match[2]! });
+  }
+  return todos;
 }
 
 /** A TodoList call without `todos` only reads the list. */

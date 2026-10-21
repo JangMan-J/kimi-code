@@ -36,6 +36,8 @@ import { currentTheme } from '#/tui/theme';
 import { createMarkdownTheme } from '#/tui/theme/pi-tui-theme';
 import { createMarkdownOptions } from '#/tui/utils/markdown-options';
 
+import { normalizeCapsLockedCtrl } from '../editor/custom-editor';
+
 import { DockSection, type DockPart } from './dock-section';
 
 export interface NotifyEntry {
@@ -91,11 +93,13 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   /** Key of the channel on display; channels themselves are append-only. */
   private activeKey = MAIN_AGENT_ID;
   private hasFocus = false;
-  /** Id of the update that arrived last; the view follows it while it shows it. */
-  private newestId: string | undefined;
+  /** Update ids in arrival order; the view follows the last one while it shows it. */
+  private readonly arrivals: string[] = [];
   private ended = false;
   /** Turn ended and no one is reading: the panel folds to a one-line stub. */
   private collapsed = false;
+  /** The user clicked the ended panel open: it stays open until the next update. */
+  private keptOpen = false;
   /** Set while an approval or question waits: the panel shrinks to a summary of this agent. */
   private prompt: { readonly agentId: string | undefined } | undefined;
   private hitTargets: readonly HitTarget[] = [];
@@ -117,12 +121,13 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       ch.entries[ch.entries.indexOf(existing)] = entry;
     } else {
       ch.entries.push(entry);
-      this.newestId = entry.id;
+      this.arrivals.push(entry.id);
       if (following) this.showChannel(ch.key);
       else if (ch.key !== this.activeKey) ch.unreadIds.add(entry.id);
     }
     this.ended = false;
     this.collapsed = false;
+    this.keptOpen = false;
   }
 
   remove(id: string): boolean {
@@ -137,7 +142,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       ch.page = Math.min(ch.page, ch.entries.length - 1);
       ch.unreadIds.delete(id);
     }
-    if (id === this.newestId) this.newestId = undefined;
+    this.arrivals.splice(this.arrivals.indexOf(id), 1);
     if (this.channels.length === 0) this.dropFocus();
     return true;
   }
@@ -146,9 +151,10 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     this.channels.length = 0;
     this.activeKey = MAIN_AGENT_ID;
     this.dropFocus();
-    this.newestId = undefined;
+    this.arrivals.length = 0;
     this.ended = false;
     this.collapsed = false;
+    this.keptOpen = false;
   }
 
   isEmpty(): boolean {
@@ -172,11 +178,15 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
    * The turn that produced these updates has ended: dim the title and fold
    * the panel down to a one-line stub so the final reply owns the screen. A
    * focused user keeps reading — the fold lands when they blur. Only the turn
-   * ending folds it: a stub the user clicked open stays open.
+   * ending folds it: a stub the user clicked open stays open until the next
+   * update, focus or not.
    */
   setEnded(ended: boolean): void {
     if (ended && !this.ended && !this.hasFocus) this.collapsed = true;
-    if (!ended) this.collapsed = false;
+    if (!ended) {
+      this.collapsed = false;
+      this.keptOpen = false;
+    }
     this.ended = ended;
   }
 
@@ -218,12 +228,8 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   blur(): boolean {
     if (!this.hasFocus) return false;
     this.hasFocus = false;
-    if (this.ended) this.collapsed = true;
+    if (this.ended && !this.keptOpen) this.collapsed = true;
     return true;
-  }
-
-  isFocused(): boolean {
-    return this.hasFocus;
   }
 
   /** Nothing is left to read: hand the keyboard back to the editor. */
@@ -234,18 +240,21 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl('n'))) {
+    const key = normalizeCapsLockedCtrl(data);
+    if (matchesKey(key, Key.escape) || matchesKey(key, Key.ctrl('n'))) {
       this.onReturnFocus?.(undefined);
-    } else if (matchesKey(data, 'shift+left')) {
+    } else if (matchesKey(key, 'shift+left')) {
       this.prevChannel();
-    } else if (matchesKey(data, 'shift+right')) {
+    } else if (matchesKey(key, 'shift+right')) {
       this.nextChannel();
-    } else if (matchesKey(data, Key.left)) {
+    } else if (matchesKey(key, Key.left)) {
       this.prevPage();
-    } else if (matchesKey(data, Key.right)) {
+    } else if (matchesKey(key, Key.right)) {
       this.nextPage();
-    } else if ((matchesKey(data, Key.up) || matchesKey(data, Key.down)) && this.layout !== undefined) {
-      this.scrollBody(matchesKey(data, Key.up) ? -1 : 1);
+    } else if (this.layout !== undefined && matchesKey(key, Key.up)) {
+      this.scrollBody(-1);
+    } else if (this.layout !== undefined && matchesKey(key, Key.down)) {
+      this.scrollBody(1);
     } else {
       this.onReturnFocus?.(data);
     }
@@ -318,6 +327,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     switch (action.kind) {
       case 'channel':
         this.showChannel(action.key);
+        this.openByClick();
         return;
       case 'prev':
         this.prevPage();
@@ -326,12 +336,18 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
         this.nextPage();
         return;
       case 'expand':
-        this.collapsed = false;
+        this.openByClick();
         return;
       case 'close':
         this.onReturnFocus?.(undefined);
         return;
     }
+  }
+
+  private openByClick(): void {
+    if (!this.collapsed) return;
+    this.collapsed = false;
+    this.keptOpen = true;
   }
 
   private showChannel(key: string): void {
@@ -514,7 +530,8 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   }
 
   private showsNewest(): boolean {
-    return this.channels.length === 0 || this.newestId === undefined || this.currentEntry().id === this.newestId;
+    const newest = this.arrivals.at(-1);
+    return this.channels.length === 0 || newest === undefined || this.currentEntry().id === newest;
   }
 
   private currentEntry(): NotifyEntry {
