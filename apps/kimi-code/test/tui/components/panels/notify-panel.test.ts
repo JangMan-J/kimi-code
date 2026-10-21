@@ -361,32 +361,35 @@ describe('NotifyPanelComponent', () => {
     expect(lines.at(-1)).toContain('row 5');
   });
 
-  it('shrinks a docked panel to a summary of the asking agent while a prompt waits, and refuses focus', () => {
+  it('folds a docked panel while a prompt waits and reopens it afterward', () => {
     const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
     panel.upsert({ ...entry('a0:c1', 'details', 'a0', 'explore'), title: 'Checking the auth tests' });
     panel.upsert({ ...entry('tc-1', 'main is planning'), time: 1 });
     panel.focus();
 
-    panel.setPrompt({ agentId: 'a0' });
-    expect(render(panel)).toEqual(['  ▸ explore · Checking the auth tests']);
+    panel.setPrompt(true);
+    expect(render(panel)).toHaveLength(1);
+    expect(titleOf(panel)).toContain('2 updates');
+    expect(titleOf(panel)).toContain('Checking the auth tests');
+    expect(titleOf(panel)).not.toContain('Updates');
+    expect(titleOf(panel)).not.toContain('ctrl+n to expand');
     expect(panel.focused).toBe(false);
     expect(panel.focus()).toBe(false);
 
-    panel.setPrompt({ agentId: 'agent-without-updates' });
-    expect(render(panel)).toEqual(['  ▸ agent-without-updates']);
+    panel.upsert(entry('tc-2', 'main newer'));
+    expect(render(panel)).toHaveLength(1);
+    expect(titleOf(panel)).toContain('3 updates');
 
-    panel.setPrompt({ agentId: undefined });
-    expect(render(panel)).toEqual(['  ▸ main · main is planning']);
-
-    panel.setPrompt(undefined);
-    expect(titleOf(panel)).toContain('Updates · ctrl+n to browse');
+    panel.setPrompt(false);
+    expect(titleOf(panel)).toContain('ctrl+n to expand');
     expect(panel.focus()).toBe(true);
+    expect(titleOf(panel)).toContain('Updates');
   });
 
   it('keeps an inline panel whole while a prompt waits', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert({ ...entry('tc-1', 'IMPORTANT body'), title: 'Latest update' });
-    panel.setPrompt({ agentId: 'main' });
+    panel.setPrompt(true);
     expect(render(panel).map((line) => line.trimEnd())).toEqual([
       expect.stringMatching(/^─ main · Updates · ctrl\+n to browse ─+$/),
       '  Latest update',

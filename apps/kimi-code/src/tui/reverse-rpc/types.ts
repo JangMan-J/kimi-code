@@ -118,8 +118,6 @@ export interface ApprovalPanelData {
   description: string;
   display: DisplayBlock[];
   choices: ApprovalPanelChoice[];
-  /** The agent whose tool call needs approval; absent when the client did not say. */
-  agent_id?: string;
 }
 
 export interface QuestionPanelItem {
@@ -136,8 +134,6 @@ export interface QuestionPanelData {
   id: string;
   tool_call_id: string;
   questions: QuestionPanelItem[];
-  /** The agent asking; absent when the client did not say. */
-  agent_id?: string;
 }
 
 export type QuestionSubmissionMethod = QuestionAnswerMethod;

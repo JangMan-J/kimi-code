@@ -38,7 +38,6 @@ describe('question reverse-rpc', () => {
       .mockResolvedValue({ answers: ['Alpha'], method: 'number_key' });
     const handler = createQuestionAskHandler(controller);
     const event = questionEvent({
-      agentId: 'agent-explore',
       questions: [
         {
           question: 'Q1?',
@@ -70,7 +69,6 @@ describe('question reverse-rpc', () => {
           options: [{ label: 'Alpha', description: 'First option' }],
         },
       ],
-      agent_id: 'agent-explore',
     });
 
     show.mockResolvedValueOnce({ answers: [''] });

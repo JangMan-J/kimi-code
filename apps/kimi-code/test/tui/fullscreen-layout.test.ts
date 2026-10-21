@@ -915,7 +915,7 @@ describe('fullscreen layout', () => {
     state.ui.stop();
   });
 
-  it('caps and scrolls Updates, resets on a new page, and folds to an approval summary', async () => {
+  it('caps and scrolls Updates, resets on a new page, and folds during an approval', async () => {
     const { state, vt } = await mountFullscreen(24);
     state.notifyPanel.upsert({
       id: 'n1',
@@ -966,12 +966,12 @@ describe('fullscreen layout', () => {
     expect(rows[head + 2]).toContain('next body 1');
 
     state.livePane.pendingApproval = pendingApproval();
-    state.notifyPanel.setPrompt({ agentId: 'main' });
+    state.notifyPanel.setPrompt(true);
     state.ui.requestRender();
     await vt.waitForRender();
     rows = screenRows(vt);
     expect(rows.filter((row) => row.includes('Next update'))).toEqual([
-      '  ▸ main · Next update',
+      '  ▸ main · 2 updates · Next update',
     ]);
     expect(rows.join('\n')).not.toContain('body 1');
 

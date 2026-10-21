@@ -42,19 +42,6 @@ describe('approval adapter', () => {
     ]);
   });
 
-  it('keeps the requesting agent id so the panel can name it', () => {
-    const request = {
-      toolCallId: 'tc-sub',
-      toolName: 'Bash',
-      action: 'run',
-      display: { kind: 'command' as const, command: 'ls' },
-    };
-    expect(adaptApprovalRequest({ ...request, agentId: 'agent-explore' }).agent_id).toBe(
-      'agent-explore',
-    );
-    expect(adaptApprovalRequest(request).agent_id).toBeUndefined();
-  });
-
   it('emits only a diff block for Edit — no separate file_op title row', () => {
     const adapted = adaptApprovalRequest(
       {

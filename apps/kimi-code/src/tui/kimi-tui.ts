@@ -4694,7 +4694,7 @@ export class KimiTUI {
 
   private showApprovalPanel(payload: ApprovalPanelData): void {
     this.patchLivePane({ pendingApproval: { data: payload } });
-    this.sessionEventHandler.notifications.setPrompt({ agentId: payload.agent_id });
+    this.sessionEventHandler.notifications.setPrompt(true);
     notifyTerminalOnce(this.state, `approval:${payload.id}`, {
       title: 'Kimi Code approval required',
       body: payload.tool_name,
@@ -4726,7 +4726,7 @@ export class KimiTUI {
     if (this.approvalPreview !== undefined) this.closeApprovalPreview();
     this.activeApprovalPanel = undefined;
     this.patchLivePane({ pendingApproval: null });
-    this.sessionEventHandler.notifications.setPrompt(undefined);
+    this.sessionEventHandler.notifications.setPrompt(false);
     this.restoreEditor();
   }
 
@@ -4764,7 +4764,7 @@ export class KimiTUI {
 
   private showQuestionDialog(payload: QuestionPanelData): void {
     this.patchLivePane({ pendingQuestion: { data: payload } });
-    this.sessionEventHandler.notifications.setPrompt({ agentId: payload.agent_id });
+    this.sessionEventHandler.notifications.setPrompt(true);
     notifyTerminalOnce(this.state, `question:${payload.id}`, {
       title: 'Kimi Code needs your answer',
       body: payload.questions[0]?.question,
@@ -4784,7 +4784,7 @@ export class KimiTUI {
 
   private hideQuestionDialog(): void {
     this.patchLivePane({ pendingQuestion: null });
-    this.sessionEventHandler.notifications.setPrompt(undefined);
+    this.sessionEventHandler.notifications.setPrompt(false);
     this.restoreEditor();
   }
 }
