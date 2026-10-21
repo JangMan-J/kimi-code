@@ -32,7 +32,7 @@ import { currentTheme } from '#/tui/theme';
 import { createMarkdownTheme } from '#/tui/theme/pi-tui-theme';
 import { createMarkdownOptions } from '#/tui/utils/markdown-options';
 
-import { DockSection, type DockLayout, type DockPart } from './dock-section';
+import { DockSection, type DockPart } from './dock-section';
 
 export interface NotifyEntry {
   readonly id: string;
@@ -113,10 +113,6 @@ export class NotifyPanelComponent extends DockSection {
   private prompt: { readonly agentId: string | undefined } | undefined;
   private hitTargets: readonly HitTarget[] = [];
   private hovered: HeadAction | undefined;
-
-  constructor(layout?: DockLayout) {
-    super(layout);
-  }
 
   /**
    * Add or update an entry in a channel. A repeated `id` updates the entry in
@@ -376,8 +372,11 @@ export class NotifyPanelComponent extends DockSection {
       this.ended ? currentTheme.boldFg('textDim', text) : currentTheme.boldFg('primary', text);
     const ch = this.activeChannel();
     const label = (tabs: HeadSegment[], hint: string): HeadSegment[] => {
-      const segments: HeadSegment[] = [{ text: '─ ', style: rule }, ...tabs];
-      segments.push({ text: ' · Updates', style: strong });
+      const segments: HeadSegment[] = [
+        { text: '─ ', style: rule },
+        ...tabs,
+        { text: ' · Updates', style: strong },
+      ];
       if (ch.entries.length > 1) {
         segments.push(
           { text: ' ', style: strong },

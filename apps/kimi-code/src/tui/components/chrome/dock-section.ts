@@ -41,7 +41,7 @@ class OverflowScrollView extends ScrollView {
 export abstract class DockSection extends VStack {
   private readonly bodyScroll: ScrollView | undefined;
 
-  constructor(readonly layout: DockLayout | undefined) {
+  constructor(readonly layout?: DockLayout) {
     super();
     const view = (part: DockPart): Component => ({
       render: (width) => this.renderPart(part, width),

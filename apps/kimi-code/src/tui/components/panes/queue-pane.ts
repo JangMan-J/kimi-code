@@ -2,7 +2,7 @@ import { truncateToWidth, visibleWidth } from '@moonshot-ai/pi-tui';
 
 import { SELECT_POINTER } from '../../constant/symbols';
 import type { QueuedMessage } from '../../types';
-import { DockSection, type DockLayout, type DockPart } from '#/tui/components/chrome/dock-section';
+import { DockSection, type DockPart } from '#/tui/components/chrome/dock-section';
 import { currentTheme } from '#/tui/theme';
 
 export interface QueuePaneOptions {
@@ -18,10 +18,6 @@ const ELLIPSIS = '…';
 export class QueuePaneComponent extends DockSection {
   private messages: readonly QueuedMessage[] = [];
   private hint: string | undefined;
-
-  constructor(layout?: DockLayout) {
-    super(layout);
-  }
 
   setOptions(options: QueuePaneOptions): void {
     this.messages = options.messages;

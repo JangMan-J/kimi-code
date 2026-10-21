@@ -398,7 +398,7 @@ describe('NotifyPanelComponent', () => {
 
     const x = titleOf(panel).indexOf('main');
     expect(panel.handleMouse(mouse('move', x))).toMatchObject({ handled: true, render: true });
-    expect(panel.render(80)[0]).toContain(`${underline}`);
+    expect(panel.render(80)[0]).toContain(underline);
     expect(strip(panel.render(80)[0]!)).toBe(titleOf(panel));
     expect(panel.handleMouse(mouse('move', 0))).toMatchObject({ handled: true, render: true });
     expect(panel.render(80)[0]).not.toContain(underline);
