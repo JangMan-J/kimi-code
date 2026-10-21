@@ -13,10 +13,18 @@ function strip(text: string): string {
 
 const todo = (title: string, status: TodoItem['status']): TodoItem => ({ title, status });
 
-function todoCard(todos: readonly TodoItem[] | undefined, isError = false): ToolCallComponent {
+function resultText(todos: readonly TodoItem[]): string {
+  return ['Current todo list:', ...todos.map((item) => `  [${item.status}] ${item.title}`)].join('\n');
+}
+
+function todoCard(todos: readonly TodoItem[], isError = false): ToolCallComponent {
   return new ToolCallComponent(
-    { id: 'call_todo', name: 'TodoList', args: todos === undefined ? {} : { todos } },
-    { tool_call_id: 'call_todo', output: 'Todo list updated', is_error: isError },
+    { id: 'call_todo', name: 'TodoList', args: { todos } },
+    {
+      tool_call_id: 'call_todo',
+      output: isError ? 'Invalid todo list' : `Todo list updated.\n${resultText(todos)}\n\nMark the next item in_progress.`,
+      is_error: isError,
+    },
   );
 }
 
@@ -53,8 +61,22 @@ describe('TodoList card', () => {
     expect(cardLines(card).slice(1)).toEqual(['  ✓ d1', '  ● ip', '  ○ p1', '  ○ p2', '  ○ p3']);
   });
 
-  it('keeps only the headline for a read-only call and for a failed call', () => {
-    expect(cardLines(todoCard(undefined))).toHaveLength(1);
+  it('shows the list a read-only call reports under a Read headline', () => {
+    const todos = [todo('Read the code', 'done'), todo('Fix it', 'in_progress')];
+    const card = new ToolCallComponent(
+      { id: 'call_read', name: 'TodoList', args: {} },
+      { tool_call_id: 'call_read', output: resultText(todos), is_error: false },
+    );
+    expect(cardLines(card)).toEqual(['● Read TodoList', '  ✓ Read the code', '  ● Fix it']);
+    expect(cardLines(todoCard(todos))[0]).toBe('● Used TodoList');
+  });
+
+  it('keeps only the headline for a cleared list and for a failed call', () => {
+    const cleared = new ToolCallComponent(
+      { id: 'call_clear', name: 'TodoList', args: { todos: [] } },
+      { tool_call_id: 'call_clear', output: 'Todo list cleared.', is_error: false },
+    );
+    expect(cardLines(cleared)).toEqual(['● Used TodoList']);
     expect(cardLines(todoCard([todo('a', 'pending')], true)).join('\n')).not.toContain('○ a');
   });
 });

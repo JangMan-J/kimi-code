@@ -1,14 +1,14 @@
 /**
- * The TodoList card body: a snapshot of the list this call wrote. A collapsed
- * card keeps a short list whole and otherwise shows the two most telling
- * items plus a summary of the rest; ctrl+o (or a click) shows every item.
+ * The TodoList card body: a snapshot of the list the call reported, whether it
+ * wrote the list or only read it. A collapsed card keeps a short list whole
+ * and otherwise shows the two most telling items plus a summary of the rest;
+ * ctrl+o (or a click) shows every item.
  */
 
 import { truncateToWidth, type Component } from '@moonshot-ai/pi-tui';
 
 import { OUTCOME_ROW_INDENT, TRUNCATION_ELLIPSIS } from '#/tui/constant/rendering';
 import { currentTheme } from '#/tui/theme';
-import { isTodoItemShape } from '#/tui/utils/event-payload';
 
 export type TodoStatus = 'pending' | 'in_progress' | 'done';
 
@@ -25,13 +25,22 @@ export interface VisibleTodos {
   readonly hiddenCounts: Record<TodoStatus, number>;
 }
 
-/** The todos a TodoList call wrote; undefined for a read-only call (no `todos` argument). */
-export function todoListArgs(args: Record<string, unknown>): TodoItem[] | undefined {
-  const raw = args['todos'];
-  if (!Array.isArray(raw)) return undefined;
-  return raw
-    .filter((todo): todo is TodoItem => isTodoItemShape(todo))
-    .map((todo) => ({ title: todo.title, status: todo.status }));
+// One row of the list a TodoList result reports. Reads and writes print the
+// list the same way, and a resumed session keeps only this text, not the
+// structured display, so the card parses it for both.
+const RESULT_ROW = /^\s*\[(pending|in_progress|done)\] (.+)$/;
+
+/** The list a successful TodoList result reports; empty when it reports none (e.g. a cleared list). */
+export function todoListFromResult(output: string): TodoItem[] {
+  return output.split('\n').flatMap((line) => {
+    const match = RESULT_ROW.exec(line);
+    return match === null ? [] : [{ status: match[1] as TodoStatus, title: match[2]! }];
+  });
+}
+
+/** A TodoList call without `todos` only reads the list. */
+export function isTodoListRead(args: Record<string, unknown>): boolean {
+  return args['todos'] === undefined;
 }
 
 /** Whether the collapsed card leaves items out, i.e. ctrl+o would reveal more. */

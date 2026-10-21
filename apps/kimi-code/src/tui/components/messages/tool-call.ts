@@ -47,7 +47,12 @@ import { nonEmptyLines, outcomeLine, outcomeRows } from './tool-renderers/outcom
 import { TruncatedOutputComponent, trimTrailingEmptyLines } from './tool-renderers/truncated';
 import { isSpilledToolOutput } from './tool-renderers/types';
 import { isGenericToolResult, pickResultRenderer } from './tool-renderers/registry';
-import { TodoCardBody, todoCardHidesItems, todoListArgs } from './tool-renderers/todo';
+import {
+  isTodoListRead,
+  TodoCardBody,
+  todoCardHidesItems,
+  todoListFromResult,
+} from './tool-renderers/todo';
 import { sanitizeShellOutput } from '#/tui/utils/shell-output';
 import { buildWaitForHeader, parseWaitForOutput } from './tool-renderers/wait-for';
 
@@ -929,10 +934,8 @@ export class ToolCallComponent extends Container {
         // The result body renders the same way in both states (the call
         // preview is checked above), so only the preview can hide content.
         return false;
-      case 'TodoList': {
-        const todos = todoListArgs(args);
-        return todos !== undefined && todoCardHidesItems(todos);
-      }
+      case 'TodoList':
+        return todoCardHidesItems(todoListFromResult(result.output));
       case 'SetGoalBudget':
       case 'UpdateGoal':
       case 'AgentSwarm':
@@ -1829,7 +1832,9 @@ export class ToolCallComponent extends Container {
       return this.buildSingleSubagentHeader();
     }
 
-    const verb = isFinished ? 'Used' : isTruncated ? 'Truncated' : 'Using';
+    const finishedVerb =
+      toolCall.name === 'TodoList' && isTodoListRead(toolCall.args) ? 'Read' : 'Used';
+    const verb = isFinished ? finishedVerb : isTruncated ? 'Truncated' : 'Using';
     const keyArg = extractKeyArgumentDetail(toolCall.name, toolCall.args, this.workspaceDir);
     const decoded = decodeMcpToolName(toolCall.name);
     const verbStyled = isTruncated
@@ -2552,13 +2557,11 @@ export class ToolCallComponent extends Container {
       return;
     }
 
-    // TodoList: the card shows the list this call wrote instead of the text
-    // dump; a read-only call keeps just the headline.
+    // TodoList: the card shows the reported list instead of the text dump,
+    // for reads and writes alike.
     if (this.toolCall.name === 'TodoList' && !result.is_error) {
-      const todos = todoListArgs(this.toolCall.args);
-      if (todos !== undefined && todos.length > 0) {
-        this.addChild(new TodoCardBody(todos, this.expanded));
-      }
+      const todos = todoListFromResult(result.output);
+      if (todos.length > 0) this.addChild(new TodoCardBody(todos, this.expanded));
       return;
     }
 
