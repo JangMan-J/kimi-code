@@ -13,6 +13,7 @@ import {
   ScrollView,
   VStack,
   type Component,
+  type TuiMouseDispatchResult,
   type TuiMouseEvent,
   type TuiMouseEventResult,
 } from '@moonshot-ai/pi-tui';
@@ -35,6 +36,22 @@ export type DockPart = 'head' | 'body' | 'foot';
 class OverflowScrollView extends ScrollView {
   override get isScrollbarVisible(): boolean {
     return this.canScroll;
+  }
+
+  override handleMouse(event: TuiMouseEvent): TuiMouseDispatchResult | undefined {
+    // Consume the wheel here so the renderer's fallback cannot hand overscroll to the transcript.
+    if (event.type !== 'wheel') return undefined;
+    this.scrollBy(event.wheelDelta ?? 0);
+    return {
+      handled: true,
+      target: {
+        component: this,
+        originX: event.screenX - event.x,
+        originY: event.screenY - event.y,
+        width: event.width,
+        height: event.height,
+      },
+    };
   }
 }
 

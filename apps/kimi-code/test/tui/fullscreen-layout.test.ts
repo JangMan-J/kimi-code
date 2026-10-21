@@ -848,6 +848,9 @@ describe('fullscreen layout', () => {
 
   it('shows three queued messages, scrolls the rest with the wheel, and gives way to an approval', async () => {
     const { state, vt } = await mountFullscreen(24);
+    state.transcriptContainer.addChild(
+      new Text(Array.from({ length: 40 }, (_, i) => `transcript ${String(i + 1)}`).join('\n'), 0, 0),
+    );
     state.queuePane.setOptions({
       isCompacting: false,
       isStreaming: true,
@@ -868,6 +871,13 @@ describe('fullscreen layout', () => {
     ]);
     expect(rows[first]!.at(-1)).toBe('┃');
     expect(rows.join('\n')).toContain('test-model');
+
+    const transcriptTop = (state.ui as TuiAltScreen).viewportTop;
+    expect(transcriptTop).toBeGreaterThan(0);
+    vt.sendInput(`\u001B[<64;5;${String(first + 1)}M`);
+    await vt.waitForRender();
+    expect(screenRows(vt)[first]).toContain('❯ queued 1');
+    expect((state.ui as TuiAltScreen).viewportTop).toBe(transcriptTop);
 
     vt.sendInput(`\u001B[<65;5;${String(first + 1)}M`);
     vt.sendInput(`\u001B[<65;5;${String(first + 1)}M`);
@@ -928,6 +938,9 @@ describe('fullscreen layout', () => {
 
   it('keeps a long approval\'s choices on screen and scrolls its request with Shift+↓', async () => {
     const { state, vt } = await mountFullscreen(24);
+    state.transcriptContainer.addChild(
+      new Text(Array.from({ length: 40 }, (_, i) => `transcript ${String(i + 1)}`).join('\n'), 0, 0),
+    );
     const pending = pendingApproval();
     pending.data.display = [
       {
@@ -966,6 +979,13 @@ describe('fullscreen layout', () => {
       '↑/↓ select · 1/2 choose · ↵ confirm · shift+↑/↓ scroll',
       '─'.repeat(WIDTH - CHROME_GUTTER * 2),
     ]);
+
+    const transcriptTop = (state.ui as TuiAltScreen).viewportTop;
+    expect(transcriptTop).toBeGreaterThan(0);
+    vt.sendInput(`\u001B[<64;5;${String(title + 3)}M`);
+    await vt.waitForRender();
+    expect(screenRows(vt)[title + 2]).toContain('$ echo step 1');
+    expect((state.ui as TuiAltScreen).viewportTop).toBe(transcriptTop);
 
     vt.sendInput('\u001B[1;2B');
     await vt.waitForRender();
