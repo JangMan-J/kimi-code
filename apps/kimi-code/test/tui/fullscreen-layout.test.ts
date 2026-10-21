@@ -1097,23 +1097,26 @@ describe('fullscreen layout', () => {
     state.ui.stop();
   });
 
-  it('keeps keyboard focus on the editor for clicks on Updates, and takes it back on a click after Ctrl+N', async () => {
+  it('keeps a mouse-opened Updates panel expanded through Ctrl+N and an editor click', async () => {
     const { state, vt } = await mountFullscreen(24);
     const notifications = new NotifyController(state);
     notifications.setEnabled(true);
     state.notifyPanel.upsert({ id: 'n1', agentId: 'main', time: 0, text: 'main update' });
     state.notifyPanel.upsert({ id: 'n2', agentId: 'agent-1', agentName: 'explore', time: 1, text: 'explore update' });
     state.notifyPanelContainer.addChild(state.notifyPanel);
+    state.notifyPanel.setEnded(true);
     state.ui.requestRender();
     await vt.waitForRender();
 
     let rows = screenRows(vt);
-    const head = rows.findIndex((row) => row.includes('Updates'));
-    const mainColumn = rows[head]!.indexOf('main') + 1;
-    vt.sendInput(`\u001B[<0;${String(mainColumn)};${String(head + 1)}M`);
-    vt.sendInput(`\u001B[<0;${String(mainColumn)};${String(head + 1)}m`);
+    let head = rows.findIndex((row) => row.includes('2 updates'));
+    const expandColumn = rows[head]!.indexOf('2 updates') + 1;
+    vt.sendInput(`\u001B[<0;${String(expandColumn)};${String(head + 1)}M`);
+    vt.sendInput(`\u001B[<0;${String(expandColumn)};${String(head + 1)}m`);
     await vt.waitForRender();
-    expect(screenRows(vt)[head + 1]).toContain('main update');
+    rows = screenRows(vt);
+    head = rows.findIndex((row) => row.includes('Updates'));
+    expect(rows[head + 1]).toContain('main update');
     expect(state.editor.focused).toBe(true);
 
     expect(notifications.focusPanel()).toBe(true);
@@ -1128,6 +1131,10 @@ describe('fullscreen layout', () => {
     await vt.waitForRender();
     expect(state.editor.focused).toBe(true);
     expect(state.notifyPanel.focused).toBe(false);
+    rows = screenRows(vt);
+    const expandedHead = rows.findIndex((row) => row.includes('Updates'));
+    expect(expandedHead).toBeGreaterThanOrEqual(0);
+    expect(rows[expandedHead + 1]).toContain('main update');
 
     state.ui.stop();
   });
