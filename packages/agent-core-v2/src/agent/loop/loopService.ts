@@ -516,7 +516,6 @@ export class AgentLoopService extends Disposable implements IAgentLoopService {
       notificationCount: engineSnapshot?.notificationCount ?? 0,
       paused: engineSnapshot?.paused ?? false,
       hasPendingRequests: this.hasPendingRequests(),
-      hasLiveNudges: this.hasLiveNudge(),
       turn:
         turn === undefined
           ? undefined

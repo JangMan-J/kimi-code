@@ -39,7 +39,6 @@ export interface LoopSnapshot {
   readonly notificationCount: number;
   readonly paused: boolean;
   readonly hasPendingRequests: boolean;
-  readonly hasLiveNudges: boolean;
   readonly turn?: AgentActivityTurnSnapshot;
   readonly activeTraceId?: string;
 }

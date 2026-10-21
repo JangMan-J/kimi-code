@@ -752,7 +752,6 @@ describe('AgentConversationUndoService', () => {
       notificationCount: 0,
       paused: false,
       hasPendingRequests: true,
-      hasLiveNudges: false,
       turn: undefined,
       activeTraceId: undefined,
     });

@@ -54,7 +54,7 @@ export class AgentOutputLimitRecoveryService
       return;
     }
     const snapshot = this.loop.snapshot();
-    if (snapshot.hasLiveNudges) return;
+    if (snapshot.hasPendingRequests && snapshot.queue.length === 0) return;
     if (this.consecutiveRecoveries >= MAX_OUTPUT_LIMIT_RECOVERIES) {
       ctx.failTurn = new Error2(ErrorCodes.AGENT_MAX_TOKENS_EXCEEDED, OUTPUT_LIMIT_EXHAUSTED_MESSAGE);
       this.track(ctx, 'exhausted');

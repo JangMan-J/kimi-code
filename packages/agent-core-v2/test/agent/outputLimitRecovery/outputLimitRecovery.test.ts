@@ -189,7 +189,7 @@ describe('output-limit recovery', () => {
     expect(recoveryInjections()).toHaveLength(4);
   });
 
-  it('defers to a request already queued for the next step', async () => {
+  it('defers to a request already continuing the turn', async () => {
     loop.hooks.onDidFinishStep.register(
       'test-queue-request',
       async (_hookCtx, next) => {
