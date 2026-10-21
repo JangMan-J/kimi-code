@@ -133,8 +133,8 @@ export class CustomEditor extends Editor {
   public onCtrlS?: () => void;
   /** Return `true` to consume Ctrl+B; return `false`/`undefined` to fall through to the editor default (cursor-left). */
   public onCtrlB?: () => boolean;
-  /** Return `true` to consume Ctrl+T (the todo list had overflow to toggle); return `false`/`undefined` to fall through to the editor default. */
-  public onToggleTodoExpand?: () => boolean;
+  /** Ctrl+T: open the background tasks browser. */
+  public onOpenTasksBrowser?: () => void;
   /** Return true to consume Ctrl+N (the Updates panel grabbed or released focus); otherwise use the editor bindings. */
   public onPageNotify?: () => boolean;
   /** Route `←`/`→`/`↑`/`↓`/`Esc` to the focused Updates panel; return `true` to consume. */
@@ -481,10 +481,9 @@ export class CustomEditor extends Editor {
       if (this.onCtrlB?.() === true) return;
     }
 
-    if (matchesKey(normalized, Key.ctrl('t'))) {
-      // Only consume the key when the todo list actually has overflow to
-      // expand/collapse; otherwise fall through to the editor default.
-      if (this.onToggleTodoExpand?.() === true) return;
+    if (matchesKey(normalized, Key.ctrl('t')) && this.onOpenTasksBrowser !== undefined) {
+      this.onOpenTasksBrowser();
+      return;
     }
 
     if (matchesKey(normalized, Key.ctrl('n'))) {

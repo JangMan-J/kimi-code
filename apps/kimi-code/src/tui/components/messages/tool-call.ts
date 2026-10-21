@@ -47,6 +47,7 @@ import { nonEmptyLines, outcomeLine, outcomeRows } from './tool-renderers/outcom
 import { TruncatedOutputComponent, trimTrailingEmptyLines } from './tool-renderers/truncated';
 import { isSpilledToolOutput } from './tool-renderers/types';
 import { isGenericToolResult, pickResultRenderer } from './tool-renderers/registry';
+import { TodoCardBody, todoCardHidesItems, todoListArgs } from './tool-renderers/todo';
 import { sanitizeShellOutput } from '#/tui/utils/shell-output';
 import { buildWaitForHeader, parseWaitForOutput } from './tool-renderers/wait-for';
 
@@ -928,10 +929,13 @@ export class ToolCallComponent extends Container {
         // The result body renders the same way in both states (the call
         // preview is checked above), so only the preview can hide content.
         return false;
+      case 'TodoList': {
+        const todos = todoListArgs(args);
+        return todos !== undefined && todoCardHidesItems(todos);
+      }
       case 'SetGoalBudget':
       case 'UpdateGoal':
       case 'AgentSwarm':
-      case 'TodoList':
       case 'EnterPlanMode':
         return false;
       default:
@@ -2548,10 +2552,13 @@ export class ToolCallComponent extends Container {
       return;
     }
 
-    // TodoList: the authoritative list is shown in the dedicated
-    // TodoPanel before the input area, so repeating the text dump here is
-    // pure clutter. Keep the headline, drop the body.
+    // TodoList: the card shows the list this call wrote instead of the text
+    // dump; a read-only call keeps just the headline.
     if (this.toolCall.name === 'TodoList' && !result.is_error) {
+      const todos = todoListArgs(this.toolCall.args);
+      if (todos !== undefined && todos.length > 0) {
+        this.addChild(new TodoCardBody(todos, this.expanded));
+      }
       return;
     }
 

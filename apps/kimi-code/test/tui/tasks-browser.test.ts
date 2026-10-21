@@ -472,6 +472,12 @@ describe('TasksBrowserApp — input handling', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it('Ctrl+T invokes onCancel, so the key that opened the browser also closes it', () => {
+    const onCancel = vi.fn();
+    makeApp({ onCancel }).handleInput('\u0014');
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('Tab invokes onToggleFilter', () => {
     const onToggleFilter = vi.fn();
     makeApp({ onToggleFilter }).handleInput('\t');

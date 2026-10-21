@@ -57,13 +57,11 @@ describe('createTUIState', () => {
     expect(state.terminal).toBeDefined();
     expect(state.transcriptContainer).toBeDefined();
     expect(state.activityContainer).toBeDefined();
-    expect(state.todoPanelContainer).toBeDefined();
     expect(state.queueContainer).toBeDefined();
     expect(state.surveyContainer).toBeDefined();
     expect(state.editorContainer).toBeDefined();
     expect(state.editor).toBeDefined();
     expect(state.footer).toBeDefined();
-    expect(state.todoPanel).toBeDefined();
     expect(state.notifyPanelContainer).toBeDefined();
     expect(state.notifyPanel).toBeDefined();
     expect(state.theme.palette).toBeDefined();
@@ -128,7 +126,6 @@ describe('createTUIState', () => {
     expect(dock).toBeDefined();
     expect(dock?.children).toEqual([
       state.activityContainer,
-      state.todoPanelContainer,
       state.notifyPanelContainer,
       state.queueContainer,
       state.btwPanelContainer,

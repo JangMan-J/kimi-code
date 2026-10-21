@@ -656,14 +656,16 @@ describe('CustomEditor shortcut telemetry hooks', () => {
     expect(onUndo).toHaveBeenCalledOnce();
   });
 
-  it('invokes onToggleTodoExpand on Ctrl+T', () => {
+  it('opens the tasks browser on Ctrl+T without changing the draft', () => {
     const editor = makeEditor();
-    const onToggleTodoExpand = vi.fn().mockReturnValue(true);
-    editor.onToggleTodoExpand = onToggleTodoExpand;
+    const onOpenTasksBrowser = vi.fn();
+    editor.onOpenTasksBrowser = onOpenTasksBrowser;
+    editor.setText('draft');
 
     editor.handleInput('\u0014');
 
-    expect(onToggleTodoExpand).toHaveBeenCalledOnce();
+    expect(onOpenTasksBrowser).toHaveBeenCalledOnce();
+    expect(editor.getText()).toBe('draft');
   });
 
   it.each(['\u000E', '\u001B[110;5u'] as const)(

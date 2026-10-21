@@ -15,7 +15,6 @@ import { FooterComponent } from './components/chrome/footer';
 import { GutterContainer } from './components/chrome/gutter-container';
 import type { MoonLoader, SpinnerStyle } from './components/chrome/moon-loader';
 import { NotifyPanelComponent } from './components/chrome/notify-panel';
-import { TodoPanelComponent } from './components/chrome/todo-panel';
 import type { SessionRow } from './components/dialogs/session-picker';
 import { CustomEditor } from './components/editor/custom-editor';
 import { DEFAULT_MARKDOWN_CONFIG, DEFAULT_TUI_CONFIG } from './config';
@@ -44,8 +43,6 @@ export interface TUIState {
   terminal: ProcessTerminal;
   transcriptContainer: GutterContainer;
   activityContainer: Container;
-  todoPanelContainer: Container;
-  todoPanel: TodoPanelComponent;
   notifyPanelContainer: Container;
   notifyPanel: NotifyPanelComponent;
   queueContainer: Container;
@@ -136,8 +133,6 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
 
   const transcriptContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const activityContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
-  const todoPanelContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
-  const todoPanel = new TodoPanelComponent();
   const notifyPanelContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const notifyPanel = new NotifyPanelComponent();
   const queueContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
@@ -163,7 +158,6 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     const transcriptView = new TranscriptView(transcriptContainer);
     dockContainer = new VStack();
     dockContainer.addChild(activityContainer, { shrink: 1, minSize: 0 });
-    dockContainer.addChild(todoPanelContainer, { shrink: 1, minSize: 0 });
     dockContainer.addChild(notifyPanelContainer, { shrink: 1, minSize: 0 });
     dockContainer.addChild(queueContainer, { shrink: 1, minSize: 0 });
     dockContainer.addChild(btwPanelContainer, { shrink: 1, minSize: 0 });
@@ -183,8 +177,6 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
     terminal,
     transcriptContainer,
     activityContainer,
-    todoPanelContainer,
-    todoPanel,
     notifyPanelContainer,
     notifyPanel,
     queueContainer,
