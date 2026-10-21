@@ -1,6 +1,6 @@
 import type { Event, ResumedSessionState } from '@moonshot-ai/kimi-code-sdk';
 
-import type { NotifyEntry } from '#/tui/components/chrome/notify-panel';
+import type { NotifyEntry, NotifyPrompt } from '#/tui/components/chrome/notify-panel';
 import { MAIN_AGENT_ID } from '#/tui/constant/kimi-tui';
 import type { TUIState } from '#/tui/tui-state';
 import { argsRecord } from '#/tui/utils/event-payload';
@@ -107,8 +107,15 @@ export class NotifyController {
    * prompt once it is answered): the panel shrinks to a summary of that
    * agent's latest update until then.
    */
-  setPrompt(prompt: { readonly agentId: string | undefined } | undefined): void {
-    this.state.notifyPanel.setPrompt(prompt);
+  setPrompt(prompt: NotifyPrompt | undefined): void {
+    if (prompt === undefined) {
+      this.state.notifyPanel.setPrompt(undefined);
+    } else {
+      const agentName =
+        prompt.agentName ??
+        (prompt.agentId === undefined ? undefined : this.agentNames.get(prompt.agentId));
+      this.state.notifyPanel.setPrompt({ agentId: prompt.agentId, agentName });
+    }
     this.state.ui.requestRender();
   }
 

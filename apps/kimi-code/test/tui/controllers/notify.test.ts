@@ -293,6 +293,22 @@ describe('NotifyController', () => {
     expect(h.rendered()).toContain('background finding');
   });
 
+  it('uses the requesting subagent name in a prompt summary even before its first update', () => {
+    const h = makeHarness(true, true);
+    h.send('main-update', 'main progress');
+    h.emit('subagent.spawned', {
+      subagentId: 'agent-1',
+      subagentName: 'coder',
+      description: 'Run a shell command',
+      runInBackground: true,
+    });
+
+    h.controller.setPrompt({ agentId: 'agent-1' });
+
+    expect(h.rendered()).toContain('▸ coder');
+    expect(h.rendered()).not.toContain('▸ main');
+  });
+
   it('keeps child turns active until their own end events, including detached tasks', () => {
     const h = makeHarness();
     for (const subagentId of ['agent-7', 'agent-29']) {

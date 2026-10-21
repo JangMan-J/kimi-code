@@ -373,6 +373,9 @@ describe('NotifyPanelComponent', () => {
     expect(panel.focus()).toBe(false);
 
     panel.setPrompt({ agentId: 'agent-without-updates' });
+    expect(render(panel)).toEqual(['  ▸ agent-without-updates']);
+
+    panel.setPrompt({ agentId: undefined });
     expect(render(panel)).toEqual(['  ▸ main · main is planning']);
 
     panel.setPrompt(undefined);

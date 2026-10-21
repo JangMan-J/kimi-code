@@ -57,6 +57,11 @@ export interface NotifyChannelView {
   readonly unread: number;
 }
 
+export interface NotifyPrompt {
+  readonly agentId: string | undefined;
+  readonly agentName?: string;
+}
+
 interface NotifyChannel {
   readonly key: string;
   readonly label: string;
@@ -100,7 +105,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   /** The user clicked the ended panel open: it stays open until the next update. */
   private keptOpen = false;
   /** Set while an approval or question waits: the panel shrinks to a summary of this agent. */
-  private prompt: { readonly agentId: string | undefined } | undefined;
+  private prompt: NotifyPrompt | undefined;
   private hitTargets: readonly HitTarget[] = [];
   /** Hands keyboard focus back to the editor, forwarding `key` when the panel does not own it. */
   onReturnFocus: ((key: string | undefined) => void) | undefined;
@@ -195,7 +200,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
    * While one waits a docked panel is a read-only summary line and cannot
    * take focus; an inline panel stays as it is.
    */
-  setPrompt(prompt: { readonly agentId: string | undefined } | undefined): void {
+  setPrompt(prompt: NotifyPrompt | undefined): void {
     if (this.layout === undefined) return;
     this.prompt = prompt;
     if (prompt !== undefined) this.blur();
@@ -304,7 +309,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     }
     if (this.prompt !== undefined) {
       this.hitTargets = [];
-      return [truncateToWidth(this.summaryLine(this.prompt.agentId), width)];
+      return [truncateToWidth(this.summaryLine(this.prompt), width)];
     }
     const segments = this.collapsed ? this.stubSegments(width) : this.headSegments(width);
     return [this.paintSegments(segments, width)];
@@ -481,9 +486,13 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     return [marker, { text: `${count} · ctrl+n to expand`, style: dim, action: expand }];
   }
 
-  /** `▸ explore · <latest update>` for the agent behind a waiting approval or question. */
-  private summaryLine(agentId: string | undefined): string {
-    const asking = this.channels.find((ch) => ch.key === agentId);
+  /** `▸ explore · <latest update>`, or only the requester's name when it has no update. */
+  private summaryLine(prompt: NotifyPrompt): string {
+    const asking = this.channels.find((ch) => ch.key === prompt.agentId);
+    const strong = (text: string) => currentTheme.boldFg('primary', text);
+    if (asking === undefined && prompt.agentId !== undefined) {
+      return ` ${currentTheme.fg('primary', '▸')} ${strong(prompt.agentName ?? prompt.agentId)}`;
+    }
     const ch =
       asking ??
       this.channels.reduce((latest, channel) =>
@@ -493,7 +502,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     const preview = this.previewText(entry);
     const dim = (text: string) => currentTheme.fg('textDim', text);
     return (
-      ` ${currentTheme.fg('primary', '▸')} ${currentTheme.boldFg('primary', ch.label)}` +
+      ` ${currentTheme.fg('primary', '▸')} ${strong(ch.label)}` +
       (preview === undefined ? '' : dim(` · ${preview}`))
     );
   }
