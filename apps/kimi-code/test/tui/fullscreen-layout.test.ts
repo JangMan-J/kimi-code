@@ -971,12 +971,12 @@ describe('fullscreen layout', () => {
     await vt.waitForRender();
     rows = screenRows(vt);
     expect(rows.filter((row) => row.includes('Next update'))).toEqual([
-      '  ▸ main · 2 updates · Next update · click to expand',
+      '  ▸ main · 2 updates · Next update',
     ]);
     expect(rows.join('\n')).not.toContain('next body 1');
 
-    const collapsedHead = rows.findIndex((row) => row.includes('click to expand'));
-    const expandColumn = rows[collapsedHead]!.indexOf('click to expand') + 1;
+    const collapsedHead = rows.findIndex((row) => row.includes('2 updates'));
+    const expandColumn = rows[collapsedHead]!.indexOf('2 updates') + 1;
     vt.sendInput(`\u001B[<0;${String(expandColumn)};${String(collapsedHead + 1)}M`);
     vt.sendInput(`\u001B[<0;${String(expandColumn)};${String(collapsedHead + 1)}m`);
     await vt.waitForRender();

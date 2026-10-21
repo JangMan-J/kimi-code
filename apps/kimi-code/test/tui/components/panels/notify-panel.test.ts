@@ -370,12 +370,12 @@ describe('NotifyPanelComponent', () => {
     panel.setPrompt(true);
     expect(render(panel)).toHaveLength(1);
     expect(titleOf(panel)).toContain('2 updates');
-    expect(titleOf(panel)).toContain('click to expand');
+    expect(titleOf(panel)).not.toContain('click to expand');
     expect(titleOf(panel)).not.toContain('Updates');
     expect(panel.focused).toBe(false);
     expect(panel.focus()).toBe(false);
 
-    click(panel, 'click to expand');
+    click(panel, '2 updates');
     expect(render(panel).join('\n')).toContain('details');
     expect(titleOf(panel)).toContain('close');
     expect(titleOf(panel)).not.toContain('ctrl+n to browse');

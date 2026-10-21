@@ -469,7 +469,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     const total = this.channels.reduce((sum, ch) => sum + ch.entries.length, 0);
     const count = `${String(total)} ${total === 1 ? 'update' : 'updates'}`;
     const tail: HeadSegment = {
-      text: this.promptPending ? ' · click to expand' : ' · ctrl+n to expand',
+      text: this.promptPending ? '' : ' · ctrl+n to expand',
       style: dim,
       action: expand,
     };
