@@ -19,7 +19,7 @@ import { QueuePaneComponent } from './components/panes/queue-pane';
 import type { SessionRow } from './components/dialogs/session-picker';
 import { CustomEditor } from './components/editor/custom-editor';
 import { DEFAULT_MARKDOWN_CONFIG, DEFAULT_TUI_CONFIG } from './config';
-import { CHROME_GUTTER, DOCK_QUEUE_ROWS } from './constant/rendering';
+import { CHROME_GUTTER, DOCK_QUEUE_ROWS, DOCK_UPDATES_ROWS } from './constant/rendering';
 import type { TasksBrowserState } from './controllers/tasks-browser';
 import { currentTheme, type Theme } from './theme';
 import {
@@ -101,8 +101,8 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
   const terminal = new ProcessTerminal();
   setMarkdownRenderLatex(initialAppState.renderLatex ?? DEFAULT_TUI_CONFIG.renderLatex ?? true);
   setMarkdownMermaidMode(initialAppState.markdown?.mermaid ?? DEFAULT_MARKDOWN_CONFIG.mermaid);
-  const ui =
-    initialAppState.tuiMode === 'fullscreen'
+  const fullscreen = initialAppState.tuiMode === 'fullscreen';
+  const ui = fullscreen
       ? new TuiAltScreen(terminal, undefined, undefined, {
           // Mouse capture takes over the terminal's native link activation, so
           // route OSC 8 clicks through our own opener.
@@ -135,14 +135,15 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
 
   const transcriptContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const activityContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
-  const notifyPanelContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
-  const notifyPanel = new NotifyPanelComponent();
-  const fullscreen = initialAppState.tuiMode === 'fullscreen';
   // Docked panels carry their own gutter, so their fullscreen slot is a
   // layout node rather than a GutterContainer (which the layout treats as one
   // opaque block and could only clip, not scroll).
   const queueContainer = fullscreen ? new VStack() : new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const queuePane = new QueuePaneComponent(fullscreen ? { maxBodyRows: DOCK_QUEUE_ROWS } : undefined);
+  const notifyPanelContainer = fullscreen ? new VStack() : new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
+  const notifyPanel = new NotifyPanelComponent(
+    fullscreen ? { maxBodyRows: DOCK_UPDATES_ROWS } : undefined,
+  );
   const btwPanelContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const surveyContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const editorContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);

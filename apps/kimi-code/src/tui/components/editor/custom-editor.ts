@@ -13,6 +13,7 @@ import {
   type TUI,
 } from '@moonshot-ai/pi-tui';
 
+import { NOTIFY_PANEL_KEYS, type NotifyPanelKey } from '#/tui/components/chrome/notify-panel';
 import { currentTheme } from '#/tui/theme';
 import { createEditorTheme } from '#/tui/theme/pi-tui-theme';
 import { printableChar } from '#/tui/utils/printable-key';
@@ -138,7 +139,7 @@ export class CustomEditor extends Editor {
   /** Return true to consume Ctrl+N (the Updates panel grabbed or released focus); otherwise use the editor bindings. */
   public onPageNotify?: () => boolean;
   /** Route `←`/`→`/`↑`/`↓`/`Esc` to the focused Updates panel; return `true` to consume. */
-  public onNotifyPanelKey?: (key: 'left' | 'right' | 'up' | 'down' | 'escape') => boolean;
+  public onNotifyPanelKey?: (key: NotifyPanelKey) => boolean;
   public onUndo?: () => void;
   public onTextPaste?: () => void;
   /**
@@ -492,29 +493,15 @@ export class CustomEditor extends Editor {
       if (this.onPageNotify?.() === true) return;
     }
 
-    // A focused Updates panel owns ←/→ (channel switching), ↑/↓ (paging the
-    // channel's updates) and Esc (release focus); when it is not focused the
-    // handler returns false and every key falls through to the normal editor
-    // behavior below. Active autocomplete outranks the panel: its menu needs
-    // the same keys for selection and dismissal.
-    if (
-      !this.hasAutocompleteActivity() &&
-      (matchesKey(normalized, Key.left) ||
-        matchesKey(normalized, Key.right) ||
-        matchesKey(normalized, Key.up) ||
-        matchesKey(normalized, Key.down) ||
-        matchesKey(normalized, Key.escape))
-    ) {
-      const panelKey = matchesKey(normalized, Key.left)
-        ? ('left' as const)
-        : matchesKey(normalized, Key.right)
-          ? ('right' as const)
-          : matchesKey(normalized, Key.up)
-            ? ('up' as const)
-            : matchesKey(normalized, Key.down)
-              ? ('down' as const)
-              : ('escape' as const);
-      if (this.onNotifyPanelKey?.(panelKey) === true) return;
+    // A focused Updates panel owns ←/→ (paging the channel's updates),
+    // Shift+←/→ (channel switching), ↑/↓ (scrolling the update) and Esc
+    // (release focus); when it is not focused the handler returns false and
+    // every key falls through to the normal editor behavior below. Active
+    // autocomplete outranks the panel: its menu needs the same keys for
+    // selection and dismissal.
+    if (!this.hasAutocompleteActivity()) {
+      const panelKey = NOTIFY_PANEL_KEYS.find((key) => matchesKey(normalized, key));
+      if (panelKey !== undefined && this.onNotifyPanelKey?.(panelKey) === true) return;
     }
 
     if (matchesKey(normalized, 'shift+tab')) {

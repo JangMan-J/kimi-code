@@ -883,4 +883,44 @@ describe('fullscreen layout', () => {
 
     state.ui.stop();
   });
+
+  it('caps the Updates body at six scrollable rows and folds it to a summary during an approval', async () => {
+    const { state, vt } = await mountFullscreen(24);
+    state.notifyPanel.upsert({
+      id: 'n1',
+      agentId: 'main',
+      time: 0,
+      title: 'Rewriting the approval panel',
+      text: Array.from({ length: 9 }, (_, i) => `- body ${String(i + 1)}`).join('\n'),
+    });
+    state.notifyPanelContainer.addChild(state.notifyPanel);
+    state.ui.requestRender();
+    await vt.waitForRender();
+
+    let rows = screenRows(vt);
+    const head = rows.findIndex((row) => row.includes('main · Updates'));
+    expect(rows[head]).toContain('ctrl+n to browse');
+    expect(rows[head + 1]).toContain('Rewriting the approval panel');
+    expect(rows[head + 6]).toContain('body 5');
+    expect(rows[head + 7]).not.toContain('body 6');
+    expect(rows[head + 1]!.at(-1)).toBe('┃');
+
+    vt.sendInput(`\u001B[<65;5;${String(head + 3)}M`);
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows[head + 1]).toContain('body 1');
+    expect(rows[head + 6]).toContain('body 6');
+
+    state.livePane.pendingApproval = pendingApproval();
+    state.notifyPanel.setPrompt({ agentId: 'main' });
+    state.ui.requestRender();
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows.filter((row) => row.includes('Rewriting the approval panel'))).toEqual([
+      '  ▸ main · Rewriting the approval panel',
+    ]);
+    expect(rows.join('\n')).not.toContain('body 1');
+
+    state.ui.stop();
+  });
 });

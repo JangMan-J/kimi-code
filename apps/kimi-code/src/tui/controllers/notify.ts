@@ -1,6 +1,6 @@
 import type { Event, ResumedSessionState } from '@moonshot-ai/kimi-code-sdk';
 
-import type { NotifyEntry } from '#/tui/components/chrome/notify-panel';
+import type { NotifyEntry, NotifyPanelKey } from '#/tui/components/chrome/notify-panel';
 import { MAIN_AGENT_ID } from '#/tui/constant/kimi-tui';
 import type { TUIState } from '#/tui/tui-state';
 import { argsRecord } from '#/tui/utils/event-payload';
@@ -77,7 +77,7 @@ export class NotifyController {
     if (!this.enabled && !this.mounted) return;
     const { notifyPanel, notifyPanelContainer } = this.state;
     if (notifyPanel.isEmpty() && notifyPanelContainer.children.length === 0) return;
-    notifyPanel.clear();
+    notifyPanel.clearUpdates();
     notifyPanelContainer.clear();
     this.mounted = false;
     this.state.ui.requestRender();
@@ -92,16 +92,45 @@ export class NotifyController {
     return true;
   }
 
-  handlePanelKey(key: 'left' | 'right' | 'up' | 'down' | 'escape'): boolean {
+  /** Keys for a focused panel; ↑/↓ scroll a docked body and are swallowed inline. */
+  handlePanelKey(key: NotifyPanelKey): boolean {
     if (!this.enabled || !this.state.notifyPanel.isFocused()) return false;
     const panel = this.state.notifyPanel;
-    if (key === 'escape') panel.blur();
-    else if (key === 'left') panel.prevChannel();
-    else if (key === 'right') panel.nextChannel();
-    else if (key === 'up') panel.prevPage();
-    else panel.nextPage();
+    switch (key) {
+      case 'escape':
+        panel.blur();
+        break;
+      case 'left':
+        panel.prevPage();
+        break;
+      case 'right':
+        panel.nextPage();
+        break;
+      case 'shift+left':
+        panel.prevChannel();
+        break;
+      case 'shift+right':
+        panel.nextChannel();
+        break;
+      case 'up':
+        panel.scrollBody(-1);
+        break;
+      case 'down':
+        panel.scrollBody(1);
+        break;
+    }
     this.state.ui.requestRender();
     return true;
+  }
+
+  /**
+   * An approval or question from `agentId` replaced the editor (`undefined`
+   * prompt once it is answered): the panel shrinks to a summary of that
+   * agent's latest update until then.
+   */
+  setPrompt(prompt: { readonly agentId: string | undefined } | undefined): void {
+    this.state.notifyPanel.setPrompt(prompt);
+    this.state.ui.requestRender();
   }
 
   handleEvent(event: Event): void {

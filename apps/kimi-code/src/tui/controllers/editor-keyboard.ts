@@ -29,6 +29,7 @@ import type {
 import { extractMediaAttachments, imageExtensionForMime } from '../utils/image-placeholder';
 import { resolveUserInput } from '../commands/resolve';
 import type { PendingExit, QueuedMessage } from '../types';
+import type { NotifyPanelKey } from '../components/chrome/notify-panel';
 import type { TUIState } from '../tui-state';
 import type { BtwPanelController } from './btw-panel';
 import type { SurveyController } from './survey-controller';
@@ -70,7 +71,7 @@ export interface EditorKeyboardHost {
   openTasksBrowser(): void;
   /** Returns true when the Updates panel grabbed or released focus. */
   toggleNotifyPanelFocus(): boolean;
-  handleNotifyPanelKey(key: 'left' | 'right' | 'up' | 'down' | 'escape'): boolean;
+  handleNotifyPanelKey(key: NotifyPanelKey): boolean;
   detachCurrentForegroundTask(): void;
   cancelRunningShellCommand(): void;
   hideSessionPicker(): void;

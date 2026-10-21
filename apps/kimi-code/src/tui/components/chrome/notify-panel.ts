@@ -1,21 +1,29 @@
 /**
- * NotifyPanel — mid-turn updates, shown as a bordered box right above the
- * input area (below the Todo panel), visually matching the editor.
+ * NotifyPanel — mid-turn updates, shown right above the input area.
  *
  * Updates are grouped into CHANNELS, one per agent: the main agent plus one
- * channel per subagent that posts a `NotifyUser` update. The top border is a
- * tab strip of channel labels; `Ctrl+N` focuses the box, then `←`/`→` switch
- * channels and `↑`/`↓` page through the current channel's updates. While the
- * user is not focused, the view follows the latest activity across channels;
- * while focused it stays put and other channels collect an unread dot.
- * Entries render at their natural height — the box adapts instead of
- * truncating. When the turn ends the box folds to a one-line stub until the
- * user focuses it; the host clears the box when the next turn starts.
+ * channel per subagent that posts a `NotifyUser` update. The head is a rule
+ * labelled with the channel tabs and a pager; the body is the current update.
+ * `Ctrl+N` focuses the panel, then `←`/`→` page through the channel's updates,
+ * `Shift+←`/`→` switch channels, `↑`/`↓` scroll a docked body and `Esc`
+ * releases. While the user is not focused, the view follows the latest
+ * activity across channels; while focused it stays put and other channels
+ * collect an unread dot. Docked (fullscreen) the body scrolls past a few rows
+ * and the head's tabs, arrows and close button take clicks.
+ *
+ * When the turn ends the panel folds to a one-line stub until the user focuses
+ * it; while an approval or question waits it shrinks to a one-line summary of
+ * the asking agent's latest update. The host clears the panel when the next
+ * turn starts.
  */
 
-import type { Component } from '@moonshot-ai/pi-tui';
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@moonshot-ai/pi-tui';
-import chalk from 'chalk';
+import {
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+} from '@moonshot-ai/pi-tui';
 
 import { Markdown } from '#/tui/components/markdown/markdown';
 
@@ -24,7 +32,7 @@ import { currentTheme } from '#/tui/theme';
 import { createMarkdownTheme } from '#/tui/theme/pi-tui-theme';
 import { createMarkdownOptions } from '#/tui/utils/markdown-options';
 
-import { wrapWithSideBorders } from '../editor/custom-editor';
+import { DockSection, type DockLayout, type DockPart } from './dock-section';
 
 export interface NotifyEntry {
   readonly id: string;
@@ -52,20 +60,63 @@ interface NotifyChannel {
   readonly unreadIds: Set<string>;
 }
 
-function padToVisibleWidth(text: string, target: number): string {
-  const truncated = truncateToWidth(text, target);
-  const gap = target - visibleWidth(truncated);
-  return gap > 0 ? truncated + ' '.repeat(gap) : truncated;
+/** Keys a focused panel takes from the editor. */
+export const NOTIFY_PANEL_KEYS = [
+  'left',
+  'right',
+  'shift+left',
+  'shift+right',
+  'up',
+  'down',
+  'escape',
+] as const;
+
+export type NotifyPanelKey = (typeof NOTIFY_PANEL_KEYS)[number];
+
+/** What a click on a head segment does. */
+type HeadAction =
+  | { readonly kind: 'channel'; readonly key: string }
+  | { readonly kind: 'prev' }
+  | { readonly kind: 'next' }
+  | { readonly kind: 'close' }
+  | { readonly kind: 'expand' };
+
+interface HeadSegment {
+  readonly text: string;
+  readonly style: (text: string) => string;
+  readonly action?: HeadAction;
 }
 
-export class NotifyPanelComponent implements Component {
+interface HitTarget {
+  readonly from: number;
+  readonly to: number;
+  readonly action: HeadAction;
+}
+
+const BODY_INDENT = '  ';
+
+function sameAction(a: HeadAction | undefined, b: HeadAction | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.kind === 'channel' && b.kind === 'channel') return a.key === b.key;
+  return a.kind === b.kind;
+}
+
+export class NotifyPanelComponent extends DockSection {
   private readonly channels: NotifyChannel[] = [];
   /** Key of the channel on display; channels themselves are append-only. */
   private activeKey = MAIN_AGENT_ID;
   private focused = false;
   private ended = false;
-  /** Turn ended and no one is reading: the box folds to a one-line stub. */
+  /** Turn ended and no one is reading: the panel folds to a one-line stub. */
   private collapsed = false;
+  /** Set while an approval or question waits: the panel shrinks to a summary of this agent. */
+  private prompt: { readonly agentId: string | undefined } | undefined;
+  private hitTargets: readonly HitTarget[] = [];
+  private hovered: HeadAction | undefined;
+
+  constructor(layout?: DockLayout) {
+    super(layout);
+  }
 
   /**
    * Add or update an entry in a channel. A repeated `id` updates the entry in
@@ -80,9 +131,11 @@ export class NotifyPanelComponent implements Component {
     if (existing !== undefined) ch.entries[ch.entries.indexOf(existing)] = entry;
     else ch.entries.push(entry);
     if (!this.focused) {
+      const moved = this.activeKey !== ch.key || ch.page !== ch.entries.length - 1;
       this.activeKey = ch.key;
       ch.page = ch.entries.length - 1;
       ch.unreadIds.clear();
+      if (moved) this.scrollBodyToTop();
     } else if (isNew && ch.key !== this.activeKey) {
       ch.unreadIds.add(entry.id);
     }
@@ -106,12 +159,13 @@ export class NotifyPanelComponent implements Component {
     return true;
   }
 
-  clear(): void {
+  clearUpdates(): void {
     this.channels.length = 0;
     this.activeKey = MAIN_AGENT_ID;
     this.focused = false;
     this.ended = false;
     this.collapsed = false;
+    this.hovered = undefined;
   }
 
   isEmpty(): boolean {
@@ -133,7 +187,7 @@ export class NotifyPanelComponent implements Component {
 
   /**
    * The turn that produced these updates has ended: dim the title and fold
-   * the box down to a one-line stub so the final reply owns the screen. A
+   * the panel down to a one-line stub so the final reply owns the screen. A
    * focused user keeps reading — the fold lands when they blur.
    */
   setEnded(ended: boolean): void {
@@ -142,9 +196,20 @@ export class NotifyPanelComponent implements Component {
     if (!ended) this.collapsed = false;
   }
 
-  /** Grab keyboard paging for the box; returns false when there is nothing to read. */
+  /**
+   * An approval or question from `agentId` is waiting (`undefined` agent when
+   * the client did not say who asks), or nothing is (`undefined` prompt).
+   * While one waits the panel is a read-only summary line and cannot take
+   * focus.
+   */
+  setPrompt(prompt: { readonly agentId: string | undefined } | undefined): void {
+    this.prompt = prompt;
+    if (prompt !== undefined) this.blur();
+  }
+
+  /** Grab keyboard paging for the panel; returns false when there is nothing to read. */
   focus(): boolean {
-    if (this.channels.length === 0) return false;
+    if (this.channels.length === 0 || this.prompt !== undefined) return false;
     this.focused = true;
     this.collapsed = false;
     this.activeChannel().unreadIds.clear();
@@ -162,91 +227,278 @@ export class NotifyPanelComponent implements Component {
     return this.focused;
   }
 
-  /** Older channel (`←`), landing on its latest update; false on the leftmost tab. */
+  /** Older channel (`Shift+←`), landing on its latest update; false on the leftmost tab. */
   prevChannel(): boolean {
     const index = this.activeIndex();
     if (index <= 0) return false;
-    this.activeKey = this.channels[index - 1]!.key;
-    const ch = this.activeChannel();
-    ch.page = ch.entries.length - 1;
-    ch.unreadIds.clear();
+    this.showChannel(this.channels[index - 1]!.key);
     return true;
   }
 
-  /** Newer channel (`→`), landing on its latest update; false on the rightmost tab. */
+  /** Newer channel (`Shift+→`), landing on its latest update; false on the rightmost tab. */
   nextChannel(): boolean {
     const index = this.activeIndex();
     if (index >= this.channels.length - 1) return false;
-    this.activeKey = this.channels[index + 1]!.key;
-    const ch = this.activeChannel();
-    ch.page = ch.entries.length - 1;
-    ch.unreadIds.clear();
+    this.showChannel(this.channels[index + 1]!.key);
     return true;
   }
 
-  /** Older update in the current channel (`↑`); false on the first page. */
+  /** Older update in the current channel (`←`); false on the first page. */
   prevPage(): boolean {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
     if (ch.page <= 0) return false;
     ch.page -= 1;
+    this.scrollBodyToTop();
     return true;
   }
 
-  /** Newer update in the current channel (`↓`); false on the latest page. */
+  /** Newer update in the current channel (`→`); false on the latest page. */
   nextPage(): boolean {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
     if (ch.page >= ch.entries.length - 1) return false;
     ch.page += 1;
+    this.scrollBodyToTop();
     return true;
   }
 
-  invalidate(): void {}
-
-  render(width: number): string[] {
+  protected renderPart(part: DockPart, width: number): string[] {
     if (this.channels.length === 0) return [];
-    const c = currentTheme.palette;
-    const paint = chalk.hex(this.focused ? c.primary : c.border);
-
-    if (this.collapsed) {
-      return ['', this.stubLine(width)].map((line) => truncateToWidth(line, width));
+    if (part === 'foot') return [];
+    if (part === 'body') {
+      return this.prompt !== undefined || this.collapsed ? [] : this.bodyRows(width);
     }
+    if (this.prompt !== undefined) {
+      this.hitTargets = [];
+      return [truncateToWidth(this.summaryLine(this.prompt.agentId), width)];
+    }
+    const segments = this.collapsed ? this.stubSegments(width) : this.headSegments(width);
+    return [this.paintSegments(segments, width)];
+  }
 
-    const innerWidth = Math.max(1, width - 6);
-    const ch = this.activeChannel();
-    const entry = ch.entries[Math.min(ch.page, ch.entries.length - 1)]!;
+  protected override handlePartMouse(
+    part: DockPart,
+    event: TuiMouseEvent,
+  ): TuiMouseEventResult | undefined {
+    if (part !== 'head' || event.y !== 0) return undefined;
+    const target = this.hitTargets.find((hit) => event.x >= hit.from && event.x < hit.to);
+    if (event.type === 'move') {
+      if (sameAction(this.hovered, target?.action)) return target ? { handled: true } : undefined;
+      this.hovered = target?.action;
+      return { handled: true, render: true };
+    }
+    if (target === undefined || event.button !== 'left') return undefined;
+    if (event.type === 'press' || event.type === 'release') return { handled: true };
+    if (event.type !== 'click') return undefined;
+    this.runAction(target.action);
+    return { handled: true };
+  }
+
+  private runAction(action: HeadAction): void {
+    switch (action.kind) {
+      case 'channel':
+        this.showChannel(action.key);
+        this.focus();
+        return;
+      case 'prev':
+        this.prevPage();
+        this.focus();
+        return;
+      case 'next':
+        this.nextPage();
+        this.focus();
+        return;
+      case 'expand':
+        this.focus();
+        return;
+      case 'close':
+        this.blur();
+        return;
+    }
+  }
+
+  private showChannel(key: string): void {
+    const ch = this.channels.find((channel) => channel.key === key);
+    if (ch === undefined) return;
+    const moved = this.activeKey !== key || ch.page !== ch.entries.length - 1;
+    this.activeKey = key;
+    ch.page = ch.entries.length - 1;
+    ch.unreadIds.clear();
+    if (moved) this.scrollBodyToTop();
+  }
+
+  private bodyRows(width: number): string[] {
+    const inner = Math.max(1, width - BODY_INDENT.length);
+    const entry = this.currentEntry();
     const titleRows =
       entry.title === undefined
         ? []
-        : [
-            ...wrapTextWithAnsi(entry.title, innerWidth).map((row) =>
-              chalk.hex(c.textStrong).bold(row),
-            ),
-            '',
-          ];
-    const bodyRows = [
-      ...titleRows,
-      ...new Markdown(
-        entry.text.trim(),
-        0,
-        0,
-        createMarkdownTheme(),
-        undefined,
-        createMarkdownOptions(),
-      ).render(innerWidth),
-    ];
+        : wrapTextWithAnsi(entry.title, inner).map((row) => currentTheme.boldFg('textStrong', row));
+    const textRows = new Markdown(
+      entry.text.trim(),
+      0,
+      0,
+      createMarkdownTheme(),
+      undefined,
+      createMarkdownOptions(),
+    ).render(inner);
+    return [...titleRows, ...textRows].map((row) => truncateToWidth(`${BODY_INDENT}${row}`, width));
+  }
 
-    const padRow = (row: string): string => `   ${padToVisibleWidth(row, width - 6)}   `;
-    const emptyRow = ' '.repeat(width);
-    const lines: string[] = ['─'.repeat(width), emptyRow];
-    for (const row of bodyRows) {
-      lines.push(padRow(row));
+  private paintSegments(segments: readonly HeadSegment[], width: number): string {
+    const targets: HitTarget[] = [];
+    let x = 0;
+    let line = '';
+    for (const segment of segments) {
+      const segmentWidth = visibleWidth(segment.text);
+      const hovered = segment.action !== undefined && sameAction(segment.action, this.hovered);
+      const styled = segment.style(segment.text);
+      line += hovered ? currentTheme.underline(styled) : styled;
+      if (segment.action !== undefined) {
+        targets.push({ from: x, to: x + segmentWidth, action: segment.action });
+      }
+      x += segmentWidth;
     }
-    lines.push(emptyRow, '─'.repeat(width));
+    this.hitTargets = targets.filter((target) => target.to <= width);
+    return truncateToWidth(line, width);
+  }
 
-    const boxed = wrapWithSideBorders(lines, paint, { label: this.title(width) });
-    return ['', ...boxed].map((line) => truncateToWidth(line, width));
+  /**
+   * The expanded head: a rule labelled with the channel tabs, the pager and a
+   * key hint, plus a close button while focused. Slims down as width shrinks:
+   * first the other tabs and the hint go, then the label altogether.
+   */
+  private headSegments(width: number): HeadSegment[] {
+    const rule = (text: string) => currentTheme.fg(this.focused ? 'primary' : 'border', text);
+    const dim = (text: string) => currentTheme.fg('textDim', text);
+    const strong = (text: string) =>
+      this.ended ? currentTheme.boldFg('textDim', text) : currentTheme.boldFg('primary', text);
+    const ch = this.activeChannel();
+    const label = (tabs: HeadSegment[], hint: string): HeadSegment[] => {
+      const segments: HeadSegment[] = [{ text: '─ ', style: rule }, ...tabs];
+      segments.push({ text: ' · Updates', style: strong });
+      if (ch.entries.length > 1) {
+        segments.push(
+          { text: ' ', style: strong },
+          { text: '←', style: strong, action: { kind: 'prev' } },
+          { text: ` ${String(ch.page + 1)}/${String(ch.entries.length)} `, style: strong },
+          { text: '→', style: strong, action: { kind: 'next' } },
+        );
+      }
+      if (this.ended) segments.push({ text: ' · turn ended', style: strong });
+      if (hint.length > 0) segments.push({ text: ` · ${hint}`, style: dim });
+      segments.push({ text: ' ', style: rule });
+      return segments;
+    };
+    const close = (text: string): HeadSegment[] =>
+      this.focused
+        ? [
+            { text: ' ', style: rule },
+            { text, style: dim, action: { kind: 'close' } },
+            { text: ' ─', style: rule },
+          ]
+        : [];
+    const hint = this.focused
+      ? this.channels.length > 1
+        ? 'shift+←→ agent'
+        : ''
+      : 'ctrl+n to browse';
+    const candidates: [HeadSegment[], HeadSegment[]][] = [
+      [label(this.tabSegments(), hint), close('esc close')],
+      [label([this.tabSegment(ch, true)], ''), close('esc')],
+    ];
+    for (const [left, right] of candidates) {
+      const fill = width - segmentsWidth(left) - segmentsWidth(right);
+      if (fill >= 1) return [...left, { text: '─'.repeat(fill), style: rule }, ...right];
+    }
+    return [{ text: '─'.repeat(width), style: rule }];
+  }
+
+  /**
+   * The collapsed one-liner: an expand marker, the channel tabs, the total
+   * update count, and a preview of the current entry's first line —
+   * everything the user needs to decide whether to open the panel. A click on
+   * a tab opens that channel; anywhere else opens the current one.
+   */
+  private stubSegments(width: number): HeadSegment[] {
+    const dim = (text: string) => currentTheme.fg('textDim', text);
+    const expand: HeadAction = { kind: 'expand' };
+    const marker: HeadSegment = {
+      text: ' ▸ ',
+      style: (text) => currentTheme.fg('primary', text),
+      action: expand,
+    };
+    const total = this.channels.reduce((sum, ch) => sum + ch.entries.length, 0);
+    const count = `${String(total)} ${total === 1 ? 'update' : 'updates'}`;
+    const tail: HeadSegment = { text: ' · ctrl+n to expand', style: dim, action: expand };
+    const head = [marker, ...this.tabSegments(), { text: ` · ${count}`, style: dim, action: expand }];
+    const preview = this.previewText(this.currentEntry());
+    if (preview !== undefined) {
+      const budget = width - segmentsWidth(head) - segmentsWidth([tail]) - 3;
+      if (budget >= 12) {
+        return [...head, { text: ` · ${truncateToWidth(preview, budget)}`, style: dim, action: expand }, tail];
+      }
+    }
+    if (segmentsWidth(head) + segmentsWidth([tail]) <= width) return [...head, tail];
+    return [marker, { text: `${count} · ctrl+n to expand`, style: dim, action: expand }];
+  }
+
+  /** `▸ explore · <latest update>` for the agent behind a waiting approval or question. */
+  private summaryLine(agentId: string | undefined): string {
+    const asking = this.channels.find((ch) => ch.key === agentId);
+    const ch =
+      asking ??
+      this.channels.reduce((latest, channel) =>
+        (channel.entries.at(-1)?.time ?? 0) >= (latest.entries.at(-1)?.time ?? 0) ? channel : latest,
+      );
+    const entry = ch.entries.at(-1)!;
+    const preview = this.previewText(entry);
+    const dim = (text: string) => currentTheme.fg('textDim', text);
+    return (
+      ` ${currentTheme.fg('primary', '▸')} ${currentTheme.boldFg('primary', ch.label)}` +
+      (preview === undefined ? '' : dim(` · ${preview}`))
+    );
+  }
+
+  private tabSegments(): HeadSegment[] {
+    const segments: HeadSegment[] = [];
+    for (const [index, channel] of this.channels.entries()) {
+      if (index > 0) segments.push({ text: ' · ', style: (text) => currentTheme.fg('textDim', text) });
+      segments.push(this.tabSegment(channel, channel.key === this.activeKey));
+    }
+    return segments;
+  }
+
+  private tabSegment(channel: NotifyChannel, active: boolean): HeadSegment {
+    const action: HeadAction = { kind: 'channel', key: channel.key };
+    if (active) {
+      return { text: channel.label, style: (text) => currentTheme.boldFg('primary', text), action };
+    }
+    const unread = channel.unreadIds.size > 0;
+    return {
+      text: unread ? `${channel.label}●` : channel.label,
+      style: (text) => currentTheme.fg(unread ? 'primary' : 'textDim', text),
+      action,
+    };
+  }
+
+  /** An entry's title, else its first non-empty line stripped of list/bold markers. */
+  private previewText(entry: NotifyEntry): string | undefined {
+    if (entry.title !== undefined) return entry.title;
+    const firstLine = entry.text
+      .trim()
+      .split('\n')
+      .find((line) => line.trim().length > 0)
+      ?.trim()
+      .replace(/^[-*#>\s]+/, '')
+      .replaceAll('**', '');
+    return firstLine === undefined || firstLine.length === 0 ? undefined : firstLine;
+  }
+
+  private currentEntry(): NotifyEntry {
+    const ch = this.activeChannel();
+    return ch.entries[Math.min(ch.page, ch.entries.length - 1)]!;
   }
 
   private channelFor(entry: NotifyEntry): NotifyChannel {
@@ -281,73 +533,8 @@ export class NotifyPanelComponent implements Component {
   private activeChannel(): NotifyChannel {
     return this.channels[this.activeIndex()]!;
   }
+}
 
-  /**
-   * The collapsed one-liner: an expand hint marker, the channel tabs, the
-   * total update count, and a preview of the current entry's first line —
-   * everything the user needs to decide whether to open the box.
-   */
-  private stubLine(width: number): string {
-    const c = currentTheme.palette;
-    const dim = chalk.hex(c.textDim);
-    const marker = chalk.hex(c.primary)('▸');
-    const tabs = this.channels
-      .map((channel) => this.renderTab(channel, channel.key === this.activeKey))
-      .join(dim(' · '));
-    const total = this.channels.reduce((sum, ch) => sum + ch.entries.length, 0);
-    const noun = total === 1 ? 'update' : 'updates';
-    const head = ` ${marker} ${tabs} ${dim(`· ${String(total)} ${noun}`)}`;
-    const tail = ` ${dim('· ctrl+n')}`;
-    const preview = this.stubPreviewText();
-    if (preview !== undefined) {
-      const budget = width - visibleWidth(head) - visibleWidth(tail) - 3;
-      if (budget >= 12) return `${head} ${dim('·')} ${dim(truncateToWidth(preview, budget))}${tail}`;
-    }
-    if (visibleWidth(head) + visibleWidth(tail) <= width) return `${head}${tail}`;
-    return ` ${marker} ${dim(`${String(total)} ${noun} · ctrl+n`)}`;
-  }
-
-  /** The current entry's title, else its first non-empty line stripped of list/bold markers. */
-  private stubPreviewText(): string | undefined {
-    const ch = this.activeChannel();
-    const entry = ch.entries[Math.min(ch.page, ch.entries.length - 1)];
-    if (entry === undefined) return undefined;
-    if (entry.title !== undefined) return entry.title;
-    const firstLine = entry.text
-      .trim()
-      .split('\n')
-      .find((line) => line.trim().length > 0)
-      ?.trim()
-      .replace(/^[-*#>\s]+/, '')
-      .replaceAll('**', '');
-    return firstLine === undefined || firstLine.length === 0 ? undefined : firstLine;
-  }
-
-  /**
-   * The styled top-border label: a tab strip of channel labels (active tab
-   * highlighted, background channels with unread dotted), then the page
-   * indicator and key hints, slimmed down progressively as width shrinks.
-   */
-  private title(width: number): string | undefined {
-    const c = currentTheme.palette;
-    const ch = this.activeChannel();
-    const page = `${String(ch.page + 1)}/${String(ch.entries.length)}`;
-    const state = this.ended ? ' · turn ended' : '';
-    const hint = this.focused ? ' · ← → agent · ↑ ↓ update · esc close' : ' · ctrl+n page';
-    const paintTitle = this.ended ? chalk.hex(c.textDim).bold : chalk.hex(c.primary).bold;
-    const tabs = this.channels
-      .map((channel) => this.renderTab(channel, channel.key === this.activeKey))
-      .join(chalk.hex(c.textDim)(' · '));
-    const full = ` ${tabs} · Updates ${page}${state}${hint} `;
-    if (visibleWidth(full) <= width - 4) return paintTitle(full);
-    const compact = ` ${ch.label} · Updates ${page}${state} `;
-    return visibleWidth(compact) <= width - 4 ? paintTitle(compact) : undefined;
-  }
-
-  private renderTab(channel: NotifyChannel, active: boolean): string {
-    const c = currentTheme.palette;
-    if (active) return chalk.hex(c.primary).bold(channel.label);
-    const label = channel.unreadIds.size > 0 ? `${channel.label}●` : channel.label;
-    return channel.unreadIds.size > 0 ? chalk.hex(c.primary)(label) : chalk.hex(c.textDim)(label);
-  }
+function segmentsWidth(segments: readonly HeadSegment[]): number {
+  return segments.reduce((sum, segment) => sum + visibleWidth(segment.text), 0);
 }

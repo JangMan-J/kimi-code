@@ -19,6 +19,7 @@ import { maybeShowModelMigrationPrompt } from '#/tui/controllers/model-migration
 import type { ApprovalPanelData, QuestionPanelData } from '#/tui/reverse-rpc/types';
 import { REPLAY_FETCH_TURN_LIMIT } from '#/tui/utils/message-replay';
 import { copyTextToClipboard } from '#/utils/clipboard/clipboard-text';
+import { mountFooter } from '#/tui/tui-state';
 import { quoteShellArg } from '#/utils/shell-quote';
 import {
   DISABLE_TERMINAL_THEME_REPORTING,
@@ -311,10 +312,10 @@ describe('KimiTUI startup', () => {
     expect(driver.state.ui.children).toHaveLength(0);
 
     await expect(driver.init()).resolves.toBe(false);
-    (driver as unknown as { mountFooter(): void }).mountFooter();
+    mountFooter(driver.state);
 
-    // Dock = 7 chrome containers + footer wrap, below the transcript viewport.
-    expect(driver.state.dockContainer?.children).toHaveLength(8);
+    // Dock = 6 chrome containers + footer wrap, below the transcript viewport.
+    expect(driver.state.dockContainer?.children).toHaveLength(7);
   });
 
   it('shows a session-less notice on v2 startup', async () => {

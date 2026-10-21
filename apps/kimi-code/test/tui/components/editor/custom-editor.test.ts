@@ -686,6 +686,8 @@ describe('CustomEditor shortcut telemetry hooks', () => {
   it.each([
     ['\u001B[D', 'left'],
     ['\u001B[C', 'right'],
+    ['\u001B[1;2D', 'shift+left'],
+    ['\u001B[1;2C', 'shift+right'],
     ['\u001B[A', 'up'],
     ['\u001B[B', 'down'],
     ['\u001B', 'escape'],
