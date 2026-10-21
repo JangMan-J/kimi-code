@@ -39,10 +39,15 @@ describe('terminal focus tracking', () => {
       terminalState: {
         focused: false,
       },
+      editor: {
+        focused: true,
+        terminalFocused: false,
+      },
       terminal: {
         write: vi.fn(),
       },
       ui: {
+        requestRender: vi.fn(),
         addInputListener: vi.fn((listener) => {
           listeners.push(listener);
           return removeInputListener;
@@ -58,6 +63,13 @@ describe('terminal focus tracking', () => {
 
     listeners[0]?.(TERMINAL_FOCUS_OUT);
     expect(state.terminalState.focused).toBe(false);
+    expect(state.editor.terminalFocused).toBe(false);
+    expect(state.editor.focused).toBe(true);
+    expect(state.ui.requestRender).toHaveBeenCalledOnce();
+
+    listeners[0]?.(TERMINAL_FOCUS_IN);
+    expect(state.editor.terminalFocused).toBe(true);
+    expect(state.ui.requestRender).toHaveBeenCalledTimes(2);
 
     dispose();
 

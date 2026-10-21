@@ -685,7 +685,7 @@ describe('CustomEditor shortcut telemetry hooks', () => {
     },
   );
 
-  it('fades plain text and the border while another component holds focus, keeping highlighted tokens', () => {
+  it('fades plain text and the border when keyboard or terminal focus is lost, keeping highlighted tokens', () => {
     const previousLevel = chalk.level;
     chalk.level = 3;
     onTestFinished(() => {
@@ -708,6 +708,15 @@ describe('CustomEditor shortcut telemetry hooks', () => {
     expect(unfocused[1]).toContain(`${openCode('textDim')} me`);
     expect(unfocused[1]).not.toContain('\u001B[7m');
     expect(unfocused[0]).toContain('\u001B[2m');
+
+    editor.focused = true;
+    editor.terminalFocused = false;
+    const terminalUnfocused = editor.render(40);
+    expect(editor.focused).toBe(true);
+    expect(token(terminalUnfocused[1]!)).toBe(token(focused[1]!));
+    expect(terminalUnfocused[1]).toContain(`${openCode('textDim')} me`);
+    expect(terminalUnfocused[1]).not.toContain('\u001B[7m');
+    expect(terminalUnfocused[0]).toContain('\u001B[2m');
   });
 
   it('keeps the original editor bindings when Updates paging is unavailable', () => {

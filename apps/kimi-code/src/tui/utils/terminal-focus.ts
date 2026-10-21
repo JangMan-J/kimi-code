@@ -29,15 +29,22 @@ export function isFocusingClick(
 
 export function installTerminalFocusTracking(state: TUIState): () => void {
   state.terminalState.focused = true;
-  const disposeInputListener = state.ui.addInputListener((data) =>
-    handleTerminalFocusInput(state.terminalState, data),
-  );
+  state.editor.terminalFocused = true;
+  const disposeInputListener = state.ui.addInputListener((data) => {
+    const result = handleTerminalFocusInput(state.terminalState, data);
+    if (result !== undefined) {
+      state.editor.terminalFocused = state.terminalState.focused;
+      state.ui.requestRender();
+    }
+    return result;
+  });
   state.terminal.write(ENABLE_TERMINAL_FOCUS_REPORTING);
 
   return () => {
     disposeInputListener();
     state.terminal.write(DISABLE_TERMINAL_FOCUS_REPORTING);
     state.terminalState.focused = true;
+    state.editor.terminalFocused = true;
   };
 }
 

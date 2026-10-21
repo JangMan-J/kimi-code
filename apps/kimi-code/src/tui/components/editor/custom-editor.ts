@@ -156,6 +156,8 @@ export class CustomEditor extends Editor {
   public onInputModeChange?: (mode: 'prompt' | 'bash') => void;
   public connectedAbove = false;
   public borderHighlighted = false;
+  /** Terminal window focus, tracked separately from this component's keyboard focus. */
+  public terminalFocused = true;
   /**
    * Called when the user triggers "paste image" (Ctrl-V on Unix,
    * Alt-V on Windows — Ctrl-V is terminal-reserved there). Return
@@ -338,11 +340,12 @@ export class CustomEditor extends Editor {
         lines[firstContentIdx] = withPrompt;
       }
     }
-    // While another component holds the keyboard (the Updates panel), the
-    // editor looks inactive: no block cursor (pi-tui draws it focused or
-    // not), plain text and the border fade, highlighted tokens keep their
-    // colors.
-    if (!this.focused) {
+    // While another component holds the keyboard or the terminal window is
+    // inactive, the editor looks inactive: no block cursor (pi-tui draws it
+    // focused or not), plain text and the border fade, highlighted tokens
+    // keep their colors.
+    const inactive = !this.focused || !this.terminalFocused;
+    if (inactive) {
       for (let i = firstContentIdx; i < lines.length - 1; i++) {
         const line = lines[i]?.replace(BLOCK_CURSOR, '$1');
         if (line === undefined || line.length < 2 || !line.startsWith(' ') || !line.endsWith(' ')) continue;
@@ -353,9 +356,9 @@ export class CustomEditor extends Editor {
     // overwrite it (e.g. plan-mode / slash-context highlight via
     // `editor.borderColor = chalk.hex(primary)`), so we route corners and
     // side bars through the same hook to stay in sync.
-    const paintBorder = this.focused
-      ? (s: string) => this.borderColor(s)
-      : (s: string) => currentTheme.dim(this.borderColor(s));
+    const paintBorder = inactive
+      ? (s: string) => currentTheme.dim(this.borderColor(s))
+      : (s: string) => this.borderColor(s);
     return wrapWithSideBorders(lines, paintBorder, {
       connectedAbove: this.connectedAbove && !this.borderHighlighted,
       label: isBash ? ` ${currentTheme.boldFg('shellMode', '! shell mode')} ` : undefined,
