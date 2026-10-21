@@ -392,6 +392,11 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('phase one');
     panel.setEnded(true);
     expect(render(panel).join('\n')).toContain('phase one');
+    expect(titleOf(panel)).toContain('close');
+
+    click(panel, 'close');
+    expect(panel.focused).toBe(false);
+    expect(render(panel)).toHaveLength(1);
   });
 
   it('opens the folded stub on a tab click, and keeps a clicked-open panel open across a focus round trip', () => {

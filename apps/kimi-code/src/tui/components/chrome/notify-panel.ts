@@ -339,7 +339,12 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
         this.openByClick();
         return;
       case 'close':
-        this.onReturnFocus?.(undefined);
+        if (this.hasFocus) {
+          this.onReturnFocus?.(undefined);
+        } else {
+          this.collapsed = true;
+          this.keptOpen = false;
+        }
         return;
     }
   }
@@ -396,8 +401,8 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
 
   /**
    * The expanded head: a rule labelled with the channel tabs, the pager and a
-   * key hint, plus a close button while focused. Slims down as width shrinks:
-   * first the other tabs and the hint go, then the label altogether.
+   * key hint, plus a close button while focused or clicked open. Slims down as
+   * width shrinks: first the other tabs and the hint go, then the label altogether.
    */
   private headSegments(width: number): HeadSegment[] {
     const rule = (text: string) => currentTheme.fg(this.hasFocus ? 'primary' : 'border', text);
@@ -424,14 +429,14 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       segments.push({ text: ' ', style: rule });
       return segments;
     };
-    const close = (text: string): HeadSegment[] =>
-      this.hasFocus
-        ? [
-            { text: ' ', style: rule },
-            { text, style: dim, action: { kind: 'close' } },
-            { text: ' ─', style: rule },
-          ]
-        : [];
+    const close = (text: string): HeadSegment[] => {
+      if (!this.hasFocus && !this.keptOpen) return [];
+      return [
+        { text: ' ', style: rule },
+        { text: this.hasFocus ? text : 'close', style: dim, action: { kind: 'close' } },
+        { text: ' ─', style: rule },
+      ];
+    };
     const hint = this.hasFocus
       ? this.channels.length > 1
         ? 'shift+←→ agent'
