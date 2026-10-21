@@ -184,9 +184,10 @@ describe('NotifyPanelComponent', () => {
 
     expect(titleOf(panel)).toContain('Updates · ctrl+n to browse');
     panel.focus();
-    expect(titleOf(panel)).toMatch(/^─ main · Updates · ↑ ↓ update ─+ esc close ─$/);
+    expect(titleOf(panel)).toMatch(/^─ main · Updates ─+ esc close ─$/);
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
-    expect(titleOf(panel)).toContain('← → agent · ↑ ↓ update');
+    expect(titleOf(panel)).toContain('← → agent');
+    expect(titleOf(panel)).not.toContain('↑ ↓ update');
     expect(titleOf(panel, 30)).toMatch(/^─ main · Updates ─+ esc ─$/);
     panel.blur();
     expect(panel.blur()).toBe(false);
@@ -440,6 +441,21 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel)).toHaveLength(1);
   });
 
+  it('folds a clicked-open ended panel on an explicit Escape close', () => {
+    const panel = new NotifyPanelComponent();
+    panel.upsert(entry('tc-1', 'main one'));
+    panel.setEnded(true);
+    click(panel, 'ctrl+n to expand');
+    panel.focused = true;
+    expect(render(panel)).toHaveLength(2);
+
+    panel.handleInput('\u001B');
+    panel.focused = false;
+
+    expect(render(panel)).toHaveLength(1);
+    expect(titleOf(panel)).toContain('ctrl+n to expand');
+  });
+
   it('keeps an older page when the newest update is retracted and another arrives', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main old'));
@@ -485,6 +501,7 @@ describe('NotifyPanelComponent', () => {
     expect(titleOf(panel)).not.toContain('Updates ←');
 
     panel.handleInput('\u001B[D');
+    expect(titleOf(panel)).toContain('← → agent · ↑ ↓ update');
     expect(titleOf(panel)).toContain('Updates < 2/2 >');
     expect(render(panel).join('\n')).toContain('main two');
     panel.handleInput('\u001B[A');
@@ -494,6 +511,8 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('main two');
     panel.handleInput('\u001B[C');
     expect(titleOf(panel)).toContain('main · explore · Updates');
+    expect(titleOf(panel)).toContain('← → agent');
+    expect(titleOf(panel)).not.toContain('↑ ↓ update');
     panel.handleInput('\u001B[1;2B');
     expect(returned).toEqual([]);
 

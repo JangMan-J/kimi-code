@@ -238,6 +238,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   handleInput(data: string): void {
     const key = normalizeCapsLockedCtrl(data);
     if (matchesKey(key, Key.escape) || matchesKey(key, Key.ctrl('n'))) {
+      this.keptOpen = false;
       this.onReturnFocus?.(undefined);
     } else if (matchesKey(key, Key.left)) {
       this.prevChannel();
@@ -336,6 +337,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
         return;
       case 'close':
         if (this.hasFocus) {
+          this.keptOpen = false;
           this.onReturnFocus?.(undefined);
         } else {
           this.collapsed = true;
@@ -432,11 +434,10 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
         { text: ' ─', style: rule },
       ];
     };
-    const hint = this.hasFocus
-      ? this.channels.length > 1
-        ? '← → agent · ↑ ↓ update'
-        : '↑ ↓ update'
-      : 'ctrl+n to browse';
+    const focusedHints: string[] = [];
+    if (this.channels.length > 1) focusedHints.push('← → agent');
+    if (ch.entries.length > 1) focusedHints.push('↑ ↓ update');
+    const hint = this.hasFocus ? focusedHints.join(' · ') : 'ctrl+n to browse';
     const candidates: [HeadSegment[], HeadSegment[]][] = [
       [label(this.tabSegments(), hint), close('esc close')],
       [label([this.tabSegment(ch, true)], ''), close('esc')],
