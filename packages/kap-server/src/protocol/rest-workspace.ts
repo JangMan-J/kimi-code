@@ -52,3 +52,11 @@ export const addDirResponseSchema = z.object({
   persisted: z.boolean(),
 });
 export type AddDirResponse = z.infer<typeof addDirResponseSchema>;
+
+export const setPrimaryRequestSchema = z.object({
+  path: z.string().min(1),
+});
+export type SetPrimaryRequest = z.infer<typeof setPrimaryRequestSchema>;
+
+export const setPrimaryResponseSchema = workspaceSchema;
+export type SetPrimaryResponse = z.infer<typeof setPrimaryResponseSchema>;

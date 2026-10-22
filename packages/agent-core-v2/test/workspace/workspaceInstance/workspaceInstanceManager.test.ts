@@ -138,6 +138,7 @@ function manager(
     }),
     touch: vi.fn(async (id: string) => byId.get(id)),
     update: async () => undefined,
+    setPrimary: async () => undefined,
     delete: async () => {},
   };
   const args: unknown[] = [

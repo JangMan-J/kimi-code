@@ -185,6 +185,43 @@ export class WorkspaceService implements IWorkspaceService {
     });
   }
 
+  setPrimary(id: string, path: string): Promise<Workspace | undefined> {
+    return this.runExclusive(async () => {
+      await this.ensureMerged();
+      const catalog = await this.loadCatalog();
+      const existing = catalog.workspaces.find((ws) => ws.id === id);
+      if (existing === undefined) return undefined;
+      const resolved = (await this.localConfig.resolveAdditionalDirs(existing.root, [path]))[0];
+      if (resolved === undefined) {
+        throw new Error2(ErrorCodes.FS_PATH_NOT_FOUND, `primary ${path} does not exist`);
+      }
+      const rootKey = workspaceRootKey(existing.root);
+      const resolvedKey = workspaceRootKey(resolved);
+      if (resolvedKey === rootKey) return existing;
+      if (!existing.additionalDirs.some((dir) => workspaceRootKey(dir) === resolvedKey)) {
+        throw new Error2(
+          ErrorCodes.CONFIG_INVALID,
+          `primary ${resolved} is not in the workspace dir set`,
+        );
+      }
+      const updated: Workspace = {
+        ...existing,
+        root: resolved,
+        additionalDirs: [
+          existing.root,
+          ...existing.additionalDirs.filter((dir) => workspaceRootKey(dir) !== resolvedKey),
+        ],
+        lastOpenedAt: Date.now(),
+      };
+      await this.store.save({
+        workspaces: catalog.workspaces.map((ws) => (ws.id === id ? updated : ws)),
+        deletedIds: catalog.deletedIds,
+      });
+      this.event.publish(new WorkspaceUpdated({ payload: { workspace: updated } }));
+      return updated;
+    });
+  }
+
   delete(id: string): Promise<void> {
     return this.runExclusive(async () => {
       await this.ensureMerged();

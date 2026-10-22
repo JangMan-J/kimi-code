@@ -1641,6 +1641,7 @@ Workspaces are the registered project directories sessions live in. These endpoi
 | `GET /api/v1/workspaces` | List registered workspaces |
 | `POST /api/v1/workspaces` | Register a workspace (fresh entry per call; retries deduped via `idempotency_key`) |
 | `PATCH /api/v1/workspaces/{workspace_id}` | Rename or replace source folders |
+| `POST /api/v1/workspaces/{workspace_id}/primary` | Promote a source folder to the primary directory |
 | `DELETE /api/v1/workspaces/{workspace_id}` | Unregister (keeps on-disk content) |
 | `GET /api/v1/workspaces/{workspace_id}/trust` | Read the trust state |
 | `POST /api/v1/workspaces/{workspace_id}/trust` | Grant trust |
@@ -1697,6 +1698,21 @@ On success, `data` is [the workspace object](#the-workspace-object).
 
 - `40001`: validation failure (both fields missing, or duplicate entries, or an entry equal to the primary directory; `details` lists each field)
 - `40409`: a path in `additional_dirs` does not exist or is not a directory
+- `40410`: workspace not found
+
+#### `POST /api/v1/workspaces/{workspace_id}/primary`
+
+Promotes a source folder in the workspace's dir set to the primary directory. The swap is atomic: the path becomes the new `root` and the previous primary moves into `additional_dirs`; the workspace id and session bucket are unchanged, and all sessions are kept. After the swap, additional directories coming from the previous primary's `local.toml` are no longer merged (`local.toml` follows the primary directory).
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `workspace_id` | path | string | **Required.** Workspace id |
+| `path` | body | string | **Required.** Directory to promote, resolved like `add-dir`; must be in the current dir set (`root` ∪ `additional_dirs`) |
+
+On success, `data` is [the workspace object](#the-workspace-object).
+
+- `40001`: `path` is not in the dir set
+- `40409`: `path` does not exist or is not a directory
 - `40410`: workspace not found
 
 #### `DELETE /api/v1/workspaces/{workspace_id}`

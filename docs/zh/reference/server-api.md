@@ -1641,6 +1641,7 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 | `GET /api/v1/workspaces` | 列出已注册工作区 |
 | `POST /api/v1/workspaces` | 注册工作区（每次调用创建新条目；重试经 `idempotency_key` 去重） |
 | `PATCH /api/v1/workspaces/{workspace_id}` | 重命名或整体替换源文件夹 |
+| `POST /api/v1/workspaces/{workspace_id}/primary` | 将某个源文件夹提升为主目录 |
 | `DELETE /api/v1/workspaces/{workspace_id}` | 注销（保留磁盘内容） |
 | `GET /api/v1/workspaces/{workspace_id}/trust` | 读取信任状态 |
 | `POST /api/v1/workspaces/{workspace_id}/trust` | 授予信任 |
@@ -1697,6 +1698,21 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 
 - `40001`：校验失败（两个字段都缺失，或目录项重复、与主目录相同；`details` 逐字段说明）
 - `40409`：`additional_dirs` 中的路径不存在或不是目录
+- `40410`：工作区不存在
+
+#### `POST /api/v1/workspaces/{workspace_id}/primary`
+
+将目录集内的某个源文件夹提升为主目录。服务端做原子交换：该路径成为新的 `root`，原主目录进入 `additional_dirs`；工作区 id 与会话桶不变，全部会话保留。交换后原主目录 `local.toml` 中的附加目录将不再并入（`local.toml` 跟随主目录生效）。
+
+| 参数 | 位置 | 类型 | 说明 |
+| --- | --- | --- | --- |
+| `workspace_id` | path | string | **必填。** 工作区 id |
+| `path` | body | string | **必填。** 要提升的目录，解析规则同 `add-dir`；必须在当前目录集（`root` ∪ `additional_dirs`）内 |
+
+成功时 `data` 为 [workspace 对象](#workspace-对象)。
+
+- `40001`：`path` 不在目录集内
+- `40409`：`path` 不存在或不是目录
 - `40410`：工作区不存在
 
 #### `DELETE /api/v1/workspaces/{workspace_id}`

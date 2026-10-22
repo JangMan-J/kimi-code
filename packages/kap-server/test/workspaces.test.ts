@@ -325,6 +325,59 @@ describe('server-v2 /api/v1/workspaces', () => {
     expect(unknown.body.code).toBe(40410);
   });
 
+  it('promotes a source folder to primary (atomic swap, bucket unchanged)', async () => {
+    const root = home as string;
+    const extra = join(root, 'primary-candidate');
+    await mkdir(extra, { recursive: true });
+    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', {
+      root,
+      additional_dirs: [extra],
+    });
+    const id = created.body.data.id;
+
+    const promoted = await postJson<WorkspaceWire>(`/api/v1/workspaces/${id}/primary`, {
+      path: extra,
+    });
+    expect(promoted.body.code).toBe(0);
+    expect(promoted.body.data.id).toBe(id);
+    expect(promoted.body.data.root).toBe(extra);
+    expect(promoted.body.data.additional_dirs).toEqual([root]);
+
+    const session = await postJson<{ workspace_id: string }>('/api/v1/sessions', {
+      workspace_id: id,
+    });
+    expect(session.body.code).toBe(0);
+    expect(session.body.data.workspace_id).toBe(id);
+  });
+
+  it('rejects invalid primary paths and unknown workspaces (40001/40409/40410)', async () => {
+    const root = home as string;
+    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
+    const id = created.body.data.id;
+
+    const outside = join(root, 'outside-dir');
+    await mkdir(outside, { recursive: true });
+    const notInSet = await postJson<null>(`/api/v1/workspaces/${id}/primary`, { path: outside });
+    expect(notInSet.body.code).toBe(40001);
+    expect(notInSet.body.details?.[0]?.path).toBe('path');
+
+    const vanished = join(root, 'vanished-dir');
+    await mkdir(vanished, { recursive: true });
+    const widened = await patchJson<WorkspaceWire>(`/api/v1/workspaces/${id}`, {
+      additional_dirs: [vanished],
+    });
+    expect(widened.body.code).toBe(0);
+    await rm(vanished, { recursive: true, force: true });
+    const gone = await postJson<null>(`/api/v1/workspaces/${id}/primary`, { path: vanished });
+    expect(gone.body.code).toBe(40409);
+
+    const unknown = await postJson<null>(
+      '/api/v1/workspaces/wm_00000000-0000-0000-0000-000000000000/primary',
+      { path: root },
+    );
+    expect(unknown.body.code).toBe(40410);
+  });
+
   it('sums session_count across legacy split buckets of one root', async () => {
     const typedRoot = 'C:\\Users\\Foo\\Proj';
     const lowerRoot = 'c:\\users\\foo\\proj';

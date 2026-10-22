@@ -652,6 +652,47 @@ describe('WorkspaceService (file-backed)', () => {
     expect(saved.deleted_workspace_ids).toEqual([implicit.id]);
   });
 
+  it('setPrimary swaps root with an additional dir atomically and keeps id and bucket', async () => {
+    const registry = build();
+    const extraA = join(homeDir, 'extra-a');
+    const extraB = join(homeDir, 'extra-b');
+    await fsp.mkdir(extraA, { recursive: true });
+    await fsp.mkdir(extraB, { recursive: true });
+    const created = await registry.create({
+      root: homeDir,
+      additionalDirs: [extraA, extraB],
+      name: 'proj',
+    });
+
+    const promoted = await registry.setPrimary(created.id, extraA);
+    expect(promoted?.id).toBe(created.id);
+    expect(promoted?.root).toBe(extraA);
+    expect(promoted?.additionalDirs).toEqual([homeDir, extraB]);
+
+    const saved = await readWorkspacesJson();
+    expect(saved.workspaces[created.id]?.root).toBe(extraA);
+    expect((await restart().get(created.id))?.additionalDirs).toEqual([homeDir, extraB]);
+
+    const noop = await registry.setPrimary(created.id, extraA);
+    expect(noop?.root).toBe(extraA);
+    expect(noop?.additionalDirs).toEqual([homeDir, extraB]);
+  });
+
+  it('setPrimary rejects a path outside the dir set, a missing path, or an unknown id', async () => {
+    const registry = build();
+    const outside = join(homeDir, 'outside');
+    await fsp.mkdir(outside, { recursive: true });
+    const created = await registry.create({ root: homeDir });
+
+    await expect(registry.setPrimary(created.id, outside)).rejects.toMatchObject({
+      code: ErrorCodes.CONFIG_INVALID,
+    });
+    await expect(registry.setPrimary(created.id, join(homeDir, 'missing'))).rejects.toMatchObject({
+      code: ErrorCodes.CONFIG_INVALID,
+    });
+    expect(await registry.setPrimary('wd_missing_000000000000', homeDir)).toBeUndefined();
+  });
+
   it('merge and rebuild skip session-index lines written into wm_ buckets', async () => {
     const workA = join(homeDir, 'proj-a');
     const workB = join(homeDir, 'proj-b');

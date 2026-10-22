@@ -30,6 +30,7 @@ export interface IWorkspaceService {
   createOrTouch(root: string, name?: string): Promise<Workspace>;
   touch(id: string): Promise<Workspace | undefined>;
   update(id: string, patch: WorkspaceUpdate): Promise<Workspace | undefined>;
+  setPrimary(id: string, path: string): Promise<Workspace | undefined>;
   delete(id: string): Promise<void>;
 }
 

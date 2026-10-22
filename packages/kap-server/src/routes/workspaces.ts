@@ -24,6 +24,8 @@ import {
   createWorkspaceResponseSchema,
   deleteWorkspaceResponseSchema,
   listWorkspacesResponseSchema,
+  setPrimaryRequestSchema,
+  setPrimaryResponseSchema,
   updateWorkspaceRequestSchema,
   updateWorkspaceResponseSchema,
   workspaceIdParamSchema,
@@ -311,6 +313,79 @@ export function registerWorkspacesRoutes(app: WorkspaceRouteHost, core: Scope): 
     untrustRoute.path,
     untrustRoute.options,
     untrustRoute.handler as Parameters<WorkspaceRouteHost['post']>[2],
+  );
+
+  const setPrimaryRoute = defineRoute(
+    {
+      method: 'POST',
+      path: '/workspaces/{workspace_id}/primary',
+      params: workspaceIdParamSchema,
+      body: setPrimaryRequestSchema,
+      success: { data: setPrimaryResponseSchema },
+      errors: {
+        [ErrorCode.VALIDATION_FAILED]: { detailsSchema },
+        [ErrorCode.FS_PATH_NOT_FOUND]: {},
+        [ErrorCode.WORKSPACE_NOT_FOUND]: {},
+      },
+      description: 'Promote a source folder to the primary directory (atomic swap; id and bucket unchanged)',
+      tags: ['workspaces'],
+    },
+    async (req, reply) => {
+      const { workspace_id } = req.params;
+      const registry = core.accessor.get(IWorkspaceService);
+      const existing = await registry.get(workspace_id);
+      if (existing === undefined) {
+        reply.send(
+          errEnvelope(ErrorCode.WORKSPACE_NOT_FOUND, `workspace ${workspace_id} does not exist`, req.id),
+        );
+        return;
+      }
+      const resolved = resolveAdditionalDirPath(core, existing.root, req.body.path);
+      const resolvedKey = workspaceRootKey(resolved);
+      const inSet =
+        resolvedKey === workspaceRootKey(existing.root) ||
+        existing.additionalDirs.some((dir) => workspaceRootKey(dir) === resolvedKey);
+      if (!inSet) {
+        reply.send(
+          buildValidationEnvelope(
+            [{ path: 'path', message: 'path is not in the workspace dir set' }],
+            req.id,
+          ),
+        );
+        return;
+      }
+      const hostFs = core.accessor.get(IHostFileSystem);
+      try {
+        const stat = await hostFs.stat(resolved);
+        if (!stat.isDirectory) {
+          reply.send(
+            errEnvelope(ErrorCode.FS_PATH_NOT_FOUND, `path ${req.body.path} is not a directory`, req.id),
+          );
+          return;
+        }
+      } catch {
+        reply.send(
+          errEnvelope(ErrorCode.FS_PATH_NOT_FOUND, `path ${req.body.path} does not exist`, req.id),
+        );
+        return;
+      }
+      const ws = await registry.setPrimary(workspace_id, resolved);
+      if (ws === undefined) {
+        reply.send(
+          errEnvelope(ErrorCode.WORKSPACE_NOT_FOUND, `workspace ${workspace_id} does not exist`, req.id),
+        );
+        return;
+      }
+      if (workspaceRootKey(ws.root) !== workspaceRootKey(existing.root)) {
+        await core.accessor.get(IWorkspaceInstanceManager).close(workspace_id);
+      }
+      reply.send(okEnvelope(await toWireWorkspace(core, ws), req.id));
+    },
+  );
+  app.post(
+    setPrimaryRoute.path,
+    setPrimaryRoute.options,
+    setPrimaryRoute.handler as Parameters<WorkspaceRouteHost['post']>[2],
   );
 
   const addDirRoute = defineRoute(
