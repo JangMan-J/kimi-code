@@ -1374,6 +1374,60 @@ describe('WorkspaceFsService.list', () => {
       }),
     ).rejects.toMatchObject({ code: 'fs.path_escapes' });
   });
+
+  it('lists an additional workspace root by absolute path with request-anchored keys', async () => {
+    const fs = makeSession(
+      { '/extra/notes.md': '', '/extra/sub/more.ts': '', 'src/a.ts': '' },
+      emptyHandler,
+      [],
+      defaultGitStub(),
+      [],
+      undefined,
+      {},
+      ['/extra'],
+    );
+    const result = await fs.list({
+      path: '/extra',
+      depth: 2,
+      limit: 200,
+      show_hidden: false,
+      follow_gitignore: false,
+      sort: 'name_asc',
+      include_git_status: false,
+    });
+    expect(result.items.map((i) => i.path).toSorted()).toEqual(['notes.md', 'sub']);
+    expect(result.children_by_path?.['sub']?.map((i) => i.path)).toEqual(['sub/more.ts']);
+  });
+
+  it('rejects absolute paths outside the workspace dir set', async () => {
+    const fs = makeSession({}, emptyHandler);
+    await expect(
+      fs.list({
+        path: '/etc',
+        depth: 1,
+        limit: 200,
+        show_hidden: false,
+        follow_gitignore: false,
+        sort: 'name_asc',
+        include_git_status: false,
+      }),
+    ).rejects.toMatchObject({ code: 'fs.path_escapes' });
+  });
+
+  it('reads a file under an additional workspace root by absolute path', async () => {
+    const fs = makeSession(
+      { '/extra/notes.md': 'hello\n' },
+      emptyHandler,
+      [],
+      defaultGitStub(),
+      [],
+      undefined,
+      {},
+      ['/extra'],
+    );
+    const result = await fs.stat({ path: '/extra/notes.md' });
+    expect(result.name).toBe('notes.md');
+  });
 });
 
 describe('WorkspaceFsService.read', () => {

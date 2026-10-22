@@ -140,7 +140,11 @@ export class WorkspaceFsService implements IWorkspaceFsService {
 
   async list(req: FsListRequest): Promise<FsListResponse> {
     const abs = await this.resolveWithin(req.path);
-    const rel = this.toRel(abs);
+    const anchored = this.path.isAbsolute(req.path);
+    const rel = anchored ? '.' : this.toRel(abs);
+    const base = anchored ? abs : this.workDir;
+    const absOf = (relPath: string): string =>
+      relPath === '' || relPath === '.' ? base : this.path.join(base, relPath);
 
     let topStat: HostFileStat;
     try {
@@ -154,7 +158,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
       });
     }
 
-    const gitignore = req.follow_gitignore ? await this.matcher() : undefined;
+    const gitignore = req.follow_gitignore ? await this.matcherFor(base) : undefined;
 
     const items: FsEntry[] = [];
     const childrenByPath: Record<string, FsEntry[]> = {};
@@ -179,7 +183,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
       const entry = queue.shift()!;
       let names: readonly string[];
       try {
-        names = (await this.hostFs.readdir(this.absOf(entry.relPath))).map((e) => e.name);
+        names = (await this.hostFs.readdir(absOf(entry.relPath))).map((e) => e.name);
       } catch (error) {
         if (entry.relPath === (rel === '.' ? '' : rel)) {
           throw mapFsError(error, req.path);
@@ -200,11 +204,11 @@ export class WorkspaceFsService implements IWorkspaceFsService {
           }
         }
         if (req.exclude_globs && matchesAnyGlob(childRel, req.exclude_globs)) continue;
-        const st = await this.hostFs.lstat(this.absOf(childRel)).catch(() => undefined);
+        const st = await this.hostFs.lstat(absOf(childRel)).catch(() => undefined);
         if (st === undefined || (ancestorOfAllowed && !st.isDirectory)) continue;
         if (
           ancestorOfAllowed &&
-          !(await this.hasAllowedDescendant(childRel, req.allow_ignored_globs!, req.exclude_globs, req.show_hidden, probeBudget))
+          !(await this.hasAllowedDescendant(childRel, req.allow_ignored_globs!, req.exclude_globs, req.show_hidden, probeBudget, absOf))
         ) continue;
         visible.push({ name, relPath: childRel, stat: st });
       }
@@ -246,12 +250,13 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     excludeGlobs: readonly string[] | undefined,
     showHidden: boolean,
     budget: { visited: number },
+    absOf: (rel: string) => string,
   ): Promise<boolean> {
     const walk = async (rel: string, depth: number): Promise<boolean> => {
       if (depth > PROBE_MAX_DEPTH || budget.visited >= PROBE_MAX_ENTRIES) return true;
       let names: readonly string[];
       try {
-        names = (await this.hostFs.readdir(this.absOf(rel))).map((e) => e.name);
+        names = (await this.hostFs.readdir(absOf(rel))).map((e) => e.name);
       } catch {
         return false;
       }
@@ -262,7 +267,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
         const childRel = `${rel}/${name}`;
         if (excludeGlobs !== undefined && matchesAnyGlob(childRel, excludeGlobs)) continue;
         if (matchesAnyGlob(childRel, globs)) return true;
-        const st = await this.hostFs.lstat(this.absOf(childRel)).catch(() => undefined);
+        const st = await this.hostFs.lstat(absOf(childRel)).catch(() => undefined);
         if (st?.isDirectory === true && globCanMatchBelow(childRel, globs)) {
           if (await walk(childRel, depth + 1)) return true;
         }
@@ -1180,11 +1185,6 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     if (inputPath === '' || inputPath === '/') {
       throw new Error2(ErrorCodes.FS_PATH_ESCAPES, `path "${inputPath}" rejected (empty)`, {
         details: { path: inputPath, reason: 'empty' },
-      });
-    }
-    if (this.path.isAbsolute(inputPath)) {
-      throw new Error2(ErrorCodes.FS_PATH_ESCAPES, `path "${inputPath}" rejected (absolute)`, {
-        details: { path: inputPath, reason: 'absolute' },
       });
     }
     const segments = inputPath.split(/[/\\]+/);
