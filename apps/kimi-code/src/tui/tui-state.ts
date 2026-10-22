@@ -151,7 +151,7 @@ export function createTUIState(options: KimiTUIOptions): TUIState {
   const queuePane = new QueuePaneComponent(fullscreen ? { maxBodyRows: DOCK_QUEUE_ROWS } : undefined);
   const notifyPanelContainer = fullscreen ? new VStack() : new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const notifyPanel = new NotifyPanelComponent(
-    fullscreen ? { maxBodyRows: DOCK_UPDATES_ROWS } : undefined,
+    fullscreen ? { maxBodyRows: DOCK_UPDATES_ROWS, screenRows: () => ui.terminal.rows } : undefined,
   );
   const btwPanelContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
   const surveyContainer = new GutterContainer(CHROME_GUTTER, CHROME_GUTTER);
@@ -285,6 +285,16 @@ export function setEditorSlot(
   }
   editorContainer.addChild(component);
   editorSlot.addChild(editorContainer, EDITOR_SLOT_ENTRY);
+}
+
+/** What stands where the editor sits: the editor itself or a panel that replaced it. */
+export function editorSlotComponent(
+  state: Pick<TUIState, 'editorContainer' | 'editorSlot'>,
+): Component | undefined {
+  const slotted = state.editorSlot?.children[0];
+  return slotted === undefined || slotted === state.editorContainer
+    ? state.editorContainer.children[0]
+    : slotted;
 }
 
 /** An approval or question has replaced the editor and waits for the user. */

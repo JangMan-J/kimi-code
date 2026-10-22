@@ -1,5 +1,6 @@
 import { CURSOR_MARKER, type Component, type TuiMouseEvent } from '@moonshot-ai/pi-tui';
-import { describe, expect, it } from 'vitest';
+import chalk from 'chalk';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { GutterContainer } from '#/tui/components/chrome/gutter-container';
 import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
@@ -13,6 +14,12 @@ import { captureProcessWrite } from '../../../helpers/process';
 
 function strip(text: string): string {
   return text.replaceAll(/\u001B\[[0-9;]*m/g, '');
+}
+
+/** The host focuses a panel when it mounts one in place of the editor. */
+function mount(panel: ApprovalPanelComponent): ApprovalPanelComponent {
+  panel.focused = true;
+  return panel;
 }
 
 function makePending(): PendingApproval {
@@ -47,10 +54,10 @@ function makeDialog(): {
     feedback?: string | undefined;
     selected_label?: string | undefined;
   }> = [];
-  const dialog = new ApprovalPanelComponent(
+  const dialog = mount(new ApprovalPanelComponent(
     makePending(),
     (response) => responses.push(response),
-  );
+  ));
   return { dialog, responses };
 }
 
@@ -82,7 +89,7 @@ describe('ApprovalPanelComponent', () => {
         ],
       },
     };
-    const out = strip(new ApprovalPanelComponent(pending, () => {}).render(80).join('\n'));
+    const out = strip(mount(new ApprovalPanelComponent(pending, () => {})).render(80).join('\n'));
     expect(out).toContain('1. Switch to Never Ask and start');
     expect(out).toContain('Tools are approved automatically, and questions are skipped.');
     // A choice without a description stays label-only — no stray blank helper line.
@@ -108,7 +115,7 @@ describe('ApprovalPanelComponent', () => {
         choices: [{ label: 'Approve once', response: 'approved' }],
       },
     };
-    const dialog = new ApprovalPanelComponent(pending, () => {});
+    const dialog = mount(new ApprovalPanelComponent(pending, () => {}));
 
     const out = strip(dialog.render(80).join('\n'));
     expect(out).toContain('Dangerous: recursive delete');
@@ -137,7 +144,7 @@ describe('ApprovalPanelComponent', () => {
         choices: [{ label: 'Approve once', response: 'approved' }],
       },
     };
-    const dialog = new ApprovalPanelComponent(pending, () => {});
+    const dialog = mount(new ApprovalPanelComponent(pending, () => {}));
 
     const rendered = dialog.render(60);
     const out = strip(rendered.join('\n'));
@@ -170,6 +177,64 @@ describe('ApprovalPanelComponent', () => {
     const out = strip(dialog.render(80).join('\n'));
     expect(out).toContain('▶ 4. Reject with feedback');
     expect(out).not.toContain('\n  > ');
+  });
+
+  it('lends the keyboard to Updates on ctrl+n, even while typing feedback', () => {
+    let updatesReady = false;
+    const lent: string[] = [];
+    const responses: unknown[] = [];
+    const dialog = mount(new ApprovalPanelComponent(makePending(), (response) => responses.push(response), undefined, undefined, {
+      onFocusUpdates: () => {
+        lent.push('ctrl+n');
+        return updatesReady;
+      },
+    }));
+
+    dialog.handleInput('\u000E');
+    expect(lent).toHaveLength(1);
+    updatesReady = true;
+    dialog.handleInput('\u000E');
+    expect(responses).toEqual([]);
+    dialog.handleInput('4');
+    dialog.handleInput('\u001B[78;69u');
+    dialog.handleInput('x');
+    dialog.handleInput('\r');
+    expect(lent).toHaveLength(3);
+    expect(responses).toEqual([{ response: 'rejected', feedback: 'x', selected_label: undefined }]);
+  });
+
+  it('fades while another panel holds the keyboard or the window is inactive', () => {
+    const previousLevel = chalk.level;
+    chalk.level = 3;
+    onTestFinished(() => {
+      chalk.level = previousLevel;
+    });
+    let terminalFocused = true;
+    const dialog = mount(new ApprovalPanelComponent(makePending(), () => {}, undefined, undefined, {
+      isTerminalFocused: () => terminalFocused,
+    }));
+    const faint = '\u001B[2m';
+    const fadedThroughout = (lines: string[]): boolean =>
+      lines.every(
+        (line) =>
+          line.length === 0 ||
+          (line.startsWith(faint) && !/\u001B\[22m(?!\u001B\[2m)./u.test(line)),
+      );
+    const focusedLines = dialog.render(80);
+    expect(focusedLines.join('\n')).not.toContain(faint);
+
+    dialog.focused = false;
+    const faded = dialog.render(80);
+    expect(fadedThroughout(faded)).toBe(true);
+    expect(faded.map(strip).at(-2)?.trim()).toBe('esc back to approval');
+    expect(faded[0]).not.toBe(focusedLines[0]);
+    expect(strip(faded.join('\n'))).toContain('▶ 1. Approve once');
+
+    dialog.focused = true;
+    terminalFocused = false;
+    const away = dialog.render(80);
+    expect(fadedThroughout(away)).toBe(true);
+    expect(strip(away.join('\n'))).toBe(strip(focusedLines.join('\n')));
   });
 
   it('legacy y/a/n/f shortcuts no longer trigger approval actions', () => {
@@ -240,7 +305,7 @@ describe('ApprovalPanelComponent', () => {
         ],
       },
     };
-    const dialog = new ApprovalPanelComponent(pending, () => {});
+    const dialog = mount(new ApprovalPanelComponent(pending, () => {}));
 
     const out = strip(dialog.render(80).join('\n'));
     expect(out).toContain('Ready to build with this plan?');
@@ -285,12 +350,12 @@ describe('ApprovalPanelComponent', () => {
     };
     let toolOutputToggles = 0;
     const previewCalls: Array<DiffDisplayBlock | FileContentDisplayBlock> = [];
-    const dialog = new ApprovalPanelComponent(
+    const dialog = mount(new ApprovalPanelComponent(
       pending,
       (r) => responses.push(r),
       () => toolOutputToggles++,
       (block) => previewCalls.push(block),
-    );
+    ));
 
     const before = strip(dialog.render(120).join('\n'));
     expect(before).toContain('+30');
@@ -330,7 +395,7 @@ describe('ApprovalPanelComponent', () => {
       },
     };
     let globalToggleCalls = 0;
-    const dialog = new ApprovalPanelComponent(pending, () => {}, () => globalToggleCalls++);
+    const dialog = mount(new ApprovalPanelComponent(pending, () => {}, () => globalToggleCalls++));
 
     dialog.handleInput('\u000F'); // Ctrl+O
 
@@ -353,12 +418,12 @@ describe('ApprovalPanelComponent', () => {
       },
     };
     const previewCalls: Array<DiffDisplayBlock | FileContentDisplayBlock> = [];
-    const dialog = new ApprovalPanelComponent(
+    const dialog = mount(new ApprovalPanelComponent(
       pending,
       () => {},
       undefined,
       (block) => previewCalls.push(block),
-    );
+    ));
 
     dialog.handleInput('\u0005'); // Ctrl+E
     expect(previewCalls).toEqual([]);
@@ -385,12 +450,12 @@ describe('ApprovalPanelComponent', () => {
       },
     };
     const previewCalls: Array<DiffDisplayBlock | FileContentDisplayBlock> = [];
-    const dialog = new ApprovalPanelComponent(
+    const dialog = mount(new ApprovalPanelComponent(
       pending,
       (r) => responses.push(r),
       undefined,
       (block) => previewCalls.push(block),
-    );
+    ));
 
     const collapsed = strip(dialog.render(120).join('\n'));
     // No diff markers, no +N -M header.
@@ -426,12 +491,12 @@ describe('ApprovalPanelComponent', () => {
     const stderr = captureProcessWrite('stderr');
     try {
       const previewCalls: Array<DiffDisplayBlock | FileContentDisplayBlock> = [];
-      const dialog = new ApprovalPanelComponent(
+      const dialog = mount(new ApprovalPanelComponent(
         pending,
         () => {},
         undefined,
         (block) => previewCalls.push(block),
-      );
+      ));
       const collapsed = strip(dialog.render(120).join('\n'));
       expect(collapsed).toContain('hello');
 
@@ -468,10 +533,10 @@ describe('ApprovalPanelComponent', () => {
         ],
       },
     };
-    const dialog = new ApprovalPanelComponent(
+    const dialog = mount(new ApprovalPanelComponent(
       pending,
       (response) => responses.push(response),
-    );
+    ));
 
     dialog.handleInput('2');
     dialog.handleInput('n');
@@ -506,13 +571,13 @@ describe('ApprovalPanelComponent', () => {
       isFocusingClick = () => false,
     ): { dialog: ApprovalPanelComponent; responses: Array<{ response: string }> } {
       const responses: Array<{ response: string }> = [];
-      const dialog = new ApprovalPanelComponent(
+      const dialog = mount(new ApprovalPanelComponent(
         pending,
         (response) => responses.push(response),
         undefined,
         undefined,
         { layout: { maxBodyRows: 6 }, isFocusingClick },
-      );
+      ));
       return { dialog, responses };
     }
 
@@ -586,6 +651,23 @@ describe('ApprovalPanelComponent', () => {
       expect(lines[9]).toBe('   ↑/↓ select · 1/2/3 choose · ↵ confirm');
     });
 
+    function click(dialog: ApprovalPanelComponent, row: number): unknown {
+      let result: unknown;
+      for (const type of ['press', 'release', 'click'] as const) result = footPart(dialog).handleMouse?.(mouse(type, row));
+      return result;
+    }
+
+    function useClock(): (ms: number) => void {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(10_000);
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      return (ms) => {
+        vi.setSystemTime(Date.now() + ms);
+      };
+    }
+
     it('selects a choice on hover and submits it on click, ignoring the click that focused the window', () => {
       let focusing = true;
       const { dialog, responses } = dockedDialog(goalPending(), () => focusing);
@@ -600,6 +682,23 @@ describe('ApprovalPanelComponent', () => {
       focusing = false;
       for (const type of ['press', 'release', 'click'] as const) footPart(dialog).handleMouse?.(mouse(type, row));
       expect(responses).toEqual([{ response: 'approved', feedback: undefined, selected_label: undefined }]);
+    });
+
+    it('only takes the keyboard back on the first click while faded', () => {
+      const advance = useClock();
+      const { dialog, responses } = dockedDialog(goalPending());
+      const row = footRow(dialog, 'Do not start');
+      advance(1_000);
+      dialog.focused = false;
+
+      expect(footPart(dialog).handleMouse?.(mouse('move', row))).toEqual({ handled: true });
+      expect(foot(dialog)).not.toContain('   Ask every time.');
+      expect(click(dialog, row)).toMatchObject({ handled: true, focus: true, focusTarget: dialog });
+      expect(responses).toEqual([]);
+
+      dialog.focused = true;
+      click(dialog, row);
+      expect(responses).toEqual([{ response: 'cancelled', feedback: undefined, selected_label: undefined }]);
     });
   });
 });

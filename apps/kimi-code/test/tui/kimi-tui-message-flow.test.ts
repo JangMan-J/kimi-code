@@ -1212,7 +1212,7 @@ describe('KimiTUI message flow', () => {
     expect(stripSgr(renderTranscript(driver))).not.toContain('skill card');
   });
 
-  it('focuses Updates with Ctrl+N, pages with arrow keys, and returns focus to the editor on Esc', async () => {
+  it('focuses Updates with Ctrl+N, pages with Shift+arrows, and returns focus to the editor on Esc', async () => {
     const { driver } = await makeDriver(makeSession());
     const notifications = driver.sessionEventHandler.notifications;
     notifications.setEnabled(true);
@@ -1233,10 +1233,10 @@ describe('KimiTUI message flow', () => {
     editor.handleInput('\u000E');
     expect(notifyPanel.focused).toBe(true);
     expect(editor.focused).toBe(false);
-    expect(head()).toContain('esc close');
-    notifyPanel.handleInput('\u001B[A');
+    expect(head()).toContain('esc back');
+    notifyPanel.handleInput('\u001B[1;2D');
     expect(head()).toContain('Updates < 2/3 >');
-    notifyPanel.handleInput('\u001B[B');
+    notifyPanel.handleInput('\u001B[1;2C');
     expect(head()).toContain('Updates < 3/3 >');
     notifyPanel.handleInput('\u001B');
     expect(editor.focused).toBe(true);

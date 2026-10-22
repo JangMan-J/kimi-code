@@ -28,6 +28,10 @@ export const COMMAND_PREVIEW_LINES = 10;
 export const DOCK_QUEUE_ROWS = 3;
 export const DOCK_UPDATES_ROWS = 6;
 export const DOCK_APPROVAL_ROWS = 6;
+// Below this terminal height, docked Updates folds to its one-line stub while
+// an approval or question waits: a typical approval (13 rows) plus expanded
+// Updates (7) and the activity rows (2) would leave the transcript under 10.
+export const UPDATES_PROMPT_FOLD_SCREEN_ROWS = 32;
 
 // The ellipsis marking a single-row line (card header, outcome row) that was
 // cut to the terminal width or that stands in for hidden output lines.

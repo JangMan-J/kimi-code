@@ -4,18 +4,20 @@
  * Updates are grouped into CHANNELS, one per agent: the main agent plus one
  * channel per subagent that posts a `NotifyUser` update. The head is a rule
  * labelled with the channel tabs and a pager; the body is the current update.
- * `Ctrl+N` gives the panel keyboard focus, then `←`/`→` switch channels,
- * `↑`/`↓` page through the channel's updates, `Shift+↑`/`↓` scroll a docked
- * body, and `Esc`/`Ctrl+N` hand focus back to the editor; any other key hands
- * focus back and goes to the editor. Docked (fullscreen), clicks on the head's
- * tabs, pager and stub change the view without taking focus. Updates never
- * change the selected channel automatically. An unfocused panel follows new
- * pages in its current channel while already on the latest page; other
- * channels collect an unread dot.
+ * `Ctrl+N` or a click gives the panel keyboard focus, then `←`/`→` switch
+ * channels, `Shift+←`/`→` page through the channel's updates, `↑`/`↓` scroll
+ * a docked body, and `Esc`/`Ctrl+N`/`↵` hand focus back to the input area.
+ * Any other key hands focus back and goes to the editor, or is ignored while
+ * an approval or question stands in for the editor. The wheel scrolls without
+ * taking focus. Updates never change the selected channel automatically. An
+ * unfocused panel follows new pages in its current channel while already on
+ * the latest page; other channels collect an unread dot.
  *
- * When the turn ends the panel folds to a one-line stub until the user focuses
- * it; while an approval or question waits it also folds and cannot take focus.
- * The host clears the panel when the next turn starts.
+ * The panel only changes size on a scene change or a user action, never
+ * because an update arrived: it folds to a one-line stub when the turn ends,
+ * and while an approval or question waits on a short screen. Focus always
+ * unfolds it; once the turn has ended, an ordinary blur keeps it open until
+ * an explicit close. The host clears the panel when the next turn starts.
  */
 
 import {
@@ -32,13 +34,19 @@ import {
 import { Markdown } from '#/tui/components/markdown/markdown';
 
 import { MAIN_AGENT_ID } from '#/tui/constant/kimi-tui';
+import { UPDATES_PROMPT_FOLD_SCREEN_ROWS } from '#/tui/constant/rendering';
 import { currentTheme } from '#/tui/theme';
 import { createMarkdownTheme } from '#/tui/theme/pi-tui-theme';
 import { createMarkdownOptions } from '#/tui/utils/markdown-options';
 
 import { normalizeCapsLockedCtrl } from '../editor/custom-editor';
 
-import { DockSection, type DockPart } from './dock-section';
+import { DockSection, type DockLayout, type DockPart } from './dock-section';
+
+export interface NotifyPanelLayout extends DockLayout {
+  /** Current terminal height; a short screen folds the panel while a prompt waits. */
+  readonly screenRows?: () => number;
+}
 
 export interface NotifyEntry {
   readonly id: string;
@@ -94,15 +102,26 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   private activeKey = MAIN_AGENT_ID;
   private hasFocus = false;
   private ended = false;
-  /** Turn ended and no one is reading: the panel folds to a one-line stub. */
-  private collapsed = false;
-  /** The user clicked the panel open: show a close action while it is unfocused. */
+  /** Focused since the turn ended: stays open after an ordinary blur, until an explicit close. */
   private keptOpen = false;
-  /** Set while an approval or question waits: the panel folds and cannot take focus. */
+  /** Set while an approval or question waits. */
   private promptPending = false;
+  /** Docked body rows in the last render. */
+  private renderedBodyRows = 0;
+  /** Tallest docked body since focus was gained, so a click or paging never moves the head. */
+  private focusedBodyRows = 0;
+  private readonly screenRows: (() => number) | undefined;
   private hitTargets: readonly HitTarget[] = [];
-  /** Hands keyboard focus back to the editor, forwarding `key` when the panel does not own it. */
+  /**
+   * Hands keyboard focus back to the input area. `key` is a key the panel
+   * does not own, for the editor; undefined when there is nothing to forward.
+   */
   onReturnFocus: ((key: string | undefined) => void) | undefined;
+
+  constructor(layout?: NotifyPanelLayout) {
+    super(layout);
+    this.screenRows = layout?.screenRows;
+  }
 
   /**
    * Add or update an entry without changing the selected channel. A repeated
@@ -124,11 +143,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
         ch.page = ch.entries.length - 1;
         this.scrollBodyToTop();
       }
-    }
-    this.ended = false;
-    if (!this.promptPending) {
-      this.collapsed = false;
-      this.keptOpen = false;
     }
   }
 
@@ -153,7 +167,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     this.activeKey = MAIN_AGENT_ID;
     this.dropFocus();
     this.ended = false;
-    this.collapsed = false;
     this.keptOpen = false;
   }
 
@@ -181,23 +194,16 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
    * an explicit Escape, Ctrl+N or close action folds it after the turn ends.
    */
   setEnded(ended: boolean): void {
-    if (ended && !this.ended && !this.hasFocus) this.collapsed = true;
-    if (!ended) {
-      this.collapsed = this.promptPending;
-      this.keptOpen = false;
-    }
+    if (ended && !this.ended && this.hasFocus) this.keptOpen = true;
     this.ended = ended;
   }
 
-  /** Fold while an approval or question waits; an inline panel stays as it is. */
+  /**
+   * An approval or question waits. The panel keeps its size and focus; only
+   * a docked panel on a short screen folds, so the prompt keeps its rows.
+   */
   setPrompt(pending: boolean): void {
-    if (this.layout === undefined) return;
     this.promptPending = pending;
-    if (pending) {
-      this.collapsed = true;
-      this.keptOpen = false;
-      this.blur();
-    }
   }
 
   /** Set by the TUI when keyboard focus moves to or away from the panel. */
@@ -210,15 +216,16 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     else this.blur();
   }
 
-  /** Whether there is something to read and no prompt holds the keyboard. */
+  /** Whether there is something to read. */
   canFocus(): boolean {
-    return this.channels.length > 0 && !this.promptPending;
+    return this.channels.length > 0;
   }
 
   focus(): boolean {
     if (!this.canFocus()) return false;
+    if (this.ended) this.keptOpen = true;
+    if (!this.hasFocus) this.focusedBodyRows = this.renderedBodyRows;
     this.hasFocus = true;
-    this.collapsed = false;
     this.activeChannel().unreadIds.clear();
     return true;
   }
@@ -226,10 +233,28 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   blur(): boolean {
     if (!this.hasFocus) return false;
     this.hasFocus = false;
+    this.focusedBodyRows = 0;
     return true;
   }
 
-  /** Nothing is left to read: hand the keyboard back to the editor. */
+  /** Folded to the one-line stub while unfocused: the turn ended, or a prompt needs the rows. */
+  private isFolded(): boolean {
+    return !this.hasFocus && (this.promptNeedsRows() || (this.ended && !this.keptOpen));
+  }
+
+  /** An approval or question waits on a screen too short to also show the docked body. */
+  private promptNeedsRows(): boolean {
+    const screenRows = this.screenRows?.();
+    return this.promptPending && screenRows !== undefined && screenRows < UPDATES_PROMPT_FOLD_SCREEN_ROWS;
+  }
+
+  /** Hand the keyboard back after an explicit close: a panel that folds unfocused folds now. */
+  private close(): void {
+    this.keptOpen = false;
+    if (this.hasFocus) this.onReturnFocus?.(undefined);
+  }
+
+  /** Nothing is left to read: hand the keyboard back to the input area. */
   private dropFocus(): void {
     if (!this.hasFocus) return;
     this.hasFocus = false;
@@ -239,21 +264,21 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   handleInput(data: string): void {
     const key = normalizeCapsLockedCtrl(data);
     if (matchesKey(key, Key.escape) || matchesKey(key, Key.ctrl('n'))) {
-      if (this.ended) this.collapsed = true;
-      this.keptOpen = false;
-      this.onReturnFocus?.(undefined);
+      this.close();
+    } else if (matchesKey(key, 'shift+left')) {
+      this.prevPage();
+    } else if (matchesKey(key, 'shift+right')) {
+      this.nextPage();
     } else if (matchesKey(key, Key.left)) {
       this.prevChannel();
     } else if (matchesKey(key, Key.right)) {
       this.nextChannel();
     } else if (matchesKey(key, Key.up)) {
-      this.prevPage();
-    } else if (matchesKey(key, Key.down)) {
-      this.nextPage();
-    } else if (this.layout !== undefined && matchesKey(key, 'shift+up')) {
       this.scrollBody(-1);
-    } else if (this.layout !== undefined && matchesKey(key, 'shift+down')) {
+    } else if (matchesKey(key, Key.down)) {
       this.scrollBody(1);
+    } else if (matchesKey(key, Key.enter)) {
+      this.onReturnFocus?.(undefined);
     } else {
       this.onReturnFocus?.(data);
     }
@@ -275,7 +300,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     return true;
   }
 
-  /** Older update in the current channel (`↑`); false on the first page. */
+  /** Older update in the current channel (`Shift+←`); false on the first page. */
   prevPage(): boolean {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
@@ -285,7 +310,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     return true;
   }
 
-  /** Newer update in the current channel (`↓`); false on the latest page. */
+  /** Newer update in the current channel (`Shift+→`); false on the latest page. */
   nextPage(): boolean {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
@@ -298,58 +323,66 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   protected renderPart(part: DockPart, width: number): string[] {
     if (this.channels.length === 0) return [];
     if (part === 'foot') return [];
-    if (part === 'body') {
-      return this.collapsed ? [] : this.bodyRows(width);
-    }
-    const segments = this.collapsed ? this.stubSegments(width) : this.headSegments(width);
+    const folded = this.isFolded();
+    if (part === 'body') return this.padFocusedBody(folded ? [] : this.bodyRows(width));
+    const segments = folded ? this.stubSegments(width) : this.headSegments(width);
     return [this.paintSegments(segments, width)];
   }
 
+  /**
+   * A click anywhere takes keyboard focus, on top of what the clicked head
+   * segment does; `close` only closes. A press on a head segment is claimed
+   * so it does not start a text selection, while the body stays selectable.
+   */
   protected override handlePartMouse(
     part: DockPart,
     event: TuiMouseEvent,
   ): TuiMouseEventResult | undefined {
-    if (part !== 'head' || event.y !== 0) return undefined;
-    const target = this.hitTargets.find((hit) => event.x >= hit.from && event.x < hit.to);
-    if (target === undefined || event.button !== 'left') return undefined;
-    if (event.type === 'press' || event.type === 'release') return { handled: true };
+    if (event.button !== 'left') return undefined;
+    const target =
+      part === 'head' && event.y === 0
+        ? this.hitTargets.find((hit) => event.x >= hit.from && event.x < hit.to)
+        : undefined;
+    if (event.type === 'press' || event.type === 'release') {
+      return target === undefined ? undefined : { handled: true };
+    }
     if (event.type !== 'click') return undefined;
-    this.runAction(target.action);
-    return { handled: true };
+    const takesFocus = target === undefined || this.runAction(target.action);
+    return takesFocus ? { handled: true, focus: true } : { handled: true };
   }
 
-  private runAction(action: HeadAction): void {
+  /** Run a clicked head action; false when it hands the keyboard away rather than taking it. */
+  private runAction(action: HeadAction): boolean {
     switch (action.kind) {
       case 'channel':
         this.showChannel(action.key);
-        this.openByClick();
-        return;
+        return true;
       case 'prev':
         this.prevPage();
-        return;
+        return true;
       case 'next':
         this.nextPage();
-        return;
+        return true;
       case 'expand':
-        this.openByClick();
-        return;
+        return true;
       case 'close':
-        if (this.hasFocus) {
-          if (this.ended) this.collapsed = true;
-          this.keptOpen = false;
-          this.onReturnFocus?.(undefined);
-        } else {
-          this.collapsed = true;
-          this.keptOpen = false;
-        }
-        return;
+        this.close();
+        return false;
     }
   }
 
-  private openByClick(): void {
-    if (!this.collapsed) return;
-    this.collapsed = false;
-    this.keptOpen = true;
+  /**
+   * While focused, a docked body never gets shorter than it was, so the click
+   * that took focus and the paging after it never move the head.
+   */
+  private padFocusedBody(rows: string[]): string[] {
+    if (this.layout === undefined) return rows;
+    if (this.hasFocus) {
+      this.focusedBodyRows = Math.max(this.focusedBodyRows, Math.min(rows.length, this.layout.maxBodyRows));
+      while (rows.length < this.focusedBodyRows) rows.push('');
+    }
+    this.renderedBodyRows = Math.min(rows.length, this.layout.maxBodyRows);
+    return rows;
   }
 
   private showChannel(key: string): void {
@@ -398,8 +431,9 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
 
   /**
    * The expanded head: a rule labelled with the channel tabs, the pager and a
-   * key hint, plus a close button while focused or clicked open. Slims down as
-   * width shrinks: first the other tabs and the hint go, then the label altogether.
+   * key hint, plus a leave button while focused or kept open. Slims down as
+   * width shrinks: first the hint goes, then the other tabs, then the label
+   * altogether.
    */
   private headSegments(width: number): HeadSegment[] {
     const rule = (text: string) => currentTheme.fg(this.hasFocus ? 'primary' : 'border', text);
@@ -425,7 +459,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       segments.push({ text: ' ', style: rule });
       return segments;
     };
-    const close = (text: string): HeadSegment[] => {
+    const leave = (text: string): HeadSegment[] => {
       if (!this.hasFocus && !this.keptOpen) return [];
       return [
         { text: ' ', style: rule },
@@ -434,16 +468,15 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       ];
     };
     const focusedHints: string[] = [];
-    if (this.channels.length > 1) focusedHints.push('← → agent');
-    if (ch.entries.length > 1) focusedHints.push('↑ ↓ update');
-    const hint = this.hasFocus
-      ? focusedHints.join(' · ')
-      : this.promptPending
-        ? ''
-        : 'ctrl+n to browse';
+    if (this.channels.length > 1) focusedHints.push('←→ agent');
+    if (this.bodyOverflows(width)) focusedHints.push('↑↓ scroll');
+    if (ch.entries.length > 1) focusedHints.push('shift+←→ update');
+    const hint = this.hasFocus ? focusedHints.join(' · ') : 'ctrl+n to browse';
+    const escape = this.ended || this.promptNeedsRows() ? 'esc close' : 'esc back';
     const candidates: [HeadSegment[], HeadSegment[]][] = [
-      [label(this.tabSegments(), hint), close('esc close')],
-      [label([this.tabSegment(ch, true)], ''), close('esc')],
+      [label(this.tabSegments(), hint), leave(escape)],
+      [label(this.tabSegments(), ''), leave(escape)],
+      [label([this.tabSegment(ch, true)], ''), leave('esc')],
     ];
     for (const [left, right] of candidates) {
       const fill = width - segmentsWidth(left) - segmentsWidth(right);
@@ -468,11 +501,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     };
     const total = this.channels.reduce((sum, ch) => sum + ch.entries.length, 0);
     const count = `${String(total)} ${total === 1 ? 'update' : 'updates'}`;
-    const tail: HeadSegment = {
-      text: this.promptPending ? '' : ' · ctrl+n to expand',
-      style: dim,
-      action: expand,
-    };
+    const tail: HeadSegment = { text: ' · ctrl+n to expand', style: dim, action: expand };
     const head = [marker, ...this.tabSegments(), { text: ` · ${count}`, style: dim, action: expand }];
     const preview = this.previewText(this.currentEntry());
     if (preview !== undefined) {

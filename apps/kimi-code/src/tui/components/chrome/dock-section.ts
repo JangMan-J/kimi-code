@@ -6,7 +6,8 @@
  * the layout tree itself: each part carries its own gutter, the body lives in
  * a ScrollView capped at `maxBodyRows` and scrolls with the wheel, and the
  * head and foot never shrink — so a long body cannot push the foot (options,
- * key hints) off the screen.
+ * key hints) off the screen. A part that takes focus on a click hands it to
+ * the whole section.
  */
 
 import {
@@ -42,17 +43,18 @@ class OverflowScrollView extends ScrollView {
     // Consume the wheel here so the renderer's fallback cannot hand overscroll to the transcript.
     if (event.type !== 'wheel') return undefined;
     this.scrollBy(event.wheelDelta ?? 0);
-    return {
-      handled: true,
-      target: {
-        component: this,
-        originX: event.screenX - event.x,
-        originY: event.screenY - event.y,
-        width: event.width,
-        height: event.height,
-      },
-    };
+    return { handled: true, target: mouseTarget(this, event) };
   }
+}
+
+function mouseTarget(component: Component, event: TuiMouseEvent): TuiMouseDispatchResult['target'] {
+  return {
+    component,
+    originX: event.screenX - event.x,
+    originY: event.screenY - event.y,
+    width: event.width,
+    height: event.height,
+  };
 }
 
 export abstract class DockSection extends VStack {
@@ -60,11 +62,18 @@ export abstract class DockSection extends VStack {
 
   constructor(readonly layout?: DockLayout) {
     super();
-    const view = (part: DockPart): Component => ({
-      render: (width) => this.renderPart(part, width),
-      invalidate: () => {},
-      handleMouse: (event) => this.handlePartMouse(part, event),
-    });
+    const view = (part: DockPart): Component => {
+      const component: Component = {
+        render: (width) => this.renderPart(part, width),
+        invalidate: () => {},
+        handleMouse: (event) => {
+          const result = this.handlePartMouse(part, event);
+          if (result?.focus !== true) return result;
+          return { ...result, handled: true, focusTarget: this, target: mouseTarget(component, event) };
+        },
+      };
+      return component;
+    };
     if (layout === undefined) {
       this.addChild(view('head'));
       this.addChild(view('body'));

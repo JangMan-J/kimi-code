@@ -15,7 +15,7 @@ import {
  * shrink distribution with no minSize, so a tall transcript crushed it and
  * the editor's bottom border row was clipped off screen.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { GutterContainer } from '#/tui/components/chrome/gutter-container';
 import { MoonLoader } from '#/tui/components/chrome/moon-loader';
@@ -943,7 +943,7 @@ describe('fullscreen layout', () => {
     expect(rows[head + 6]).toContain('body 6');
 
     state.ui.setFocus(state.notifyPanel);
-    vt.sendInput('\u001B[1;2B');
+    vt.sendInput('\u001B[B');
     await vt.waitForRender();
     rows = screenRows(vt);
     expect(rows[head + 1]).toContain('body 2');
@@ -971,7 +971,7 @@ describe('fullscreen layout', () => {
     await vt.waitForRender();
     rows = screenRows(vt);
     expect(rows.filter((row) => row.includes('Next update'))).toEqual([
-      '  ▸ main · 2 updates · Next update',
+      '  ▸ main · 2 updates · Next update · ctrl+n to expand',
     ]);
     expect(rows.join('\n')).not.toContain('next body 1');
 
@@ -984,8 +984,13 @@ describe('fullscreen layout', () => {
     const expandedHead = rows.findIndex((row) => row.includes('Updates'));
     expect(rows[expandedHead + 1]).toContain('Next update');
     expect(rows[expandedHead + 2]).toContain('next body 1');
-    expect(state.notifyPanel.focused).toBe(false);
-    expect(state.editor.focused).toBe(true);
+    expect(state.notifyPanel.focused).toBe(true);
+    expect(state.editor.focused).toBe(false);
+
+    state.ui.setFocus(state.editor);
+    state.ui.requestRender();
+    await vt.waitForRender();
+    expect(screenRows(vt).filter((row) => row.includes('Next update'))).toHaveLength(1);
 
     state.ui.stop();
   });
@@ -1128,6 +1133,90 @@ describe('fullscreen layout', () => {
     const expandedHead = rows.findIndex((row) => row.includes('Updates'));
     expect(expandedHead).toBeGreaterThanOrEqual(0);
     expect(rows[expandedHead + 1]).toContain('main update');
+
+    state.ui.stop();
+  });
+
+  it('lets an approval wait faded while Updates is read, and hands the keyboard over and back', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(10_000);
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const { state, vt } = await mountFullscreen(40);
+    const host = {
+      state,
+      surveyController: { notifyDisplaced: () => {} },
+      modelMigration: { retry: () => {} },
+    } as unknown as KimiTUI;
+    const notifications = new NotifyController(state);
+    notifications.setEnabled(true);
+    state.notifyPanel.upsert({ id: 'n1', agentId: 'main', time: 0, title: 'Running the tests', text: 'main body' });
+    state.notifyPanel.upsert({ id: 'n2', agentId: 'agent-1', agentName: 'coder', time: 1, text: 'coder body' });
+    state.notifyPanelContainer.addChild(state.notifyPanel);
+    expect(notifications.focusPanel()).toBe(true);
+    await vt.waitForRender();
+
+    const responses: unknown[] = [];
+    const pending = pendingApproval();
+    pending.data.choices = [
+      { label: 'Approve once', response: 'approved' },
+      { label: 'Reject', response: 'rejected' },
+    ];
+    const panel = new ApprovalPanelComponent(pending, (response) => responses.push(response), undefined, undefined, {
+      layout: { maxBodyRows: 6 },
+      onFocusUpdates: () => notifications.focusPanel(),
+    });
+    state.livePane.pendingApproval = pending;
+    notifications.setPrompt(true);
+    KimiTUI.prototype.mountEditorReplacement.call(host, panel);
+    await vt.waitForRender();
+
+    let rows = screenRows(vt);
+    expect(state.notifyPanel.focused).toBe(true);
+    expect(rows.join('\n')).toContain('main body');
+    expect(rows.join('\n')).toContain('esc back to approval');
+    vt.sendInput('1');
+    vt.sendInput('\r');
+    await vt.waitForRender();
+    expect(responses).toEqual([]);
+    expect(panel.focused).toBe(true);
+
+    vt.sendInput('\u000E');
+    await vt.waitForRender();
+    expect(state.notifyPanel.focused).toBe(true);
+    rows = screenRows(vt);
+    const choice = rows.findIndex((row) => row.includes('2. Reject'));
+    const click = (): void => {
+      vt.sendInput(`\u001B[<0;8;${String(choice + 1)}M`);
+      vt.sendInput(`\u001B[<0;8;${String(choice + 1)}m`);
+    };
+    vi.setSystemTime(11_000);
+    click();
+    await vt.waitForRender();
+    expect(panel.focused).toBe(true);
+    expect(responses).toEqual([]);
+    expect(screenRows(vt).join('\n')).toContain('↑/↓ select');
+
+    vt.resize(WIDTH, 24);
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows.filter((row) => row.includes('Running the tests'))).toEqual([
+      '  ▸ main · coder● · 2 updates · Running the tests · ctrl+n to expand',
+    ]);
+    vt.sendInput('\u000E');
+    await vt.waitForRender();
+    expect(screenRows(vt).join('\n')).toContain('main body');
+    vt.sendInput('\u001B');
+    await vt.waitForRender();
+    expect(panel.focused).toBe(true);
+    expect(screenRows(vt).join('\n')).not.toContain('main body');
+
+    const rejectRow = screenRows(vt).findIndex((row) => row.includes('2. Reject'));
+    vt.sendInput(`\u001B[<0;8;${String(rejectRow + 1)}M`);
+    vt.sendInput(`\u001B[<0;8;${String(rejectRow + 1)}m`);
+    await vt.waitForRender();
+    expect(responses).toEqual([{ response: 'rejected', feedback: undefined, selected_label: undefined }]);
 
     state.ui.stop();
   });

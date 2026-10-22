@@ -4325,6 +4325,9 @@ export class KimiTUI {
   // Dialogs / Selectors
   // =========================================================================
 
+  // While the Updates panel holds the keyboard, whatever takes the editor slot
+  // waits faded until the user comes back (Esc / Ctrl+N / a click), so an
+  // approval arriving mid-read cannot catch keys meant for Updates.
   mountEditorReplacement(panel: Component & Focusable, onDisplaced?: () => void): void {
     const previousOnDisplaced = this.editorReplacementOnDisplaced;
     this.editorReplacementOnDisplaced = onDisplaced;
@@ -4332,7 +4335,7 @@ export class KimiTUI {
     if (this.state.activeDialog === 'model-switch-confirm') this.state.activeDialog = null;
     this.state.editorReplacementMounted = true;
     setEditorSlot(this.state, panel);
-    this.state.ui.setFocus(panel);
+    if (!this.state.notifyPanel.focused) this.state.ui.setFocus(panel);
     this.state.ui.requestRender();
     previousOnDisplaced?.();
   }
@@ -4342,7 +4345,7 @@ export class KimiTUI {
     this.editorReplacementOnDisplaced = undefined;
     this.state.editorReplacementMounted = false;
     setEditorSlot(this.state, this.state.editor);
-    this.state.ui.setFocus(this.state.editor);
+    if (!this.state.notifyPanel.focused) this.state.ui.setFocus(this.state.editor);
     onDisplaced?.();
     this.modelMigration.retry();
     // Differential render only: closing a tall panel leaves the editor a few
@@ -4714,6 +4717,8 @@ export class KimiTUI {
         layout:
           this.state.dockContainer === undefined ? undefined : { maxBodyRows: DOCK_APPROVAL_ROWS },
         isFocusingClick: () => isFocusingClick(this.state.terminalState),
+        isTerminalFocused: () => this.state.terminalState.focused,
+        onFocusUpdates: () => this.focusNotifyPanel(),
       },
     );
     this.activeApprovalPanel = panel;
@@ -4777,6 +4782,10 @@ export class KimiTUI {
       6,
       () => {
         this.toggleToolOutputExpansion();
+      },
+      {
+        isTerminalFocused: () => this.state.terminalState.focused,
+        onFocusUpdates: () => this.focusNotifyPanel(),
       },
     );
     this.mountEditorReplacement(dialog);

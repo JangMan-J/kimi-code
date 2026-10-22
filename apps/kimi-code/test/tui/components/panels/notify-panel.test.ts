@@ -41,10 +41,13 @@ function mouse(
   };
 }
 
-function click(panel: NotifyPanelComponent, label: string): void {
+/** Press, release and click on `label` in the head; returns the click's result. */
+function click(panel: NotifyPanelComponent, label: string): unknown {
   const x = titleOf(panel).indexOf(label);
   expect(x).toBeGreaterThanOrEqual(0);
-  for (const type of ['press', 'release', 'click'] as const) panel.handleMouse(mouse(type, x));
+  let result: unknown;
+  for (const type of ['press', 'release', 'click'] as const) result = panel.handleMouse(mouse(type, x));
+  return result;
 }
 
 function entry(id: string, text: string, agentId = 'main', agentName?: string): NotifyEntry {
@@ -178,17 +181,19 @@ describe('NotifyPanelComponent', () => {
     expect(text).not.toContain('more lines');
   });
 
-  it('renders focus state: agent hint with several channels, a close button, blur restores', () => {
+  it('renders focus state: hints for the keys that act, a leave button, blur restores', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'phase one'));
 
     expect(titleOf(panel)).toContain('Updates · ctrl+n to browse');
     panel.focus();
-    expect(titleOf(panel)).toMatch(/^─ main · Updates ─+ esc close ─$/);
+    expect(titleOf(panel)).toMatch(/^─ main · Updates ─+ esc back ─$/);
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
-    expect(titleOf(panel)).toContain('← → agent');
-    expect(titleOf(panel)).not.toContain('↑ ↓ update');
-    expect(titleOf(panel, 30)).toMatch(/^─ main · Updates ─+ esc ─$/);
+    expect(titleOf(panel)).toContain('Updates · ←→ agent ─');
+    panel.upsert(entry('tc-2', 'phase two'));
+    expect(titleOf(panel)).toContain('Updates < 1/2 > · ←→ agent · shift+←→ update ─');
+    expect(titleOf(panel, 60)).toMatch(/^─ main · explore● · Updates < 1\/2 > ─+ esc back ─$/);
+    expect(titleOf(panel, 34)).toMatch(/^─ main · Updates < 1\/2 > ─+ esc ─$/);
     panel.blur();
     expect(panel.blur()).toBe(false);
     expect(titleOf(panel)).toContain('ctrl+n to browse');
@@ -205,6 +210,7 @@ describe('NotifyPanelComponent', () => {
     const expanded = render(panel);
     expect(expanded.join('\n')).toContain('detail one');
     expect(expanded.length).toBeGreaterThan(2);
+    expect(expanded[0]).toMatch(/ esc close ─$/);
 
     panel.handleInput('\u001B');
     panel.blur();
@@ -248,16 +254,17 @@ describe('NotifyPanelComponent', () => {
     expect(titleOf(panel)).toContain('Updates');
   });
 
-  it('unfolds and undims when a fresh update arrives after the turn ended', () => {
+  it('stays folded when updates arrive after the turn ended, previewing the newest', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'done with phase one'));
     panel.setEnded(true);
     expect(render(panel)).toHaveLength(1);
 
-    panel.upsert(entry('tc-2', 'fresh turn update'));
-    const lines = render(panel);
-    expect(lines.join('\n')).toContain('fresh turn update');
-    expect(lines[0]).not.toContain('turn ended');
+    panel.upsert(entry('a0:c1', 'background finding', 'a0', 'explore'));
+    panel.upsert(entry('tc-2', 'late main update'));
+    expect(render(panel)).toEqual([
+      ' ▸ main · explore● · 3 updates · late main update · ctrl+n to expand',
+    ]);
   });
 
   it('removes an entry and drops empty channels', () => {
@@ -363,38 +370,33 @@ describe('NotifyPanelComponent', () => {
     expect(lines.at(-1)).toContain('row 5');
   });
 
-  it('folds during a prompt and allows mouse expansion without taking keyboard focus', () => {
-    const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
+  it('keeps its size and focus through a prompt on a tall screen, and folds on a short one', () => {
+    let screenRows = 40;
+    const panel = new NotifyPanelComponent({ maxBodyRows: 6, screenRows: () => screenRows });
     panel.upsert({ ...entry('a0:c1', 'details', 'a0', 'explore'), title: 'Checking the auth tests' });
     panel.upsert({ ...entry('tc-1', 'main is planning'), time: 1 });
     panel.focus();
 
     panel.setPrompt(true);
-    expect(render(panel)).toHaveLength(1);
-    expect(titleOf(panel)).toContain('2 updates');
-    expect(titleOf(panel)).not.toContain('click to expand');
-    expect(titleOf(panel)).not.toContain('Updates');
-    expect(panel.focused).toBe(false);
-    expect(panel.focus()).toBe(false);
-
-    click(panel, '2 updates');
+    expect(panel.focused).toBe(true);
+    expect(titleOf(panel)).toMatch(/ esc back ─$/);
+    panel.blur();
+    expect(titleOf(panel)).toMatch(/^ ─ main● · explore · Updates · ctrl\+n to browse ─+$/);
     expect(render(panel).join('\n')).toContain('details');
-    expect(titleOf(panel)).toContain('close');
-    expect(titleOf(panel)).not.toContain('ctrl+n to browse');
-    expect(panel.focused).toBe(false);
-    expect(panel.focus()).toBe(false);
+
+    screenRows = 31;
+    expect(render(panel)).toHaveLength(1);
+    expect(titleOf(panel)).toContain('2 updates · Checking the auth tests · ctrl+n to expand');
+    expect(panel.focus()).toBe(true);
+    expect(render(panel).join('\n')).toContain('details');
+    expect(titleOf(panel)).toMatch(/ esc close ─$/);
+    panel.blur();
+    expect(render(panel)).toHaveLength(1);
 
     panel.upsert(entry('tc-2', 'main newer'));
-    expect(render(panel).join('\n')).toContain('details');
-
-    click(panel, 'close');
     expect(render(panel)).toHaveLength(1);
-    expect(titleOf(panel)).toContain('3 updates');
-
     panel.setPrompt(false);
-    expect(titleOf(panel)).toContain('ctrl+n to expand');
-    expect(panel.focus()).toBe(true);
-    expect(titleOf(panel)).toContain('Updates');
+    expect(render(panel).join('\n')).toContain('details');
   });
 
   it('keeps an inline panel whole while a prompt waits', () => {
@@ -408,54 +410,76 @@ describe('NotifyPanelComponent', () => {
     ]);
   });
 
-  it('switches channel and pages on clicks in the head without taking focus', () => {
+  it('switches channel and pages on head clicks, each also taking focus', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('tc-2', 'main two'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    const focusing = { handled: true, focus: true, focusTarget: panel };
 
-    click(panel, 'main');
-    expect(panel.focused).toBe(false);
+    expect(click(panel, 'main')).toMatchObject(focusing);
     expect(titleOf(panel)).toContain('Updates < 2/2 >');
-    click(panel, '<');
+    expect(click(panel, '<')).toMatchObject(focusing);
     expect(render(panel).join('\n')).toContain('main one');
     click(panel, '>');
     expect(render(panel).join('\n')).toContain('main two');
+    expect(click(panel, 'Updates')).toMatchObject(focusing);
   });
 
-  it('opens the folded stub on a click without taking focus, and keeps it open', () => {
+  it('opens the folded stub on a click by taking focus, and keeps it open after an ordinary blur', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'phase one'));
     panel.setEnded(true);
-    click(panel, 'ctrl+n to expand');
-    expect(panel.focused).toBe(false);
+    expect(click(panel, 'ctrl+n to expand')).toMatchObject({ focus: true, focusTarget: panel });
+    panel.focused = true;
     expect(render(panel).join('\n')).toContain('phase one');
-    panel.setEnded(true);
+    panel.focused = false;
     expect(render(panel).join('\n')).toContain('phase one');
-    expect(titleOf(panel)).toContain('close');
+    expect(titleOf(panel)).toMatch(/ close ─$/);
 
-    click(panel, 'close');
-    expect(panel.focused).toBe(false);
+    expect(click(panel, 'close')).not.toHaveProperty('focus');
     expect(render(panel)).toHaveLength(1);
   });
 
-  it('opens the folded stub on a tab click, and keeps a clicked-open panel open across a focus round trip', () => {
+  it('opens the folded stub on a tab click, and new updates never fold a panel kept open', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
     panel.setEnded(true);
     const body = (): string[] => render(panel).slice(1).map((line) => line.trimEnd());
     expect(body()).toEqual([]);
-    click(panel, 'main');
-    expect(body()).toEqual(['  main one']);
-
+    click(panel, 'explore●');
     panel.focused = true;
-    panel.focused = false;
-    expect(body()).toEqual(['  main one']);
+    expect(body()).toEqual(['  explore one']);
 
-    panel.upsert(entry('tc-2', 'main two'));
+    panel.focused = false;
+    expect(body()).toEqual(['  explore one']);
+
+    panel.upsert(entry('a0:c2', 'explore two', 'a0', 'explore'));
     panel.setEnded(true);
-    expect(render(panel)).toHaveLength(1);
+    expect(body()).toEqual(['  explore two']);
+  });
+
+  it('keeps the head row still from the focusing click on: a docked body only grows', () => {
+    const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
+    panel.upsert(entry('tc-1', listRows(4)));
+    panel.upsert(entry('a0:c1', 'short', 'a0', 'explore'));
+    expect(render(panel)).toHaveLength(5);
+
+    click(panel, 'explore●');
+    panel.focused = true;
+    const lines = render(panel);
+    expect(lines).toHaveLength(5);
+    expect(lines[1]).toContain('short');
+
+    panel.focused = false;
+    expect(render(panel)).toHaveLength(2);
+    panel.focused = true;
+    expect(render(panel)).toHaveLength(2);
+    panel.handleInput('\u001B[D');
+    expect(render(panel)).toHaveLength(5);
+    panel.handleInput('\u001B[C');
+    expect(render(panel)).toHaveLength(5);
   });
 
   it('folds a clicked-open ended panel on an explicit Escape close', () => {
@@ -506,7 +530,7 @@ describe('NotifyPanelComponent', () => {
     expect(titleOf(panel)).toContain('explore●');
   });
 
-  it('uses horizontal arrows for agents, vertical arrows for updates, and Shift+arrows to scroll', () => {
+  it('uses ←→ for agents, Shift+←→ for updates and ↑↓ to scroll, handing back every other key', () => {
     const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
     const returned: (string | undefined)[] = [];
     panel.onReturnFocus = (key) => returned.push(key);
@@ -514,29 +538,25 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('tc-2', 'main two'));
     panel.upsert(entry('a0:c1', listRows(10), 'a0', 'explore'));
     panel.focused = true;
-    expect(titleOf(panel)).toContain('← → agent · ↑ ↓ update');
-    expect(titleOf(panel)).not.toContain('Updates ←');
+    expect(titleOf(panel)).toContain('Updates < 2/2 > · ←→ agent · shift+←→ update ─');
 
-    panel.handleInput('\u001B[D');
-    expect(titleOf(panel)).toContain('← → agent · ↑ ↓ update');
-    expect(titleOf(panel)).toContain('Updates < 2/2 >');
-    expect(render(panel).join('\n')).toContain('main two');
-    panel.handleInput('\u001B[A');
+    panel.handleInput('\u001B[1;2D');
     expect(titleOf(panel)).toContain('Updates < 1/2 >');
     expect(render(panel).join('\n')).toContain('main one');
-    panel.handleInput('\u001B[B');
+    panel.handleInput('\u001B[1;2C');
     expect(render(panel).join('\n')).toContain('main two');
     panel.handleInput('\u001B[C');
-    expect(titleOf(panel)).toContain('main · explore · Updates');
-    expect(titleOf(panel)).toContain('← → agent');
-    expect(titleOf(panel)).not.toContain('↑ ↓ update');
-    panel.handleInput('\u001B[1;2B');
+    expect(titleOf(panel)).toContain('main · explore · Updates · ←→ agent · ↑↓ scroll ─');
+    panel.handleInput('\u001B[B');
+    panel.handleInput('\u001B[A');
     expect(returned).toEqual([]);
 
     panel.handleInput('x');
+    panel.handleInput('\r');
+    panel.handleInput('\t');
     panel.handleInput('\u001B');
     panel.handleInput('\u001B[78;69u');
-    click(panel, 'esc close');
-    expect(returned).toEqual(['x', undefined, undefined, undefined]);
+    click(panel, 'esc back');
+    expect(returned).toEqual(['x', undefined, '\t', undefined, undefined, undefined]);
   });
 });

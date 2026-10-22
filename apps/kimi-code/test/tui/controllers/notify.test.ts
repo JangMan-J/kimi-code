@@ -41,16 +41,18 @@ function makeHarness(enabled = true, fullscreen = false) {
   const transcript = new Text('earlier output\n'.repeat(80), 0, 0);
   const notifyPanel = new NotifyPanelComponent(fullscreen ? { maxBodyRows: 6 } : undefined);
   const notifyPanelContainer = fullscreen ? new VStack() : new Container();
+  const editorContainer = new Container();
+  editorContainer.addChild(editor);
   const requestRender = vi.spyOn(ui, 'requestRender').mockImplementation(() => {});
   const root = new VStack();
   root.addChild(new ScrollView(transcript, { primary: true }));
   root.addChild(notifyPanelContainer);
-  root.addChild(editor);
+  root.addChild(editorContainer);
   if (ui instanceof TuiAltScreen) ui.setLayoutRoot(root);
   else {
     ui.addChild(transcript);
     ui.addChild(notifyPanelContainer);
-    ui.addChild(editor);
+    ui.addChild(editorContainer);
   }
   ui.setFocus(editor);
   const controller = new NotifyController({
@@ -58,6 +60,8 @@ function makeHarness(enabled = true, fullscreen = false) {
     notifyPanelContainer,
     ui,
     editor,
+    editorContainer,
+    editorSlot: undefined,
   } as never);
   controller.setEnabled(enabled);
   editor.onPageNotify = () => controller.focusPanel();
@@ -86,6 +90,7 @@ function makeHarness(enabled = true, fullscreen = false) {
     controller,
     ui,
     editor,
+    editorContainer,
     root,
     input: (data: string) => input?.(data),
     emit,
@@ -543,18 +548,16 @@ describe('NotifyController', () => {
         expect(h.rendered()).toContain('Updates < 3/3 >');
         h.input('\u000E');
         expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
-        expect(h.rendered()).toContain('esc close');
-        h.input('\u001B[A');
+        expect(h.rendered()).toContain('esc back');
+        h.input('\u001B[1;2D');
         expect(h.rendered()).toContain('Updates < 2/3 >');
-        h.input('\u001B[A');
+        h.input('\u001B[1;2D');
         expect(h.rendered()).toContain('Updates < 1/3 >');
-        h.input('\u001B[B');
+        h.input('\u001B[1;2C');
         expect(h.rendered()).toContain('Updates < 2/3 >');
-        if (fullscreen) {
-          h.input('\u001B[1;2A');
-          h.input('\u001B[1;2B');
-          expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
-        }
+        h.input('\u001B[A');
+        h.input('\u001B[B');
+        expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
         h.emit('turn.ended', { reason: 'completed' });
         expect(h.rendered()).toContain('Updates < 2/3 >');
         expect(h.rendered()).toContain('update two');
@@ -769,31 +772,58 @@ describe('NotifyController', () => {
     expect(h.rendered()).not.toContain('detail A');
   });
 
-  it('re-collapses the panel once the last background agent completes', () => {
-    const h = makeHarness();
-    h.emit('subagent.spawned', { subagentId: 'agent-1', subagentName: 'explore' });
-    h.emit('turn.ended', { reason: 'completed' });
-
-    h.send('s1', 'bg intro\n\n- bg detail', 'agent-1');
-    expect(h.rendered()).toContain('bg detail');
-
-    h.emit('subagent.completed', { subagentId: 'agent-1' });
-    expect(h.rendered()).toContain('ctrl+n');
-    expect(h.rendered()).toContain('bg intro');
-    expect(h.rendered()).not.toContain('bg detail');
-  });
-
-  it('keeps the panel expanded while a background agent is still running', () => {
+  it('stays folded while background agents post after the main turn ends', () => {
     const h = makeHarness();
     h.emit('subagent.spawned', { subagentId: 'agent-1', subagentName: 'explore' });
     h.emit('subagent.spawned', { subagentId: 'agent-2', subagentName: 'coder' });
     h.emit('turn.ended', { reason: 'completed' });
 
     h.send('s1', 'bg intro\n\n- bg detail', 'agent-1');
-    h.emit('subagent.completed', { subagentId: 'agent-1' });
-    expect(h.rendered()).toContain('bg detail');
-
-    h.emit('subagent.completed', { subagentId: 'agent-2' });
+    expect(h.rendered()).toContain('▸ explore · 1 update · bg intro · ctrl+n to expand');
     expect(h.rendered()).not.toContain('bg detail');
+
+    h.send('s2', 'coder progress', 'agent-2');
+    h.emit('subagent.completed', { subagentId: 'agent-1' });
+    expect(h.rendered()).toContain('▸ explore · coder● · 2 updates · bg intro');
+    expect(h.rendered()).not.toContain('bg detail');
+
+    h.controller.focusPanel();
+    expect(h.rendered()).toContain('bg detail');
+    h.emit('subagent.completed', { subagentId: 'agent-2' });
+    expect(h.rendered()).toContain('bg detail');
+  });
+
+  it('returns focus to whatever stands in the input area, and never answers a prompt', () => {
+    const h = makeHarness();
+    h.send('n1', 'update one');
+    const answers: string[] = [];
+    const approval = {
+      focused: false,
+      render: () => ['approval'],
+      invalidate: () => {},
+      handleInput: (data: string) => answers.push(data),
+    };
+    h.ui.start();
+    try {
+      h.editorContainer.clear();
+      h.editorContainer.addChild(approval);
+      h.ui.setFocus(approval);
+
+      expect(h.controller.focusPanel()).toBe(true);
+      for (const key of ['1', '\t', 'y']) h.input(key);
+      expect(h.ui.getFocusedComponent()).toBe(h.notifyPanel);
+      h.input('\r');
+      expect(h.ui.getFocusedComponent()).toBe(approval);
+      expect(answers).toEqual([]);
+
+      expect(h.controller.focusPanel()).toBe(true);
+      h.editorContainer.clear();
+      h.editorContainer.addChild(h.editor);
+      h.input('\u001B');
+      expect(h.ui.getFocusedComponent()).toBe(h.editor);
+      expect(h.editor.getText()).toBe('unsent draft');
+    } finally {
+      h.ui.stop();
+    }
   });
 });

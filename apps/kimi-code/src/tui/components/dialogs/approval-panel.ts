@@ -4,7 +4,8 @@
  * A DockSection: the title is the head, the request (command, diff, …) is the
  * body, and the choices with their key hints are the foot. Docked in
  * fullscreen, a long request scrolls (Shift+↑/↓, wheel) while the choices
- * stay on screen; the choices also take hover and clicks.
+ * stay on screen; the choices also take hover and clicks. `Ctrl+N` lends the
+ * keyboard to the Updates panel; meanwhile the panel fades.
  */
 
 import {
@@ -20,6 +21,7 @@ import {
   wrapTextWithAnsi,
 } from '@moonshot-ai/pi-tui';
 import { DockSection, type DockLayout, type DockPart } from '#/tui/components/chrome/dock-section';
+import { normalizeCapsLockedCtrl } from '#/tui/components/editor/custom-editor';
 import { currentTheme } from '#/tui/theme';
 import { highlightLines, langFromPath } from '#/tui/components/media/code-highlight';
 import { renderDiffLinesClustered } from '#/tui/components/media/diff-preview';
@@ -218,6 +220,10 @@ export interface ApprovalPanelOptions {
   readonly layout?: DockLayout;
   /** True while a click is most likely the one that focused the terminal window. */
   readonly isFocusingClick?: () => boolean;
+  /** Whether the terminal window has focus; the panel fades while it does not. */
+  readonly isTerminalFocused?: () => boolean;
+  /** `Ctrl+N`: hand the keyboard to the Updates panel; false when it has nothing to show. */
+  readonly onFocusUpdates?: () => boolean;
 }
 
 export class ApprovalPanelComponent extends DockSection implements Focusable {
@@ -232,6 +238,8 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     | ((block: DiffDisplayBlock | FileContentDisplayBlock) => void)
     | undefined;
   private readonly isFocusingClick: () => boolean;
+  private readonly isTerminalFocused: () => boolean;
+  private readonly onFocusUpdates: (() => boolean) | undefined;
   /** Foot row of each choice in the last render, for mouse hit-testing. */
   private choiceRows: readonly number[] = [];
 
@@ -248,6 +256,8 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     this.onToggleToolOutput = onToggleToolOutput;
     this.onOpenPreview = onOpenPreview;
     this.isFocusingClick = options.isFocusingClick ?? (() => false);
+    this.isTerminalFocused = options.isTerminalFocused ?? (() => true);
+    this.onFocusUpdates = options.onFocusUpdates;
     this.feedbackInput.onSubmit = (value) => {
       this.submit(this.selectedIndex, value);
     };
@@ -279,6 +289,10 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
   }
 
   handleInput(data: string): void {
+    if (matchesKey(normalizeCapsLockedCtrl(data), Key.ctrl('n')) && this.onFocusUpdates?.() === true) {
+      return;
+    }
+
     if (
       matchesKey(data, Key.escape) ||
       matchesKey(data, Key.ctrl('c')) ||
@@ -342,32 +356,35 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     }
   }
 
+  /** Faded while another panel holds the keyboard or the terminal window is inactive. */
   protected renderPart(part: DockPart, width: number): string[] {
-    switch (part) {
-      case 'head':
-        return this.renderHead(width);
-      case 'body':
-        return this.renderBody(width);
-      case 'foot':
-        return this.renderFoot(width);
-    }
+    const lines =
+      part === 'head'
+        ? this.renderHead(width)
+        : part === 'body'
+          ? this.renderBody(width)
+          : this.renderFoot(width);
+    return this.focused && this.isTerminalFocused() ? lines : lines.map((line) => currentTheme.fade(line));
   }
 
   /**
    * Hovering a choice selects it, so the description area follows the
-   * pointer; a click picks it like its number key. A click that only focused
-   * the terminal window is ignored, and a hover does not interrupt typed
-   * feedback.
+   * pointer; a click picks it like its number key. A click on a faded panel
+   * only takes the keyboard back, a click that only focused the terminal
+   * window is ignored, and a hover does not interrupt typed feedback.
    */
   protected override handlePartMouse(
     part: DockPart,
     event: TuiMouseEvent,
   ): TuiMouseEventResult | undefined {
+    if (event.type === 'click' && event.button === 'left' && !this.focused) {
+      return { handled: true, focus: true };
+    }
     if (part !== 'foot') return undefined;
     const index = this.choiceRows.indexOf(event.y);
     if (index === -1) return undefined;
     if (event.type === 'move') {
-      if (this.feedbackMode || index === this.selectedIndex) return { handled: true };
+      if (this.feedbackMode || !this.focused || index === this.selectedIndex) return { handled: true };
       this.selectedIndex = index;
       return { handled: true, render: true };
     }
@@ -379,7 +396,7 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
   private renderHead(width: number): string[] {
     const borderColorBold = (text: string) => currentTheme.boldFg('borderFocus', text);
     const lines = [
-      currentTheme.fg('borderFocus', '─'.repeat(width)),
+      currentTheme.fg(this.focused ? 'borderFocus' : 'border', '─'.repeat(width)),
       `  ${borderColorBold('▶')} ${borderColorBold(headerFor(this.request.data.tool_name))}`,
     ];
     if (this.visibleBlocks().length > 0 || this.request.data.description) lines.push('');
@@ -466,7 +483,9 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     }
 
     lines.push('');
-    if (this.feedbackMode) {
+    if (!this.focused) {
+      lines.push(indent(dim('esc back to approval')));
+    } else if (this.feedbackMode) {
       lines.push(indent(dim('Type feedback · ↵ submit.')));
     } else {
       const expandHint = this.visibleBlocks().some(
@@ -483,7 +502,7 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
         ),
       );
     }
-    lines.push(currentTheme.fg('borderFocus', '─'.repeat(width)));
+    lines.push(currentTheme.fg(this.focused ? 'borderFocus' : 'border', '─'.repeat(width)));
     return lines.map((line) => truncateToWidth(line, width));
   }
 
