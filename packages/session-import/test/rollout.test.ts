@@ -581,7 +581,7 @@ test('unknown rows, responses, events and projections retain JSON and report par
   expect(actual.issues).toContainEqual(expect.objectContaining({ code: 'UNRECOGNIZED_SOURCE_CONTENT', count: 4 }));
   const archive = await readFile(actual.historyPath, 'utf8');
   for (const retained of ['unknown row', 'unknown response', 'unknown event', 'unknown projection']) {
-    expect(archive).toContain(retained);
+    expect(archive.split(retained)).toHaveLength(2);
     expect(JSON.stringify(actual.messages)).not.toContain(retained);
   }
 });

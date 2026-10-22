@@ -561,7 +561,8 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
         add({ kind: 'event', text: '[Source compaction checkpoint: encrypted state is unavailable as plaintext.]', timestamp, metadata });
       } else {
         if (!['additional_tools', 'agent_message'].includes(item.type ?? '')) stats.unknownRecords++;
-        add({ kind: 'event', text: JSON.stringify(item), timestamp, metadata });
+        const { item: _item, ...context } = metadata;
+        add({ kind: 'event', text: JSON.stringify(item), timestamp, metadata: context });
       }
       continue;
     }

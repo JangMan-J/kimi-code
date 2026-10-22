@@ -197,6 +197,13 @@ describe('session conversion', () => {
     expect(result.truncated).toBe(false);
   });
 
+  it('keeps one copy of each unrecognized source record in the full history', async () => {
+    const paths = await fixture([user('task'), assistant('answer'), { type: 'future_global', payload: 'ONE_COPY_MARKER' }]);
+    const result = await convertSession({ ...paths, source: 'claude-code', contextWindow: 32768 });
+    if (result.status === 'unreliable') throw new Error(result.error.message);
+    expect((await readFile(result.historyPath, 'utf8')).split('ONE_COPY_MARKER')).toHaveLength(2);
+  });
+
   it('marks damaged and unfamiliar source records as partial with model-visible issues', async () => {
     const paths = await fixture(['{broken', user('task'), assistant('answer'), { type: 'future_record', uuid: 'future', parentUuid: 'a', value: 'preserved future record' }]);
     const result = await convertSession({ ...paths, source: 'claude-code', contextWindow: 32768 });

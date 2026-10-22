@@ -197,7 +197,10 @@ test('source metadata and title survive, Read results are retained without a hid
   expect(session.metadata['gitBranches']).toEqual(['example-branch']);
   expect(steps(session).find((step) => step.kind === 'tool_result')!.text).toBe(output);
   expect(session.stats['omittedReadResults']).toBe(0);
-  expect(session.metadata['sourceRecords']).toMatchObject([{}, { record: { totalCostUSD: 1.5 } }]);
+  const cost = steps(session).find((step) => step.text.includes('totalCostUSD'))!;
+  expect(JSON.parse(cost.text)).toMatchObject({ type: 'cost-state', totalCostUSD: 1.5 });
+  expect(cost.metadata).toEqual({ sourceLine: 2, sourceUuid: undefined });
+  expect(session.metadata['sourceRecords']).toBeUndefined();
 });
 
 test('a session name record titles the session without being reported as unknown', async () => {
@@ -280,7 +283,8 @@ test('legacy summary records remain metadata rather than becoming a compact summ
     { type: 'summary', summary: 'Legacy session title or overview', leafUuid: 'a' },
   ]);
   expect(session.summary).toBe(undefined);
-  expect(session.metadata['sourceRecords']).toEqual(expect.arrayContaining([expect.objectContaining({ record: expect.objectContaining({ summary: 'Legacy session title or overview' }) })]));
+  const legacy = steps(session).find((step) => step.text === 'Legacy session title or overview')!;
+  expect(legacy.metadata!['record']).toMatchObject({ type: 'summary', leafUuid: 'a' });
 });
 
 test('a changing source is rejected rather than mixing rows from two reads', async () => {
@@ -599,7 +603,7 @@ test('unknown unlinked metadata is retained and marked without replacing the act
   ]);
   expect(session.metadata['leafUuid']).toBe('a');
   expect(session.stats['unknownRecords']).toBe(1);
-  expect(JSON.stringify(session.metadata['sourceRecords'])).toContain('retained metadata');
+  expect(steps(session).filter((step) => step.text.includes('retained metadata'))).toHaveLength(1);
 });
 
 test('compaction without an available summary explicitly reports the missing history', async () => {

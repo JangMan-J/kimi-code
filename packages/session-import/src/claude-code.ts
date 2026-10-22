@@ -423,7 +423,7 @@ function makeSteps(entry: Entry, stats: ReaderStats): HistoryStep[] {
     for (const block of content) {
       if (!block || typeof block !== 'object') {
         stats.unknownBlocks++;
-        add('event', textOf(block), block);
+        add('event', textOf(block));
         continue;
       }
       count(stats.blockTypes, block.type ?? '<missing>');
@@ -458,7 +458,7 @@ function makeSteps(entry: Entry, stats: ReaderStats): HistoryStep[] {
         stats.nonTextPayloadBytes += Buffer.byteLength(textOf(block));
         add('event', `[${block.type}: non-text payload omitted]`, { ...block, source: block.source ? { ...block.source, data: undefined } : undefined });
       } else {
-        add('event', textOf(block), block);
+        add('event', textOf(block));
       }
     }
     return result;
@@ -466,7 +466,9 @@ function makeSteps(entry: Entry, stats: ReaderStats): HistoryStep[] {
   const rendered = row.rendered;
   const visible = typeof rendered === 'string' ? rendered : Array.isArray(rendered) ? rendered.map((part) => part?.text ?? textOf(part)).join('\n') : undefined;
   const eventText = visible ?? (typeof row.content === 'string' ? row.content : row.attachment?.text ?? row.attachment?.content ?? row.summary);
-  add(row.type === 'system' && (row.subtype === 'api_error' || row.error) ? 'error' : 'event', textOf(eventText ?? row));
+  const kind = row.type === 'system' && (row.subtype === 'api_error' || row.error) ? 'error' : 'event';
+  if (eventText === undefined) add(kind, textOf(row), undefined, { metadata: { sourceLine: entry.line, sourceUuid: row.uuid } });
+  else add(kind, textOf(eventText));
   if ((row.type === 'user' || row.type === 'assistant') && content === undefined) stats.contentlessMessages++;
   return result;
 }
@@ -583,7 +585,6 @@ export async function readClaudeSession(path: string, options: ReadOptions): Pro
       models: unique(relevant.map((row) => row.message?.model)), permissionModes: unique(relevant.map((row) => row.permissionMode)),
       leafUuid: leaf?.row.uuid, compactBoundary: boundary ? { sourceLine: boundary.line, record: boundary.row } : undefined,
       sourceSummaryRecords: summaryRows,
-      sourceRecords: globals.filter((entry) => timeline.includes(entry)).map((entry) => ({ sourceLine: entry.line, record: entry.row })),
       retention: 'Source text is copied verbatim; images are retained as file paths or URLs at their original positions and can be read when needed. Embedded images are saved as attachments. Document payloads retain explicit omission markers. No Read tool output is excluded.',
     },
     summary, turns, stats, imageReferences: images.manifest(), imageReferenceIndexPath,
