@@ -20,14 +20,12 @@ import { makeSessionContext } from '#/session/sessionContext/sessionContext';
 import { SessionStateService } from '#/session/state/sessionStateService';
 import { EventDispatcherService } from '#/state/eventDispatcherService';
 import { IEventDispatcher } from '#/state/eventDispatcher';
-import type { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import type { ISessionWorkspaceContext } from '#/session/workspaceContext/workspaceContext';
 import {
   workspaceContextAdditionalDirsKey,
   workspaceContextWorkDirKey,
 } from '#/session/workspaceContext/workspaceContextService';
 import { IEnvironmentService, type EnvironmentResolver } from '#/app/environment/environment';
-import type { IEnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclaration';
 import { stubAgentContext } from '../agentContext/stubs';
 import { noopLogger } from '../../wire/stubs';
 import { fakeEnvironment } from '../../environment/stubs';
@@ -130,7 +128,6 @@ function setup(options: {
   agentId?: string;
   sessionCwd?: string;
   seedBinding?: EnvironmentBinding;
-  persistedBinding?: { readonly environmentId?: string; readonly environmentCwd?: string };
 } = {}) {
   const registry = new EnvironmentRegistry();
   const local = environment('local', 'local-one', 'ready', ['fs', 'process'], LOCAL_HOST);
@@ -162,26 +159,6 @@ function setup(options: {
       },
     },
   } as unknown as IEventDispatcher;
-  const metadataUpdates: { environmentId?: string; environmentCwd?: string }[] = [];
-  const metadata = {
-    _serviceBrand: undefined,
-    ready: Promise.resolve(),
-    read: async () => ({
-      id: 'session',
-      createdAt: 0,
-      updatedAt: 0,
-      archived: false,
-      ...options.persistedBinding,
-    }),
-    update: async (patch: { environmentId?: string; environmentCwd?: string }) => {
-      metadataUpdates.push(patch);
-    },
-  } as unknown as ISessionMetadata;
-  const environmentDeclarations = {
-    _serviceBrand: undefined,
-    isDeclared: (id: string) => id === 'remote',
-    declarations: async () => ({ entries: [{ id: 'remote' }] }),
-  } as unknown as IEnvironmentDeclarationService;
   const workDirWrites: string[] = [];
   const workspaceContext = stubWorkspaceContext(session.cwd, workDirWrites);
   const busHandlers = new Map<string, ((event: { readonly agentId?: string }) => void)[]>();
@@ -221,8 +198,6 @@ function setup(options: {
       reminder,
       noopLogger,
       stubBootstrap(),
-      metadata,
-      environmentDeclarations,
     );
     return {
       binding: agentBinding,
@@ -247,45 +222,12 @@ function setup(options: {
     published,
     sessionState,
     reminders,
-    metadataUpdates,
     makeAgent,
     agentEnvironment: main.agentEnvironment,
   };
 }
 
 describe('AgentEnvironmentBindingService', () => {
-  it('persists a changed main-agent binding and a restore that disagrees with session meta', async () => {
-    const switched = setup();
-    switched.binding.bind('remote', '/remote/work');
-    await vi.waitFor(() => {
-      expect(switched.metadataUpdates).toEqual([{ environmentId: 'remote', environmentCwd: '/remote/work' }]);
-    });
-
-    const restored = setup({
-      persistedBinding: { environmentId: 'remote', environmentCwd: '/remote/work' },
-    });
-    restored.state.set(environmentBindingKey, { environmentId: 'local' });
-    await restored.restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-    expect(restored.metadataUpdates).toEqual([{ environmentId: 'local', environmentCwd: undefined }]);
-
-    const unchanged = setup({
-      persistedBinding: { environmentId: 'remote', environmentCwd: '/remote/work' },
-    });
-    unchanged.state.set(environmentBindingKey, { environmentId: 'remote', cwd: '/remote/work' });
-    await unchanged.restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
-    expect(unchanged.metadataUpdates).toEqual([]);
-  });
-
-  it('does not persist a binding to an environment that is not declared', async () => {
-    const { registry, binding, metadataUpdates } = setup();
-    registry.register(environment('acp:s1', 'acp-one', 'ready', ['process'], REMOTE_HOST));
-
-    binding.bind('acp:s1', '/remote/work');
-    await flushProbe();
-
-    expect(metadataUpdates).toEqual([]);
-  });
-
   it.each(['C:\\repo\\src'])('restores native Windows ACP cwd %s without POSIX normalization', async (cwd) => {
     const restored = setup({ seedBinding: { environmentId: 'acp:example', cwd } });
     restored.registry.register(environment('acp:example', 'acp-one', 'ready', ['process'], { ...LOCAL_HOST, pathClass: 'win32' }));
@@ -293,7 +235,6 @@ describe('AgentEnvironmentBindingService', () => {
     await restored.restoreHooks.get('agent-environment-binding')?.(undefined, async () => {});
     expect(restored.binding.current).toEqual({ environmentId: 'acp:example', cwd });
     expect(restored.workDirWrites).toEqual([cwd]);
-    expect(restored.metadataUpdates).toEqual([]);
     restored.agentEnvironment.acquire().dispose();
     await restored.registry.dispose();
   });

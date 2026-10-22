@@ -7,8 +7,6 @@ import { IEnvironmentDeclarationService } from '#/app/environmentDeclaration/env
 import { EnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclarationService';
 import { ITelemetryService, noopTelemetryService, type TelemetryAppenderRecord } from '#/app/telemetry/telemetry';
 import { TelemetryService } from '#/app/telemetry/telemetryService';
-import type { IWorkspaceTrust } from '#/workspace/workspaceTrust/workspaceTrust';
-import type { IWorkspaceContext } from '#/workspace/workspaceContext/workspaceContext';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { HostFsError, OsFsErrors } from '#/os/interface/hostFsErrors';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
@@ -150,7 +148,7 @@ function baseServices(registry: EnvironmentRegistry, overrides: Partial<HostServ
   const log = overrides.log ?? NOOP_LOG;
   return {
     config,
-    declarations: new EnvironmentDeclarationService(config, log, registry),
+    declarations: new EnvironmentDeclarationService(config, log),
     telemetry: noopTelemetryService,
     fs: fsService({}),
     docs: docsService(),
@@ -319,39 +317,6 @@ describe('declaration watch', () => {
     expect(registry.current('dev-box')!.status).toBe('disconnected');
 
     await attachment.dispose();
-    await registry.dispose();
-  });
-});
-
-describe('project connection ownership', () => {
-  it('shares a launcher across trusted projects and removes only the last owner', async () => {
-    const registry = new EnvironmentRegistry();
-    const services = baseServices(registry, { config: configService({}) });
-    const connect = vi.fn(async (options: RemoteEnvironmentOptions) => connectedEnvironment(options, 'shared'));
-    const provider = await new RemoteEnvironmentProviderFactory({ connect }).attach(fakeHost(services, registry));
-    const attach = (id: string, cwd: string) => services.declarations.attachWorkspace(
-      { workspaceId: id, cwd: `/${id}`, source: 'local' } as IWorkspaceContext,
-      fsService({ [`/${id}/.kimi-code/environments.toml`]: `[dev]\ntype = "ssh"\nhost = "dev.example.test"\ndefaultCwd = "${cwd}"` }),
-      { ready: Promise.resolve(), isTrusted: () => true, onDidChange: () => ({ dispose() {} }) } as unknown as IWorkspaceTrust,
-    );
-    const first = attach('first', '/remote/first');
-    const second = attach('second', '/remote/second');
-    await services.declarations.declarations('first');
-    const target = registry.current('dev')!;
-    await Promise.all([target.connect!(), target.connect!()]);
-    expect(connect).toHaveBeenCalledOnce();
-    expect(services.declarations.isVisible('first', 'dev')).toBe(true);
-    expect(services.declarations.isVisible('other', 'dev')).toBe(false);
-    first.dispose();
-    await services.declarations.declarations('second');
-    expect(registry.current('dev')).toBe(target);
-    expect(target.status).toBe('ready');
-    expect(services.declarations.isVisible('first', 'dev')).toBe(false);
-    second.dispose();
-    await services.declarations.catalog();
-    expect(registry.current('dev')).toBeUndefined();
-    await provider.dispose();
-    services.declarations.dispose();
     await registry.dispose();
   });
 });

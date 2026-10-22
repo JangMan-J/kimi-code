@@ -25,8 +25,6 @@ import {
 } from '#/agent/permissionMode/permissionModeOps';
 import { IAgentEnvironmentBindingService } from '#/agent/environmentBinding/environmentBinding';
 import { IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
-import { IEnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclaration';
-import { EnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclarationService';
 import { IAgentStateService } from '#/agent/state/agentState';
 import { AgentStateService } from '#/agent/state/agentStateService';
 import { IAgentContextMemoryService } from '#/agent/contextMemory/contextMemory';
@@ -320,7 +318,6 @@ describe('AgentLifecycleService', () => {
       onDidChange: () => ({ dispose: () => {} }),
       get: () => undefined,
     });
-    ix.set(IEnvironmentDeclarationService, new SyncDescriptor(EnvironmentDeclarationService));
     ix.stub(ISessionMetadata, {
       _serviceBrand: undefined,
       ready: Promise.resolve(),

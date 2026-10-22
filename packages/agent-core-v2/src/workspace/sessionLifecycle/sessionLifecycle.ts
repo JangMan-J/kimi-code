@@ -17,7 +17,6 @@ export interface CreateSessionOptions {
   readonly ensureMainAgent?: boolean;
   readonly environmentId?: string;
   readonly environmentCwd?: string;
-  readonly environmentProject?: boolean;
   readonly mcpServers?: Readonly<Record<string, McpServerConfig>>;
 }
 

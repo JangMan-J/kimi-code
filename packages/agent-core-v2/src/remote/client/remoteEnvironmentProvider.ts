@@ -21,7 +21,9 @@ import type {
   EnvironmentProviderHost,
 } from '#/environment/environmentProvider';
 
-import type { EnvironmentRegistrationHandle } from '#/environment/environmentRegistry';
+import { EnvironmentError, type EnvironmentRegistrationHandle } from '#/environment/environmentRegistry';
+import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
+import type { IHostProcessService } from '#/os/interface/hostProcess';
 import { classifyHandshakeFailure, connectWithGuidance } from './connectGuidance';
 import type { LauncherSpec } from './launchers';
 import { RemoteEnvironment, type RemoteEnvironmentOptions } from './remoteEnvironment';
@@ -48,6 +50,27 @@ class DeclaredRemoteEnvironment implements Environment {
   private sessionSubscription: { dispose(): void } | undefined;
   private hasConnected = false;
   private connectedAt = 0;
+  readonly fs: IHostFileSystem = {
+    _serviceBrand: undefined,
+    readText: async (path, options) => this.connected().fs.readText(path, options),
+    writeText: async (path, data) => this.connected().fs.writeText(path, data),
+    appendText: async (path, data) => this.connected().fs.appendText(path, data),
+    readBytes: async (path, n, offset) => this.connected().fs.readBytes(path, n, offset),
+    writeBytes: async (path, data) => this.connected().fs.writeBytes(path, data),
+    readLines: (path, options) => this.readLines(path, options),
+    createExclusive: async (path, data) => this.connected().fs.createExclusive(path, data),
+    stat: async (path) => this.connected().fs.stat(path),
+    lstat: async (path) => this.connected().fs.lstat(path),
+    readdir: async (path) => this.connected().fs.readdir(path),
+    mkdir: async (path, options) => this.connected().fs.mkdir(path, options),
+    remove: async (path) => this.connected().fs.remove(path),
+    rename: async (from, to) => this.connected().fs.rename(from, to),
+    realpath: async (path) => this.connected().fs.realpath(path),
+  };
+  readonly process: IHostProcessService = {
+    _serviceBrand: undefined,
+    spawn: async (command, args, options) => this.connected().process.spawn(command, args, options),
+  };
 
   constructor(
     private readonly environmentId: string,
@@ -98,12 +121,13 @@ class DeclaredRemoteEnvironment implements Environment {
     return this.session?.workspace;
   }
 
-  get fs(): Environment['fs'] {
-    return this.session?.fs;
+  private connected(): RemoteEnvironment {
+    if (this.session !== undefined && this.currentStatus === 'ready') return this.session;
+    throw new EnvironmentError('environment.unavailable', `environment ${this.environmentId} is ${this.currentStatus}`);
   }
 
-  get process(): Environment['process'] {
-    return this.session?.process;
+  private async *readLines(path: string, options: Parameters<IHostFileSystem['readLines']>[1]): AsyncGenerator<string> {
+    yield* this.connected().fs.readLines(path, options);
   }
 
   connect(): Promise<void> {
@@ -210,7 +234,6 @@ export interface RemoteEnvironmentProviderFactoryOptions {
 
 interface DeclaredEnvironmentRecord {
   handle: EnvironmentRegistrationHandle;
-  ownership: { dispose(): void };
   environment: DeclaredRemoteEnvironment;
   declaration: RemoteEnvironmentDeclaration;
   fingerprint: string;
@@ -224,17 +247,10 @@ export class RemoteEnvironmentProviderFactory implements EnvironmentProviderFact
   async attach(host: EnvironmentProviderHost): Promise<EnvironmentProviderAttachment> {
     const log = host.get(ILogService);
     const declarations = host.get(IEnvironmentDeclarationService);
-    let initial: EnvironmentDeclarationSet;
-    try {
-      initial = await declarations.catalog();
-    } catch (error) {
-      log.warn('remote environment declarations failed to load', { error });
-      return {
-        dispose() {},
-      };
-    }
+    const initial = await declarations.declarations();
+    if (initial === undefined) log.warn('remote environment declarations failed to load');
     const records = new Map<string, DeclaredEnvironmentRecord>();
-    for (const declaration of initial.entries) {
+    for (const declaration of initial?.entries ?? []) {
       try {
         records.set(declaration.id, this.registerDeclaredEnvironment(host, declaration));
         declarations.reportRegistration(declaration.id);
@@ -259,8 +275,6 @@ export class RemoteEnvironmentProviderFactory implements EnvironmentProviderFact
             await record.handle.remove();
           } catch (error) {
             failures.push(error);
-          } finally {
-            record.ownership.dispose();
           }
         }
         for (const declaration of resolved.entries) {
@@ -300,7 +314,6 @@ export class RemoteEnvironmentProviderFactory implements EnvironmentProviderFact
           try {
             await record.handle.remove();
           } finally {
-            record.ownership.dispose();
             records.delete(record.environment.identity.environmentId);
           }
         }
@@ -318,8 +331,7 @@ export class RemoteEnvironmentProviderFactory implements EnvironmentProviderFact
     const environment = new DeclaredRemoteEnvironment(declaration.id, launcher, fingerprint, (nextLauncher) => this.open(declaration.id, nextLauncher), host.get(ITelemetryService));
     try {
       const handle = host.registerEnvironment(environment);
-      const ownership = host.get(IEnvironmentDeclarationService).trackRegistration(environment);
-      return { handle, ownership, environment, declaration, fingerprint };
+      return { handle, environment, declaration, fingerprint };
     } catch (error) {
       void environment.dispose();
       throw error;

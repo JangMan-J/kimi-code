@@ -26,6 +26,7 @@ export class GitService implements IGitService {
   constructor(
     @IEnvironmentService private readonly resolver: EnvironmentResolver,
     @IHostFileSystem private readonly fs: IHostFileSystem,
+    private readonly environmentId: string = LOCAL_ENVIRONMENT_ID,
   ) {}
 
   async status(cwd: string, pathFilter?: ReadonlySet<string>): Promise<FsGitStatusResponse> {
@@ -144,7 +145,7 @@ export class GitService implements IGitService {
     cwd: string,
     options: RunOptions = {},
   ): Promise<RunResult> {
-    const lease = this.resolver.acquire({ environmentId: LOCAL_ENVIRONMENT_ID }, ['process']);
+    const lease = this.resolver.acquire({ environmentId: this.environmentId }, ['process']);
     const spawned = await lease.environment.process!
       .spawn(cmd, args, { cwd, env: options.env })
       .then(

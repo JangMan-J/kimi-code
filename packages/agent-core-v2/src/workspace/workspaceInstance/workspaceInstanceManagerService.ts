@@ -32,7 +32,6 @@ import { Error2, ErrorCodes } from '#/errors';
 import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IEnvironmentService } from '#/app/environment/environment';
-import { IEnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclaration';
 import { canonicalWorkspaceRoot } from '#/_base/utils/paths';
 import { SessionLifecycleService } from '#/workspace/sessionLifecycle/sessionLifecycleService';
 
@@ -78,7 +77,6 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
     @IAtomicDocumentStore private readonly docs: IAtomicDocumentStore,
     @IFileSystemStorageService private readonly storage: IFileSystemStorageService,
     @IEnvironmentService private readonly environments: IEnvironmentService,
-    @IEnvironmentDeclarationService private readonly environmentDeclarations: IEnvironmentDeclarationService,
   ) {}
 
   get(workspaceId: string): WorkspaceInstance | undefined {
@@ -176,7 +174,6 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
       },
       {
         appState: this.appState,
-        environmentDeclarations: this.environmentDeclarations,
         bootstrap: this.bootstrap,
         config: this.config,
         git: this.git,
@@ -219,10 +216,9 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
           input.mcp,
           this.models,
           this.modelProviders,
-          input.environments,
+          this.environments,
+          input.createWorkdir,
           input.onDispose,
-          input.profileContextKey,
-          input.environmentCwd,
         ),
       },
     );

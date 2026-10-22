@@ -1,4 +1,5 @@
 import { IEnvironmentService } from '@moonshot-ai/agent-core-v2';
+import { environmentBindingKey } from '@moonshot-ai/agent-core-v2/agent/environmentBinding/environmentBindingOps';
 import { chmod, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -6,7 +7,6 @@ import { deflateSync } from 'node:zlib';
 
 import {
   agentContextOf,
-  agentEnvironmentBindingKey,
   IAgentTitlePromptSource,
   IAgentContextMemoryService,
   IAgentLifecycleService,
@@ -1562,7 +1562,7 @@ describe('server-v2 /api/v1 prompts', () => {
     const session = getLiveSessionById(server!.core.accessor, id);
     const workspaceId = session!.accessor.get(ISessionContext).workspaceId;
     const main = session!.accessor.get(IAgentLifecycleService).handleOf('main')!;
-    main.accessor.get(IAgentStateService).set(agentEnvironmentBindingKey, {
+    main.accessor.get(IAgentStateService).set(environmentBindingKey, {
       environmentId: 'fake-remote',
     });
 
@@ -1708,7 +1708,7 @@ describe('server-v2 /api/v1 prompts', () => {
       }));
       await createMainAgent(id);
       const main = session!.accessor.get(IAgentLifecycleService).handleOf('main')!;
-      main.accessor.get(IAgentStateService).set(agentEnvironmentBindingKey, {
+      main.accessor.get(IAgentStateService).set(environmentBindingKey, {
         environmentId: 'broken-remote',
       });
 

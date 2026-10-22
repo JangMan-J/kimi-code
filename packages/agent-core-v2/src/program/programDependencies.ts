@@ -14,8 +14,6 @@ import type { IBuiltinSkillSource } from '#/features/skill/catalog/builtinSkillS
 import type { IUserFileSkillSource } from '#/features/skill/catalog/userFileSkillSource';
 import type { IAppStateService } from '#/app/state/appState';
 import type { ITelemetryService } from '#/app/telemetry/telemetry';
-import type { IEnvironmentService } from '#/app/environment/environment';
-import type { IEnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclaration';
 import type { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 import type { SessionLifecycleService } from '#/workspace/sessionLifecycle/sessionLifecycleService';
 import type { IWorkspaceContext } from '#/workspace/workspaceContext/workspaceContext';
@@ -28,12 +26,10 @@ import type { IWorkspaceDirs } from '#/workspace/workspaceDirs/workspaceDirs';
 import type { IWorkspaceInstructionsService } from '#/workspace/workspaceInstructions/workspaceInstructions';
 import type { IWorkspaceMcpService } from '#/workspace/workspaceMcp/workspaceMcp';
 import type { IWorkspaceSkillCatalog } from '#/features/skill/workspace/workspaceSkillCatalog';
+import type { ProgramWorkdir } from './program';
 
 export interface ProgramSessionControllerInput {
   readonly context: IWorkspaceContext;
-  readonly profileContextKey: string;
-  readonly environmentCwd?: string;
-  readonly environments: IEnvironmentService;
   readonly workspaceAgentProfiles: IWorkspaceAgentProfileLoader;
   readonly extraAgentProfiles: IExtraAgentProfileLoader;
   readonly explicitAgentProfiles: IExplicitAgentProfileLoader;
@@ -43,11 +39,11 @@ export interface ProgramSessionControllerInput {
   readonly skills: IWorkspaceSkillCatalog;
   readonly instructions: IWorkspaceInstructionsService;
   readonly mcp: IWorkspaceMcpService;
+  readonly createWorkdir: (environmentId: string, cwd: string, contextKey: string) => ProgramWorkdir;
   readonly onDispose: () => void;
 }
 
 export interface ProgramDependencies {
-  readonly environmentDeclarations: IEnvironmentDeclarationService;
   readonly appState: IAppStateService;
   readonly bootstrap: IBootstrapService;
   readonly config: IConfigService;

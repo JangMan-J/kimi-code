@@ -27,7 +27,7 @@
 // references become '(circular)', and class instances collapse to a '(ClassName)'
 // marker — the wire shape of an entry is the JSON projection of the type here.
 //
-// Index (App: 0 keys · Workspace: 6 keys · Session: 9 keys · Agent: 74 keys)
+// Index (App: 0 keys · Workspace: 6 keys · Session: 9 keys · Agent: 73 keys)
 //   App
 //   Workspace
 //     workspaceDirs.ephemeralDirs          src/workspace/workspaceDirs/workspaceDirsService.ts
@@ -54,7 +54,6 @@
 //     changeNotifier.snapshot                         src/agent/changeNotifier/changeNotifierOps.ts
 //     contextMemory                                   src/agent/contextMemory/contextOps.ts
 //     contextProjector.lastRepairSignature            src/agent/contextProjector/contextProjectorService.ts
-//     environment.binding                             src/agent/environmentBinding/environmentBindingService.ts
 //     environmentBinding                              src/agent/environmentBinding/environmentBindingOps.ts
 //     externalHooks.stopHookContinuationUsed          src/features/externalHooks/agent/agentExternalHooksService.ts
 //     fileHistory                                     src/features/fileHistory/fileHistoryOps.ts
@@ -690,7 +689,6 @@ export interface SessionStateSnapshot {
     readonly cwd?: string;
     readonly environmentId?: string;
     readonly environmentCwd?: string;
-    readonly environmentProject?: boolean;
     readonly forkedFrom?: string;
     readonly agents?: Readonly<Record<string, /* AgentMeta — packages/agent-core-v2/src/session/sessionMetadata/sessionMetadata.ts */ {
       readonly homedir?: string;
@@ -968,11 +966,6 @@ export interface AgentStateSnapshot {
     readonly environmentId: string;
     readonly cwd?: string;
   } | undefined;
-  // src/agent/environmentBinding/environmentBindingService.ts
-  'environment.binding': /* EnvironmentBinding — packages/agent-core-v2/src/environment/environment.ts */ {
-    readonly environmentId: string;
-    readonly cwd?: string;
-  };
   // src/agent/fullCompaction/compactionOps.ts
   // replayable · durable — folds: FullCompactionBegin, FullCompactionCancel, FullCompactionComplete
   'fullCompaction': /* CompactionState — packages/agent-core-v2/src/agent/fullCompaction/compactionOps.ts */ {

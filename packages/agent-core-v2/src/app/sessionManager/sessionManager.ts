@@ -38,7 +38,6 @@ export interface ISessionManager {
     readonly workspaceId: string;
     readonly environmentId?: string;
     readonly environmentCwd?: string;
-    readonly environmentProject?: boolean;
   }>;
   create(options: CreateManagedSessionOptions): Promise<ISessionScopeHandle>;
   resume(sessionId: string, options?: ResumeSessionOptions): Promise<ISessionScopeHandle | undefined>;

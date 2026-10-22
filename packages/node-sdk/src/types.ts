@@ -181,13 +181,6 @@ export interface WorkspaceTrustInstructionSources {
 
 /** Trust state of a workspace directory, plus everything trusting it would activate. */
 export interface WorkspaceTrustInfo {
-  readonly gatedEnvironments?: readonly {
-    readonly id: string;
-    readonly launcher: string;
-    readonly defaultCwd?: string;
-    readonly origin: string;
-    readonly envKeys: readonly string[];
-  }[];
   readonly trusted: boolean;
   /** Project-level MCP servers that trusting would start. */
   readonly gatedMcpServers: readonly WorkspaceTrustMcpServerInfo[];

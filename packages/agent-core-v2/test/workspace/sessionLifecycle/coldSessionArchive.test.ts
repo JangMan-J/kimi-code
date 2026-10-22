@@ -240,7 +240,7 @@ function sessionManagerResuming(sessionId: string): SessionManager {
   } as unknown as SessionLifecycleService;
   const workspace = {
     id: summary.workspaceId,
-    program: { sessionControllerGenerationFor: () => 'generation-1', createSessionController: () => controller },
+    program: { sessionControllerGeneration: 'generation-1', createSessionController: () => controller },
   } as unknown as WorkspaceInstance;
   const workspaces = { getOrCreate: async () => workspace, get: () => workspace } as unknown as IWorkspaceInstanceManager;
   const environments = new EnvironmentRegistry() as unknown as IEnvironmentService;
@@ -250,17 +250,13 @@ function sessionManagerResuming(sessionId: string): SessionManager {
     new EnvironmentDeclarationService(
       { _serviceBrand: undefined, ready: Promise.resolve(), get: () => undefined } as unknown as IConfigService,
       { _serviceBrand: undefined, warn: () => {}, info: () => {}, error: () => {} } as unknown as ILogService,
-      environments,
     ),
-    { _serviceBrand: undefined, warn: () => {}, info: () => {}, error: () => {} } as unknown as ILogService,
     environments,
     {
       _serviceBrand: undefined,
       stat: async () => ({ isFile: false, isDirectory: true, size: 0 }),
       realpath: async (path: string) => path,
     } as unknown as IHostFileSystem,
-    { _serviceBrand: undefined, get: async () => undefined } as unknown as IAtomicDocumentStore,
-    { _serviceBrand: undefined, scope: (name: string) => name } as unknown as IBootstrapService,
     new InMemorySessionLockService(),
   );
 }

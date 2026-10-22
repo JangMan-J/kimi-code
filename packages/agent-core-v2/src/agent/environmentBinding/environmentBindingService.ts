@@ -1,5 +1,4 @@
 import { ScopeActivation, registerScopedService } from '#/_base/di/scope';
-import { defineState } from '#/state/state';
 import type { IDisposable } from '#/_base/di/lifecycle';
 import { Emitter } from '#/_base/event';
 import { ILogService } from '#/_base/log/log';
@@ -12,19 +11,14 @@ import { IAgentReminderService } from '#/features/reminder/reminderService';
 import type { HostEnvironmentInfo } from '#/os/interface/hostEnvironment';
 import { LOCAL_ENVIRONMENT_ID, type EnvironmentBinding, type EnvironmentLease } from '#/environment/environment';
 import { EnvironmentError } from '#/environment/environmentRegistry';
-import { normalizeRemoteCwd } from '#/environment/environmentDefaults';
 import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
 import { ISessionContext } from '#/session/sessionContext/sessionContext';
-import { ISessionMetadata } from '#/session/sessionMetadata/sessionMetadata';
 import { ISessionWorkspaceContext } from '#/session/workspaceContext/workspaceContext';
 import { IEventDispatcher } from '#/state/eventDispatcher';
 import { IEnvironmentService, type EnvironmentResolver } from '#/app/environment/environment';
-import { IEnvironmentDeclarationService } from '#/app/environmentDeclaration/environmentDeclaration';
 
 import { IAgentEnvironmentBindingSeed, IAgentEnvironmentBindingService } from './environmentBinding';
 import { EnvironmentSetBinding, environmentBindingKey } from './environmentBindingOps';
-
-export const agentEnvironmentBindingKey = defineState<EnvironmentBinding>('environment.binding', () => ({ environmentId: LOCAL_ENVIRONMENT_ID }));
 
 export const ENVIRONMENT_BINDING_REMINDER_VARIANT = 'environment_binding';
 
@@ -67,55 +61,21 @@ export class AgentEnvironmentBindingService implements IAgentEnvironmentBindingS
     @IAgentReminderService private readonly reminder: IAgentReminderService,
     @ILogService private readonly log: ILogService,
     @IBootstrapService private readonly bootstrap: IBootstrapService,
-    @ISessionMetadata private readonly metadata: ISessionMetadata,
-    @IEnvironmentDeclarationService private readonly environmentDeclarations: IEnvironmentDeclarationService,
   ) {
-    this.state.contributeState(agentEnvironmentBindingKey);
     this.state.contributeState(environmentBindingKey);
-    const initial = this.state.get(environmentBindingKey) ?? seed.binding;
-    this.state.set(agentEnvironmentBindingKey, initial);
     this.restoreHook = dispatcher.hooks.onDidRestore.register('agent-environment-binding', async (_ctx, next) => {
-      const restored = this.state.get(environmentBindingKey);
-      const replayed = restored !== undefined && this.environmentDeclarations.isDeclared(restored.environmentId) && restored.cwd !== undefined
-        ? { ...restored, cwd: normalizeRemoteCwd(restored.cwd) }
-        : restored;
-      if (replayed !== undefined) {
-        this.state.set(environmentBindingKey, replayed);
-        this.state.set(agentEnvironmentBindingKey, replayed);
-        this.applySessionWorkDir(replayed);
-        if (this.isSeedRoundTrip(replayed)) {
-          this.emitEnvironmentReminder(replayed);
-        }
-      } else {
+      const replayed = this.state.get(environmentBindingKey);
+      if (replayed === undefined) {
         await this.dispatcher.dispatch(
           new EnvironmentSetBinding({ ...this.current, agentId: this.scopeContext.agentId }),
         );
-        this.applySessionWorkDir(this.current);
-        if (this.current.environmentId !== LOCAL_ENVIRONMENT_ID) {
-          this.emitEnvironmentReminder(this.current);
-        }
       }
-      await this.persistIfChanged(this.current);
+      this.applySessionWorkDir(this.current);
+      if (replayed === undefined ? this.current.environmentId !== LOCAL_ENVIRONMENT_ID : this.isSeedRoundTrip(replayed)) {
+        this.emitEnvironmentReminder(this.current);
+      }
       await next();
     });
-  }
-
-  private async persistIfChanged(binding: EnvironmentBinding): Promise<void> {
-    if (this.scopeContext.agentId !== MAIN_AGENT_ID) return;
-    if (binding.environmentId !== LOCAL_ENVIRONMENT_ID) {
-      const declarations = await this.environmentDeclarations.declarations(this.session.workspaceId);
-      if (!declarations?.entries.some((entry) => entry.id === binding.environmentId)) return;
-    }
-    const persisted = await this.metadata.read();
-    const persistedId = persisted.environmentId ?? LOCAL_ENVIRONMENT_ID;
-    if (persistedId === binding.environmentId && persisted.environmentCwd === binding.cwd) return;
-    await this.metadata.update(
-      {
-        environmentId: binding.environmentId, environmentCwd: binding.cwd,
-        environmentProject: persistedId === binding.environmentId ? persisted.environmentProject : undefined,
-      },
-      { touchUpdatedAt: false },
-    );
   }
 
   private isSeedRoundTrip(binding: EnvironmentBinding): boolean {
@@ -133,7 +93,7 @@ export class AgentEnvironmentBindingService implements IAgentEnvironmentBindingS
   }
 
   get current(): EnvironmentBinding {
-    return this.state.get(agentEnvironmentBindingKey);
+    return this.state.get(environmentBindingKey) ?? this.seed.binding;
   }
 
   bind(environmentId: string, cwd?: string): EnvironmentBinding {
@@ -155,11 +115,10 @@ export class AgentEnvironmentBindingService implements IAgentEnvironmentBindingS
     void this.dispatcher.dispatch(
       new EnvironmentSetBinding({ ...next, agentId: this.scopeContext.agentId }),
     );
-    this.state.set(agentEnvironmentBindingKey, next);
+    this.state.set(environmentBindingKey, next);
     this.applySessionWorkDir(next);
     this.emitProjectContextReminder(next);
     this.changeEmitter.fire(next);
-    void this.persistIfChanged(next);
     return next;
   }
 
