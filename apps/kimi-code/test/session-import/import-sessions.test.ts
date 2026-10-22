@@ -12,6 +12,7 @@ import { findBuiltInSlashCommand, resolveSlashCommandAvailability } from '#/tui/
 import {
   candidatesWithin,
   IMPORT_BATCH_LIMIT,
+  importBudget,
   importedSessionId,
   importSessions,
   ImportSessionsScreenComponent,
@@ -24,6 +25,7 @@ import {
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.now();
+const BUDGET = { contextWindow: 32_768, tokenBudget: 16_384 };
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -76,7 +78,7 @@ describe('importing sessions', () => {
     ]);
     expect(candidatesWithin(scan, 15, NOW).map((candidate) => candidate.sessionId)).toEqual(['ses_claude-one']);
 
-    const report = await importSessions(scan.candidates, { kimiHome, contextWindow: 32_768, now: NOW });
+    const report = await importSessions(scan.candidates, { kimiHome, ...BUDGET, now: NOW });
     expect(report).toEqual({
       imported: ['ses_claude-one', 'ses_thread-one'],
       alreadyImported: 0,
@@ -101,7 +103,7 @@ describe('importing sessions', () => {
     expect(wire).toContain('<imported_conversation>');
     expect((await readdir(join(sessionDir, 'attachments'))).some((name) => name.startsWith('effective-history-'))).toBe(true);
 
-    expect(await scanImportableSessions({ kimiHome, claudeHome, codexHome, now: NOW })).toEqual({ candidates: [], alreadyImported: 2 });
+    expect(await scanImportableSessions({ kimiHome, claudeHome, codexHome, now: NOW })).toEqual({ candidates: [], alreadyImported: 2, missingFolder: 0 });
   });
 
   it('reports sessions it cannot import and leaves no partial session directories', async () => {
@@ -118,7 +120,8 @@ describe('importing sessions', () => {
     );
 
     const scan = await scanImportableSessions({ kimiHome, claudeHome, codexHome, now: NOW });
-    expect(scan.candidates.map((candidate) => candidate.sourceId)).toEqual(['moved', 'forked']);
+    expect(scan.candidates.map((candidate) => candidate.sourceId)).toEqual(['forked']);
+    expect(scan.missingFolder).toBe(1);
     const commandsOnly: ImportCandidate = {
       source: 'claude-code',
       path: join(projects, 'commands-only.jsonl'),
@@ -127,9 +130,9 @@ describe('importing sessions', () => {
       modifiedAt: NOW,
       sessionId: 'ses_commands-only',
     };
-    const report = await importSessions([...scan.candidates, commandsOnly], { kimiHome, contextWindow: 32_768, now: NOW });
+    const report = await importSessions([...scan.candidates, commandsOnly], { kimiHome, ...BUDGET, now: NOW });
 
-    expect(report).toEqual({ imported: [], alreadyImported: 0, missingFolder: 1, inUse: 0, empty: 1, unsupported: 1, failed: [], stopped: false });
+    expect(report).toEqual({ imported: [], alreadyImported: 0, missingFolder: 0, inUse: 0, empty: 1, unsupported: 1, failed: [], stopped: false });
     expect(await readdir(join(kimiHome, 'sessions')).catch(() => [])).toEqual([]);
   });
 
@@ -144,11 +147,11 @@ describe('importing sessions', () => {
       sessionId: `ses_source-${String(index)}`,
     }));
 
-    expect((await importSessions(candidates, { kimiHome, contextWindow: 32_768, now: NOW })).missingFolder).toBe(IMPORT_BATCH_LIMIT);
+    expect((await importSessions(candidates, { kimiHome, ...BUDGET, now: NOW })).missingFolder).toBe(IMPORT_BATCH_LIMIT);
     let started = 0;
     const stopped = await importSessions(candidates, {
       kimiHome,
-      contextWindow: 32_768,
+      ...BUDGET,
       now: NOW,
       onProgress: () => {
         started++;
@@ -178,7 +181,7 @@ describe('importing sessions', () => {
         modifiedAt: NOW,
         sessionId: `ses_${code}`,
       }));
-      expect(await importWithConversion(candidates, { kimiHome, contextWindow: 32_768, now: NOW })).toEqual({
+      expect(await importWithConversion(candidates, { kimiHome, ...BUDGET, now: NOW })).toEqual({
         imported: [],
         alreadyImported: 0,
         missingFolder: 0,
@@ -193,6 +196,19 @@ describe('importing sessions', () => {
       vi.doUnmock('@moonshot-ai/session-import');
       vi.resetModules();
     }
+  });
+
+  it('sizes imports below the compaction threshold of the default model input limit', () => {
+    const config = (maxContextSize: number, extra: { maxInputSize?: number } = {}) => ({
+      defaultModel: 'example',
+      models: { example: { provider: 'example', model: 'example-model', maxContextSize, ...extra } },
+    });
+    expect(importBudget({})).toEqual({ contextWindow: 131_072, tokenBudget: 40_857 });
+    expect(importBudget(config(262_144))).toEqual({ contextWindow: 262_144, tokenBudget: 145_715 });
+    expect(importBudget(config(400_000, { maxInputSize: 272_000 }))).toEqual({ contextWindow: 272_000, tokenBudget: 153_600 });
+    expect(importBudget(config(200_000, { maxInputSize: 300_000 }))).toEqual({ contextWindow: 200_000, tokenBudget: 96_000 });
+    expect(importBudget({ ...config(1_000_000), loopControl: { reservedContextSize: 0, compactionTriggerRatio: 0.95 } })).toEqual({ contextWindow: 1_000_000, tokenBudget: 736_000 });
+    expect(importBudget(config(32_768))).toEqual({ contextWindow: 32_768, tokenBudget: 16_384 });
   });
 
   it('derives stable session ids and honors source home overrides', () => {
@@ -216,7 +232,7 @@ describe('ImportSessionsScreenComponent', () => {
     modifiedAt: NOW - ageDays * DAY,
     sessionId,
   });
-  const scan = { candidates: [candidate('a', 'claude-code', 1), candidate('b', 'codex', 3), candidate('c', 'claude-code', 20)], alreadyImported: 2 };
+  const scan = { candidates: [candidate('a', 'claude-code', 1), candidate('b', 'codex', 3), candidate('c', 'claude-code', 20)], alreadyImported: 2, missingFolder: 1 };
   const report = (overrides: Partial<ImportReport> = {}): ImportReport => ({
     imported: [],
     alreadyImported: 0,
@@ -238,7 +254,7 @@ describe('ImportSessionsScreenComponent', () => {
     const out = render(screen);
     expect(out).toMatch(/❯ Last 15 days\s+2 sessions/);
     expect(out).toMatch(/ {3}Last 30 days\s+3 sessions/);
-    expect(out).toContain('Claude Code 2 · Codex 1 · 2 already imported (not counted)');
+    expect(out).toContain('Claude Code 2 · Codex 1 · not counted: 2 already imported, 1 with a missing project folder');
   });
 
   it('imports the chosen window and summarizes the outcome', async () => {
@@ -292,9 +308,9 @@ describe('ImportSessionsScreenComponent', () => {
 
   it('offers only Close when nothing new can be imported', async () => {
     const onClose = vi.fn();
-    const screen = new ImportSessionsScreenComponent({ now: NOW, scan: async () => ({ candidates: [], alreadyImported: 3 }), run: vi.fn(), onClose });
+    const screen = new ImportSessionsScreenComponent({ now: NOW, scan: async () => ({ candidates: [], alreadyImported: 3, missingFolder: 0 }), run: vi.fn(), onClose });
     await vi.waitFor(() => {
-      expect(render(screen)).toContain('No sessions from the last 30 days to import. 3 sessions already imported.');
+      expect(render(screen)).toContain('No sessions from the last 30 days to import. 3 already imported.');
     });
     expect(render(screen)).toContain('❯ Close');
 
@@ -308,8 +324,12 @@ describe('/import-sessions', () => {
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(root, 'claude'));
     vi.stubEnv('CODEX_HOME', join(root, 'codex'));
     const host = {
-      harness: { homeDir: kimiHome, listSessions: vi.fn(async () => []) },
-      state: { appState: { maxContextTokens: 32_768 }, ui: { requestRender: vi.fn() } },
+      harness: {
+        homeDir: kimiHome,
+        listSessions: vi.fn(async () => []),
+        getConfig: vi.fn(async () => ({ defaultModel: 'example', models: { example: { provider: 'example', model: 'example-model', maxContextSize: 32_768 } } })),
+      },
+      state: { ui: { requestRender: vi.fn() } },
       mountEditorReplacement: vi.fn(),
       restoreEditor: vi.fn(),
     };
@@ -348,6 +368,7 @@ describe('/import-sessions', () => {
       expect(render(screen)).toContain('Imported 1 session.');
     });
     expect(host.harness.listSessions).toHaveBeenCalledWith({ sessionId: 'ses_claude-one' });
+    expect(host.harness.getConfig).toHaveBeenCalledOnce();
   });
 });
 

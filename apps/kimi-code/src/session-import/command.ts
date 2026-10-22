@@ -1,12 +1,12 @@
 import { setTelemetryContext, track, withTelemetryContext } from '@moonshot-ai/kimi-telemetry';
-import { createKimiHarness, type KimiHarness, type TelemetryClient } from '@moonshot-ai/kimi-code-sdk';
+import { createKimiHarness, type TelemetryClient } from '@moonshot-ai/kimi-code-sdk';
 import { ProcessTerminal, TuiMainScreen } from '@moonshot-ai/pi-tui';
 import type { Command } from 'commander';
 
 import { createCliTelemetryBootstrap } from '#/cli/telemetry';
 import { createKimiCodeHostIdentity } from '#/cli/version';
 
-import { importSessions, scanImportableSessions, sourceHomes } from './run-import';
+import { importBudget, importSessions, scanImportableSessions, sourceHomes } from './run-import';
 import { ImportSessionsScreenComponent } from './screen';
 
 export function registerImportSessionsCommand(
@@ -35,7 +35,7 @@ export async function runImportSessionsCommand(): Promise<number> {
   });
   try {
     const kimiHome = harness.homeDir;
-    const contextWindow = await defaultContextWindow(harness);
+    const budget = importBudget(await harness.getConfig().catch(() => ({})));
     const now = Date.now();
     const homes = sourceHomes();
     const ui = new TuiMainScreen(new ProcessTerminal());
@@ -43,7 +43,7 @@ export async function runImportSessionsCommand(): Promise<number> {
       const screen = new ImportSessionsScreenComponent({
         now,
         scan: () => scanImportableSessions({ kimiHome, ...homes, now }),
-        run: (candidates, hooks) => importSessions(candidates, { kimiHome, contextWindow, now, ...hooks }),
+        run: (candidates, hooks) => importSessions(candidates, { kimiHome, ...budget, now, ...hooks }),
         requestRender: () => {
           ui.requestRender();
         },
@@ -59,15 +59,5 @@ export async function runImportSessionsCommand(): Promise<number> {
     return 0;
   } finally {
     await harness.close();
-  }
-}
-
-async function defaultContextWindow(harness: KimiHarness): Promise<number> {
-  try {
-    const config = await harness.getConfig();
-    const alias = config.defaultModel;
-    return (alias === undefined ? undefined : config.models?.[alias]?.maxContextSize) ?? 0;
-  } catch {
-    return 0;
   }
 }

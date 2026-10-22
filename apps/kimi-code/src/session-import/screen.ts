@@ -172,6 +172,11 @@ export class ImportSessionsScreenComponent extends Container implements Focusabl
     const muted = chalk.hex(colors.textMuted);
     const choices = this.choices();
     const alreadyImported = this.scan?.alreadyImported ?? 0;
+    const missingFolder = this.scan?.missingFolder ?? 0;
+    const notCounted = [
+      ...(alreadyImported > 0 ? [`${String(alreadyImported)} already imported`] : []),
+      ...(missingFolder > 0 ? [`${String(missingFolder)} with a missing project folder`] : []),
+    ];
     const lines = choices.map((choice, index) => {
       const selected = index === this.selectedIndex;
       const pointer = chalk.hex(selected ? colors.primary : colors.textDim)(`  ${selected ? '❯' : ' '} `);
@@ -182,15 +187,15 @@ export class ImportSessionsScreenComponent extends Container implements Focusabl
       return pointer + label + muted(`${sessions(count)}${limit}`);
     });
     if (this.count(LONGEST_WINDOW_DAYS) === 0) {
-      const imported = alreadyImported > 0 ? ` ${sessions(alreadyImported)} already imported.` : '';
-      return [text(` No sessions from the last ${String(LONGEST_WINDOW_DAYS)} days to import.${imported}`), '', ...lines, '', muted(' enter close')];
+      const reasons = notCounted.length > 0 ? ` ${notCounted.join(', ')}.` : '';
+      return [text(` No sessions from the last ${String(LONGEST_WINDOW_DAYS)} days to import.${reasons}`), '', ...lines, '', muted(' enter close')];
     }
     const recent = candidatesWithin(this.scan!, LONGEST_WINDOW_DAYS, this.options.now);
     const bySource = (['claude-code', 'codex'] as const)
       .map((source) => [SOURCE_LABELS[source], recent.filter((candidate) => candidate.source === source).length] as const)
       .filter(([, count]) => count > 0)
       .map(([label, count]) => `${label} ${String(count)}`);
-    const summary = [...bySource, ...(alreadyImported > 0 ? [`${String(alreadyImported)} already imported (not counted)`] : [])];
+    const summary = [...bySource, ...(notCounted.length > 0 ? [`not counted: ${notCounted.join(', ')}`] : [])];
     return [
       text(' Sessions are converted locally; source files are not changed.'),
       '',

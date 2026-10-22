@@ -1,5 +1,6 @@
 import {
   ImportSessionsScreenComponent,
+  importBudget,
   importSessions,
   scanImportableSessions,
   sourceHomes,
@@ -17,13 +18,13 @@ import type { SlashCommandHost } from './dispatch';
 export function handleImportSessionsCommand(host: SlashCommandHost): void {
   const now = Date.now();
   const kimiHome = host.harness.homeDir;
-  const contextWindow = host.state.appState.maxContextTokens;
   const homes = sourceHomes();
   const screen = new ImportSessionsScreenComponent({
     now,
     scan: () => scanImportableSessions({ kimiHome, ...homes, now }),
     run: async (candidates, hooks) => {
-      const report = await importSessions(candidates, { kimiHome, contextWindow, now, ...hooks });
+      const budget = importBudget(await host.harness.getConfig().catch(() => ({})));
+      const report = await importSessions(candidates, { kimiHome, ...budget, now, ...hooks });
       await Promise.all(
         report.imported.map((sessionId) => host.harness.listSessions({ sessionId }).catch(() => [])),
       );

@@ -11,11 +11,17 @@ import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import type { KimiConfig } from '@moonshot-ai/kimi-code-sdk';
 import { importedSessionDir, writeImportedSession } from '@moonshot-ai/migration-legacy';
-import { convertSession, findSessions, type SessionCandidate } from '@moonshot-ai/session-import';
+import { convertSession, DEFAULT_IMPORT_RATIO, findSessions, type SessionCandidate } from '@moonshot-ai/session-import';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_CONTEXT_WINDOW = 131_072;
+const COMPACTION_TRIGGER_RATIO = 0.85;
+const RESERVED_CONTEXT_SIZE = 50_000;
+const CONTINUATION_MARGIN = 30_000;
+const ESTIMATE_UNDERCOUNT = 1.25;
+const MIN_IMPORT_BUDGET = 16_384;
 
 export const IMPORT_WINDOW_DAYS = [15, 30] as const;
 export const IMPORT_BATCH_LIMIT = 100;
@@ -27,6 +33,13 @@ export interface ImportCandidate extends SessionCandidate {
 export interface ImportScan {
   readonly candidates: readonly ImportCandidate[];
   readonly alreadyImported: number;
+  /** Sessions whose project folder no longer exists; they are not candidates. */
+  readonly missingFolder: number;
+}
+
+export interface ImportBudget {
+  readonly contextWindow: number;
+  readonly tokenBudget: number;
 }
 
 export interface ImportProgress {
@@ -52,9 +65,8 @@ export interface ImportReport {
   stopped: boolean;
 }
 
-export interface ImportOptions {
+export interface ImportOptions extends ImportBudget {
   readonly kimiHome: string;
-  readonly contextWindow: number;
   readonly now: number;
   readonly onProgress?: (progress: ImportProgress) => void;
   readonly shouldStop?: () => boolean;
@@ -80,8 +92,37 @@ export function importedSessionId(session: SessionCandidate): string {
   return `ses_${createHash('sha256').update(`${session.source}:${session.sourceId}`).digest('hex').slice(0, 32)}`;
 }
 
+/**
+ * Size imports for the default model. The window is its input limit. The
+ * budget keeps the imported message below the engine's automatic compaction
+ * threshold (trigger ratio or reserved context, whichever comes first), with
+ * room for the system prompt, tools and the first exchange, so continuing an
+ * imported session does not start by compacting it away. The import
+ * estimator undercounts code and JSON by about a quarter, hence the divisor.
+ */
+export function importBudget(config: Pick<KimiConfig, 'defaultModel' | 'models' | 'loopControl'>): ImportBudget {
+  const model = config.defaultModel === undefined ? undefined : config.models?.[config.defaultModel];
+  const limit = Math.min(model?.maxInputSize ?? Infinity, model?.maxContextSize ?? Infinity);
+  const contextWindow = Number.isFinite(limit) ? limit : FALLBACK_CONTEXT_WINDOW;
+  const reserved = config.loopControl?.reservedContextSize ?? RESERVED_CONTEXT_SIZE;
+  const threshold = Math.min(
+    contextWindow * (config.loopControl?.compactionTriggerRatio ?? COMPACTION_TRIGGER_RATIO),
+    reserved > 0 && reserved < contextWindow ? contextWindow - reserved : contextWindow,
+  );
+  const allowance = Math.max(MIN_IMPORT_BUDGET, (threshold - CONTINUATION_MARGIN) / ESTIMATE_UNDERCOUNT);
+  return { contextWindow, tokenBudget: Math.floor(Math.min(contextWindow * DEFAULT_IMPORT_RATIO, allowance)) };
+}
+
 function isImported(kimiHome: string, workDir: string, sessionId: string): boolean {
   return existsSync(join(importedSessionDir(kimiHome, workDir, sessionId), 'state.json'));
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 export async function scanImportableSessions(input: {
@@ -93,24 +134,18 @@ export async function scanImportableSessions(input: {
   const since = input.now - Math.max(...IMPORT_WINDOW_DAYS) * DAY_MS;
   const candidates: ImportCandidate[] = [];
   let alreadyImported = 0;
+  let missingFolder = 0;
   for (const session of await findSessions({ claudeHome: input.claudeHome, codexHome: input.codexHome, since })) {
     const sessionId = importedSessionId(session);
     if (isImported(input.kimiHome, session.cwd, sessionId)) alreadyImported++;
+    else if (!isDirectory(session.cwd)) missingFolder++;
     else candidates.push({ ...session, sessionId });
   }
-  return { candidates, alreadyImported };
+  return { candidates, alreadyImported, missingFolder };
 }
 
 export function candidatesWithin(scan: ImportScan, days: number, now: number): ImportCandidate[] {
   return scan.candidates.filter((candidate) => candidate.modifiedAt >= now - days * DAY_MS);
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 async function discard(sessionDir: string): Promise<void> {
@@ -132,7 +167,8 @@ async function importOne(candidate: ImportCandidate, options: ImportOptions): Pr
       source: candidate.source,
       sourcePath: candidate.path,
       attachmentDirectory,
-      contextWindow: options.contextWindow > 0 ? options.contextWindow : FALLBACK_CONTEXT_WINDOW,
+      contextWindow: options.contextWindow,
+      tokenBudget: options.tokenBudget,
     });
     if (result.status === 'unreliable') {
       await discard(sessionDir);
