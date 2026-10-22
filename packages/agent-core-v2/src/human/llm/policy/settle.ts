@@ -196,6 +196,10 @@ export async function settleLlmRequest(
   const aborted = (): LlmOutcome => ({
     type: 'aborted',
     message: usableOutputOf(inner.finish()),
+    reason:
+      failure?.error.kind === 'abort'
+        ? failure.error
+        : ({ kind: 'abort', message: 'The operation was aborted.' } satisfies LlmErrorMessage<'abort'>),
     ...extras(),
   });
 

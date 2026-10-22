@@ -4,6 +4,7 @@ import { resolveModelConnection, type ProviderConnection } from '#/llm/protocol/
 import type { Protocol } from '#/llm/protocol/protocol';
 import type { LlmRequest } from '#/llm/request';
 import type { LlmRunEvent } from '#/llm/response';
+import type { LlmErrorMessage } from '#/llm/errors';
 import { thinkingMetadataOf } from '#/llm/thinking';
 
 import {
@@ -41,6 +42,18 @@ function translateEvent(
     default:
       return;
   }
+}
+
+function abortErrorOf(reason: unknown): LlmErrorMessage<'abort'> {
+  if (
+    typeof reason === 'object' &&
+    reason !== null &&
+    (reason as { kind?: unknown }).kind === 'abort' &&
+    typeof (reason as { message?: unknown }).message === 'string'
+  ) {
+    return reason as LlmErrorMessage<'abort'>;
+  }
+  return { kind: 'abort', message: 'The operation was aborted.' };
 }
 
 export function createRunRequester<TOptions>(
@@ -124,7 +137,10 @@ export function createRunRequester<TOptions>(
         onEvent({ type: 'llm.done' });
         return;
       }
-      if (outcome.type === 'aborted') return;
+      if (outcome.type === 'aborted') {
+        onEvent({ type: 'llm.failed.remote', error: abortErrorOf(outcome.reason) });
+        return;
+      }
       if (outcome.error.kind === 'syntax') {
         onEvent({ type: 'llm.failed.syntax', error: outcome.error });
         return;

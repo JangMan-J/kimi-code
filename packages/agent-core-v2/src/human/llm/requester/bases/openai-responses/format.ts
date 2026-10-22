@@ -11,7 +11,7 @@ import type { StreamedMessagePart, ToolDescription } from '#/llm/message';
 import type { ResponseFormat } from '#/llm/response-format';
 import type { TokenUsage } from '#/llm/usage';
 
-import { isContextOverflowErrorCode, isOpenAIInsufficientQuotaCode } from '../openai/format';
+import { isContextOverflowErrorCode, isOpenAIInsufficientQuotaCode } from '../openai/decode';
 import type { ResponsesInputItem } from './contract';
 import { lowerMessage } from './lower';
 

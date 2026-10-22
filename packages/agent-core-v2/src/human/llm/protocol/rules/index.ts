@@ -16,6 +16,7 @@ export type PatternSet<TOptions> = (
 export interface LegalizeSpec<TOptions> {
   readonly media: MediaSupport;
   readonly toolCallId?: ToolCallIdPolicy;
+  readonly patterns?: PatternSet<TOptions>;
   readonly thinkingHistory?: PatternSet<TOptions>;
   readonly legality: ModelLegality;
 }
@@ -35,8 +36,12 @@ export function legalize<TOptions>(
   const idsLegal = pass.messages('legalize-tool-call-ids', relocated, (messages) =>
     legalizeToolCallIds(messages, spec.toolCallId),
   );
-  const thinkingLegal = pass.messages('legalize-thinking-history', idsLegal, (messages, ctx) => {
-    const patterns = spec.thinkingHistory?.(idsLegal, ctx) ?? [];
+  const patternsLegal = pass.messages('legalize-patterns', idsLegal, (messages, ctx) => {
+    const patterns = spec.patterns?.(idsLegal, ctx) ?? [];
+    return patterns.length === 0 ? messages : applyPatterns(messages, patterns);
+  });
+  const thinkingLegal = pass.messages('legalize-thinking-history', patternsLegal, (messages, ctx) => {
+    const patterns = spec.thinkingHistory?.(patternsLegal, ctx) ?? [];
     return patterns.length === 0 ? messages : applyPatterns(messages, patterns);
   });
   return pass.model('legalize-model', thinkingLegal, (module, ctx) =>

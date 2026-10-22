@@ -29,7 +29,7 @@ import {
   normalizeToolCallIdsForProvider,
   sanitizeOpenAIResponsesCallId,
 } from '../tool-call-id';
-import { convertOpenAIError } from '../openai/format';
+import { convertOpenAIError } from '../openai/decode';
 import { getOpenAIResponsesModelCapability } from './capability';
 import type { OpenAIResponsesRawChunk } from './contract';
 import type { OpenAIResponsesTrait } from './trait';
