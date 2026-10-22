@@ -85,7 +85,7 @@ describe('WorkspaceDirsService (registry source)', () => {
           root: cwd,
           source: 'local',
           persistenceScope: `sessions/${workspaceId}`,
-        } as IWorkspaceContext,
+        } as unknown as IWorkspaceContext,
         new FileProjectLocalConfigService(bootstrap, hostFs),
         workspaces,
         persistence,
