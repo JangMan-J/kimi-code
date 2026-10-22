@@ -1,4 +1,3 @@
-import type { LlmModel } from '#/llm/model';
 import { runLlmRequest } from '#/llm/policy/policy';
 import { resolveModelConnection, type ProviderConnection } from '#/llm/protocol/connection';
 import type { Protocol } from '#/llm/protocol/protocol';

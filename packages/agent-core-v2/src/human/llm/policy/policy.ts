@@ -1,5 +1,4 @@
 import { isAbortError, toLlmErrorMessage, type LlmErrorMessage, type LlmRemoteErrorMessage } from '#/llm/errors';
-import type { Message } from '#/llm/message';
 import {
   readRetryAfterMs,
   resolveMaxAttempts,

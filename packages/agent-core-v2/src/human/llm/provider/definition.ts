@@ -5,7 +5,7 @@ import type { ProtocolBase, ProtocolName } from '#/llm/protocol/base';
 import type { ProviderConnection } from '#/llm/protocol/connection';
 import type { LlmErrorClassifier, LlmRequester } from '#/llm/requester/requester';
 
-export interface ProtocolBinding<N extends ProtocolName = ProtocolName> {
+export interface ProtocolBinding {
   readonly base: ProtocolBase;
   readonly connection?: ProviderConnection;
   readonly classifyError?: LlmErrorClassifier;
@@ -24,7 +24,7 @@ export type ProviderModelSource = () => Promise<readonly LlmModelSeed[]>;
 
 export interface ProviderDefinition {
   readonly id: string;
-  readonly protocols: Readonly<{ [N in ProtocolName]?: ProtocolBinding<N> }>;
+  readonly protocols: Readonly<{ [N in ProtocolName]?: ProtocolBinding }>;
   readonly media?: ProviderMediaContribution;
   readonly models?: ProviderModelSource;
 }
