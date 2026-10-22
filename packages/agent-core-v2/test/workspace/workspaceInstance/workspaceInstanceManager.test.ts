@@ -146,7 +146,7 @@ function manager(
     { scope: () => 'sessions' },
     workspaces,
     { ready },
-    ...Array.from({ length: 25 }, () => undefined),
+    ...Array.from({ length: 26 }, () => undefined),
     new TestRuntimeUnitHostFactory(),
   ];
   args[18] = { entries: () => [] };
