@@ -54,9 +54,8 @@ export interface ReadOptions {
 }
 
 export interface ImportMessage {
-  role: 'user';
+  role: 'user' | 'assistant';
   content: Array<{ type: 'text'; text: string }>;
-  origin: { kind: 'injection'; variant: 'imported_session' };
 }
 
 export interface ConversionIssue {
@@ -81,9 +80,6 @@ export interface ConversionStats {
   sourceTurns: number;
   includedTurns: number;
   omittedTurns: number;
-  sourceBlocks: number;
-  includedBlocks: number;
-  omittedBlocks: number;
   truncatedCharacters: number;
 }
 

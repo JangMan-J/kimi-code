@@ -127,7 +127,7 @@ interface ReaderStats extends Record<string, unknown> {
 }
 
 const CHAIN_TYPES = new Set(['user', 'assistant', 'system', 'attachment', 'progress']);
-const METADATA_TYPES = new Set(['summary', 'mode', 'permission-mode', 'atis-latch', 'file-history-snapshot', 'last-prompt', 'ai-title', 'queue-operation', 'cost-state', 'file-history-delta', 'pr-link', 'frame-link', 'custom-title', 'continued-in']);
+const METADATA_TYPES = new Set(['summary', 'mode', 'permission-mode', 'atis-latch', 'file-history-snapshot', 'last-prompt', 'ai-title', 'queue-operation', 'cost-state', 'file-history-delta', 'pr-link', 'frame-link', 'custom-title', 'agent-name', 'continued-in']);
 const isChainRecord = (row: SourceRecord) => CHAIN_TYPES.has(row.type ?? '') || (!METADATA_TYPES.has(row.type ?? '') && Boolean(row.parentUuid ?? row.logicalParentUuid));
 const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use', 'server_tool_use', 'tool_result', 'image', 'document']);
 const textOf = (value: unknown): string => typeof value === 'string' ? value : value === null || value === undefined ? '' : JSON.stringify(value);
@@ -562,8 +562,9 @@ export async function readClaudeSession(path: string, options: ReadOptions): Pro
   stats.missingCompactionSummaries = boundary && !summary?.trim() ? 1 : 0;
   if (pending.length > 0) turns.push({ id: 'source-context', user: '', steps: pending });
   const relevant = [...selected.map(({ row }) => row), ...globals.map(({ row }) => row)];
-  const titleRow = [...globals].toReversed().find(({ row }) => row.customTitle ?? row.aiTitle ?? row.agentName ?? row.title);
-  const title = titleRow ? titleRow.row.customTitle ?? titleRow.row.aiTitle ?? titleRow.row.agentName ?? titleRow.row.title : turns.find((turn) => turn.user)?.user.slice(0, 160) ?? sourceId;
+  const latest = (field: 'customTitle' | 'aiTitle' | 'agentName' | 'title') => globals.map(({ row }) => row[field])
+    .findLast((value): value is string => typeof value === 'string' && value.trim() !== '')?.trim();
+  const title = latest('customTitle') ?? latest('aiTitle') ?? latest('agentName') ?? latest('title');
   const calls = new Set(turns.flatMap((turn) => turn.steps.filter((step) => step.kind === 'tool_call').map((step) => step.callId)));
   const results = new Set(turns.flatMap((turn) => turn.steps.filter((step) => step.kind === 'tool_result').map((step) => step.callId)));
   stats.unmatchedToolCalls = [...calls].filter((id) => !results.has(id)).length;

@@ -577,8 +577,13 @@ test('unknown rows, responses, events and projections retain JSON and report par
   ]);
   const actual = await convertSession({ source: 'codex', sourcePath: path, attachmentDirectory: join(dirname(path), 'attachments'), contextWindow: 32768 });
   expect(actual.status).toBe('partial');
+  if (actual.status === 'unreliable') throw new Error(actual.error.message);
   expect(actual.issues).toContainEqual(expect.objectContaining({ code: 'UNRECOGNIZED_SOURCE_CONTENT', count: 4 }));
-  for (const retained of ['unknown row', 'unknown response', 'unknown event', 'unknown projection']) expect(JSON.stringify(actual)).toContain(retained);
+  const archive = await readFile(actual.historyPath, 'utf8');
+  for (const retained of ['unknown row', 'unknown response', 'unknown event', 'unknown projection']) {
+    expect(archive).toContain(retained);
+    expect(JSON.stringify(actual.messages)).not.toContain(retained);
+  }
 });
 
 test('supported contextual, inter-agent and lifecycle records are not counted as unknown', async (t) => {

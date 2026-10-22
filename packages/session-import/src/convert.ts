@@ -4,7 +4,22 @@ import { readClaudeSession } from '#/claude-code';
 import { readRolloutSession } from '#/rollout';
 import { saveEffectiveHistory } from '#/archive';
 import { DEFAULT_IMPORT_RATIO, renderHistory } from '#/render';
-import type { ConversionIssue, ConversionOptions, ConversionResult, EffectiveHistory } from '#/types';
+import type { ConversionIssue, ConversionOptions, ConversionResult, EffectiveHistory, HistoryTurn } from '#/types';
+
+const CONTROL_WRAPPER = /^\s*<(command-message|command-name|command-args|local-command-caveat|local-command-stderr|local-command-stdout|task-notification|system-reminder|ide_opened_file|ide_selection)>[\s\S]*?<\/\1>/;
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+function fallbackTitle(turns: readonly HistoryTurn[]): string | undefined {
+  for (const turn of turns) {
+    let text = turn.user;
+    for (let wrapper = CONTROL_WRAPPER.exec(text); wrapper; wrapper = CONTROL_WRAPPER.exec(text)) text = text.slice(wrapper[0].length);
+    const line = text.split('\n').map(part => part.trim()).find(Boolean);
+    if (!line) continue;
+    const graphemes = Array.from(GRAPHEMES.segment(line), ({ segment }) => segment);
+    return graphemes.length > 120 ? `${graphemes.slice(0, 117).join('')}...` : line;
+  }
+  return undefined;
+}
 
 export function sourceIssues(history: EffectiveHistory): ConversionIssue[] {
   const fields: Array<[string, string, string]> = [
@@ -15,8 +30,6 @@ export function sourceIssues(history: EffectiveHistory): ConversionIssue[] {
     ['chainCycles', 'INCOMPLETE_SOURCE_CHAIN', 'The source history contains a cycle.'],
     ['missingCompactionSummaries', 'UNAVAILABLE_COMPACTION_SUMMARY', 'A source compaction summary is missing.'],
     ['opaqueCompactionSteps', 'UNAVAILABLE_COMPACTION_SUMMARY', 'A source compaction checkpoint has no available plaintext.'],
-    ['opaqueReasoningSteps', 'UNAVAILABLE_REASONING', 'Some source reasoning has no available plaintext.'],
-    ['textlessThinkingBlocks', 'UNAVAILABLE_REASONING', 'Some source thinking has no recorded text.'],
     ['documentBlocks', 'OMITTED_NON_IMAGE_MEDIA', 'Source document payloads were omitted.'],
     ['binaryPayloadsOmitted', 'OMITTED_NON_IMAGE_MEDIA', 'Non-image binary payloads were omitted.'],
     ['metadataBinaryPayloads', 'OMITTED_NON_IMAGE_MEDIA', 'Non-image binary payloads in source metadata were omitted.'],
@@ -52,18 +65,20 @@ export async function convertSession(options: ConversionOptions): Promise<Conver
     }
     const readOptions = { imageDirectory: join(options.attachmentDirectory, 'images'), stateDatabasePath: options.stateDatabasePath };
     stage = 'source';
-    const history = options.source === 'claude-code'
+    const parsed = options.source === 'claude-code'
       ? await readClaudeSession(options.sourcePath, readOptions)
       : await readRolloutSession(options.sourcePath, readOptions);
+    const history = { ...parsed, title: parsed.title ?? fallbackTitle(parsed.turns) };
+    if (!history.summary?.trim() && !history.turns.some(turn => turn.user.trim())) throw Object.assign(new Error('The source session contains no conversation to import.'), { code: 'EMPTY_SOURCE_HISTORY' });
     const issues = sourceIssues(history);
     stage = 'attachment';
     const historyPath = await saveEffectiveHistory(history, options.attachmentDirectory, issues);
     stage = 'context';
-    const { messages, stats } = renderHistory(history, historyPath, tokenBudget, issues);
-    if (stats.omittedBlocks || stats.truncatedCharacters) issues.push({
+    const { messages, stats, truncated } = renderHistory(history, historyPath, tokenBudget, issues);
+    if (truncated) issues.push({
       code: 'CONTEXT_TRUNCATED', stage: 'context',
       message: 'The model context contains only the most recent history that fits the budget. The full effective history is saved in the attachment.',
-      count: stats.omittedBlocks,
+      count: stats.omittedTurns || undefined,
     });
     return { status: issues.length > 0 ? 'partial' : 'complete', source: history.source, sourceId: history.sourceId,
       title: history.title, cwd: history.cwd, messages, historyPath,

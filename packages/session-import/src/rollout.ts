@@ -172,7 +172,8 @@ const asText = (value: unknown): string => typeof value === 'string' ? value : (
 const contentText = (value: unknown) => Array.isArray(value) ? value.filter((part) => typeof part?.text === 'string').map((part) => part.text).join('\n') : asText(value);
 const inputKinds = (item: SourceItem) => item.internal_chat_message_metadata_passthrough?.content_item_kinds;
 const itemTurn = (item: SourceItem, fallback?: string) => item.internal_chat_message_metadata_passthrough?.turn_id ?? item.turn_id ?? fallback;
-const fail = (code: string) => Object.assign(new Error(code), { code });
+const fail = (code: string, message = code) => Object.assign(new Error(message), { code });
+const HISTORY_BASE_MESSAGE = 'This Codex session was forked or restarted from an earlier message, so part of its history is stored in another rollout file. Importing it is not supported yet.';
 const sameStamp = (left: BigIntStats, right: BigIntStats) => left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
 const RETAINED_EVENTS = new Set([
   'task_started', 'turn_started', 'turn_aborted', 'task_aborted', 'agent_reasoning_raw_content', 'context_compacted',
@@ -324,7 +325,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
       else stats.additionalSessionMetadataRecords++;
       return;
     }
-    if (canonicalMeta?.['history_base']) throw fail('UNSUPPORTED_HISTORY_BASE');
+    if (canonicalMeta?.['history_base']) throw fail('UNSUPPORTED_HISTORY_BASE', HISTORY_BASE_MESSAGE);
     if (typeof canonicalMeta?.subagent_history_start_ordinal === 'number' && line - 1 < canonicalMeta.subagent_history_start_ordinal) {
       stats.inheritedChildRecords++;
       return;
@@ -425,7 +426,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
   });
   if (!sameStamp(before, await stat(path, { bigint: true }))) throw fail('SOURCE_CHANGED');
   if (!canonicalMeta) throw fail('MISSING_SESSION_METADATA');
-  if (canonicalMeta['history_base']) throw fail('UNSUPPORTED_HISTORY_BASE');
+  if (canonicalMeta['history_base']) throw fail('UNSUPPORTED_HISTORY_BASE', HISTORY_BASE_MESSAGE);
 
   const wanted = new Map<number, Descriptor[]>();
   for (const descriptor of selected) {

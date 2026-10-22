@@ -200,6 +200,25 @@ test('source metadata and title survive, Read results are retained without a hid
   expect(session.metadata['sourceRecords']).toMatchObject([{}, { record: { totalCostUSD: 1.5 } }]);
 });
 
+test('a session name record titles the session without being reported as unknown', async () => {
+  const session = await read([
+    { type: 'agent-name', agentName: 'Named session', sessionId: 'example-session' },
+    user('u', null, 'task'), assistant('a', 'u', [txt('answer')]),
+  ]);
+  expect(session.title).toBe('Named session');
+  expect(session.stats['unknownRecords']).toBe(0);
+});
+
+test('a user title wins over a later generated title', async () => {
+  const session = await read([
+    { type: 'ai-title', aiTitle: 'Early generated title', sessionId: 'example-session' },
+    { type: 'custom-title', customTitle: 'Renamed by user', sessionId: 'example-session' },
+    user('u', null, 'task'), assistant('a', 'u', [txt('answer')]),
+    { type: 'ai-title', aiTitle: 'Later generated title', sessionId: 'example-session' },
+  ]);
+  expect(session.title).toBe('Renamed by user');
+});
+
 test('slash commands and meta user messages remain events within the current turn', async () => {
   const session = await read([
     user('u', null, 'task'), user('cmd', 'u', '<command-name>/example</command-name>'),
