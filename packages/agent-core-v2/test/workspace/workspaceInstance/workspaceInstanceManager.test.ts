@@ -139,7 +139,7 @@ function manager(
     touch: vi.fn(async (id: string) => byId.get(id)),
     update: async () => undefined,
     setPrimary: async () => undefined,
-    importProjectConfig: async () => undefined,
+    readProjectConfigDirs: async () => [],
     delete: async () => {},
   };
   const args: unknown[] = [

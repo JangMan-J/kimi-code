@@ -21,8 +21,9 @@ import {
   createWorkspaceRequestSchema,
   createWorkspaceResponseSchema,
   deleteWorkspaceResponseSchema,
-  importProjectConfigResponseSchema,
   listWorkspacesResponseSchema,
+  projectConfigDirsQuerySchema,
+  projectConfigDirsResponseSchema,
   setPrimaryRequestSchema,
   setPrimaryResponseSchema,
   updateWorkspaceRequestSchema,
@@ -387,34 +388,24 @@ export function registerWorkspacesRoutes(app: WorkspaceRouteHost, core: Scope): 
     setPrimaryRoute.handler as Parameters<WorkspaceRouteHost['post']>[2],
   );
 
-  const importProjectConfigRoute = defineRoute(
+  const projectConfigDirsRoute = defineRoute(
     {
-      method: 'POST',
-      path: '/workspaces/{workspace_id}/import-project-config',
-      params: workspaceIdParamSchema,
-      success: { data: importProjectConfigResponseSchema },
-      errors: {
-        [ErrorCode.WORKSPACE_NOT_FOUND]: {},
-      },
-      description: 'Merge the primary directory local.toml additional_dir into the registry once',
+      method: 'GET',
+      path: '/workspaces/project-config-dirs',
+      querystring: projectConfigDirsQuerySchema,
+      success: { data: projectConfigDirsResponseSchema },
+      description: 'Read a project local.toml additional_dir set without mutating anything',
       tags: ['workspaces'],
     },
     async (req, reply) => {
-      const { workspace_id } = req.params;
-      const ws = await core.accessor.get(IWorkspaceService).importProjectConfig(workspace_id);
-      if (ws === undefined) {
-        reply.send(
-          errEnvelope(ErrorCode.WORKSPACE_NOT_FOUND, `workspace ${workspace_id} does not exist`, req.id),
-        );
-        return;
-      }
-      reply.send(okEnvelope(await toWireWorkspace(core, ws), req.id));
+      const dirs = await core.accessor.get(IWorkspaceService).readProjectConfigDirs(req.query.root);
+      reply.send(okEnvelope({ additional_dirs: dirs }, req.id));
     },
   );
-  app.post(
-    importProjectConfigRoute.path,
-    importProjectConfigRoute.options,
-    importProjectConfigRoute.handler as Parameters<WorkspaceRouteHost['post']>[2],
+  app.get(
+    projectConfigDirsRoute.path,
+    projectConfigDirsRoute.options,
+    projectConfigDirsRoute.handler as Parameters<WorkspaceRouteHost['get']>[2],
   );
 }
 

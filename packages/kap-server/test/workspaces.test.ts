@@ -371,7 +371,7 @@ describe('server-v2 /api/v1/workspaces', () => {
     expect(unknown.body.code).toBe(40410);
   });
 
-  it('create imports the primary local.toml additional_dir once and clears it', async () => {
+  it('create ignores the primary local.toml additional_dir and leaves the file untouched', async () => {
     const root = home as string;
     const extra = join(root, 'toml-extra');
     await mkdir(extra, { recursive: true });
@@ -384,15 +384,13 @@ describe('server-v2 /api/v1/workspaces', () => {
 
     const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
     expect(created.body.code).toBe(0);
-    expect(created.body.data.additional_dirs).toEqual([extra]);
+    expect(created.body.data.additional_dirs).toEqual([]);
     const text = await readFile(join(root, '.kimi-code', 'local.toml'), 'utf8');
-    expect(text).not.toContain('toml-extra');
+    expect(text).toContain('toml-extra');
   });
 
-  it('import-project-config merges local.toml dirs on demand (40410)', async () => {
+  it('project-config-dirs reads local.toml dirs without mutating anything', async () => {
     const root = home as string;
-    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-    const id = created.body.data.id;
     const extra = join(root, 'toml-import');
     await mkdir(extra, { recursive: true });
     await mkdir(join(root, '.kimi-code'), { recursive: true });
@@ -402,16 +400,21 @@ describe('server-v2 /api/v1/workspaces', () => {
       'utf8',
     );
 
-    const imported = await postJson<WorkspaceWire>(`/api/v1/workspaces/${id}/import-project-config`);
-    expect(imported.body.code).toBe(0);
-    expect(imported.body.data.additional_dirs).toEqual([extra]);
-    const again = await postJson<WorkspaceWire>(`/api/v1/workspaces/${id}/import-project-config`);
-    expect(again.body.data.additional_dirs).toEqual([extra]);
-
-    const unknown = await postJson<null>(
-      '/api/v1/workspaces/wm_00000000-0000-0000-0000-000000000000/import-project-config',
+    const read = await getJson<{ additional_dirs: string[] }>(
+      `/api/v1/workspaces/project-config-dirs?root=${encodeURIComponent(root)}`,
     );
-    expect(unknown.body.code).toBe(40410);
+    expect(read.body.code).toBe(0);
+    expect(read.body.data.additional_dirs).toEqual([extra]);
+
+    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
+    expect(created.body.data.additional_dirs).toEqual([]);
+    const text = await readFile(join(root, '.kimi-code', 'local.toml'), 'utf8');
+    expect(text).toContain('toml-import');
+
+    const missing = await getJson<{ additional_dirs: string[] }>(
+      '/api/v1/workspaces/project-config-dirs?root=',
+    );
+    expect(missing.body.code).not.toBe(0);
   });
 
   it('sums session_count across legacy split buckets of one root', async () => {

@@ -1642,7 +1642,7 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 | `POST /api/v1/workspaces` | 注册工作区（每次调用创建新条目；重试经 `idempotency_key` 去重） |
 | `PATCH /api/v1/workspaces/{workspace_id}` | 重命名或整体替换源文件夹 |
 | `POST /api/v1/workspaces/{workspace_id}/primary` | 将某个源文件夹提升为主目录 |
-| `POST /api/v1/workspaces/{workspace_id}/import-project-config` | 一次性导入主目录 local.toml 的附加目录 |
+| `GET /api/v1/workspaces/project-config-dirs` | 只读获取项目 local.toml 的附加目录 |
 | `DELETE /api/v1/workspaces/{workspace_id}` | 注销（保留磁盘内容） |
 | `GET /api/v1/workspaces/{workspace_id}/trust` | 读取信任状态 |
 | `POST /api/v1/workspaces/{workspace_id}/trust` | 授予信任 |
@@ -1715,17 +1715,17 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 - `40409`：`path` 不存在或不是目录
 - `40410`：工作区不存在
 
-#### `POST /api/v1/workspaces/{workspace_id}/import-project-config`
+#### `GET /api/v1/workspaces/project-config-dirs`
 
-把主目录 `local.toml` 的 `workspace.additional_dir` 一次性并入注册表（`additional_dirs`）：与既有项并集去重，导入后从 `local.toml` 清空该字段（保留其他键）。重复调用是空操作；创建或换主不会触发导入。`local.toml` 缺失或损坏时按无可导入处理。
+只读返回指定项目 `local.toml` 的 `workspace.additional_dir`：解析为绝对路径、去重、剔除 `root` 自身。不修改注册表，也不修改 `local.toml`；`local.toml` 缺失或损坏时返回空数组。客户端可凭此把项目旧配置并入新建或编辑工作区的表单，随保存生效。
 
 | 参数 | 位置 | 类型 | 说明 |
 | --- | --- | --- | --- |
-| `workspace_id` | path | string | **必填。** 工作区 id |
+| `root` | query | string | **必填。** 项目主目录的绝对路径 |
 
-成功时 `data` 为 [workspace 对象](#workspace-对象)。
+成功时 `data` 为 `{ additional_dirs: string[] }`。
 
-- `40410`：工作区不存在
+- `40001`：`root` 缺失或为空
 
 #### `DELETE /api/v1/workspaces/{workspace_id}`
 

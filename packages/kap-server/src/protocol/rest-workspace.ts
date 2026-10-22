@@ -47,5 +47,12 @@ export type SetPrimaryRequest = z.infer<typeof setPrimaryRequestSchema>;
 export const setPrimaryResponseSchema = workspaceSchema;
 export type SetPrimaryResponse = z.infer<typeof setPrimaryResponseSchema>;
 
-export const importProjectConfigResponseSchema = workspaceSchema;
-export type ImportProjectConfigResponse = z.infer<typeof importProjectConfigResponseSchema>;
+export const projectConfigDirsQuerySchema = z.object({
+  root: z.string().min(1),
+});
+export type ProjectConfigDirsQuery = z.infer<typeof projectConfigDirsQuerySchema>;
+
+export const projectConfigDirsResponseSchema = z.object({
+  additional_dirs: z.array(z.string()),
+});
+export type ProjectConfigDirsResponse = z.infer<typeof projectConfigDirsResponseSchema>;

@@ -1642,7 +1642,7 @@ Workspaces are the registered project directories sessions live in. These endpoi
 | `POST /api/v1/workspaces` | Register a workspace (fresh entry per call; retries deduped via `idempotency_key`) |
 | `PATCH /api/v1/workspaces/{workspace_id}` | Rename or replace source folders |
 | `POST /api/v1/workspaces/{workspace_id}/primary` | Promote a source folder to the primary directory |
-| `POST /api/v1/workspaces/{workspace_id}/import-project-config` | Import the primary's local.toml additional dirs once |
+| `GET /api/v1/workspaces/project-config-dirs` | Read a project's local.toml additional dirs without mutating anything |
 | `DELETE /api/v1/workspaces/{workspace_id}` | Unregister (keeps on-disk content) |
 | `GET /api/v1/workspaces/{workspace_id}/trust` | Read the trust state |
 | `POST /api/v1/workspaces/{workspace_id}/trust` | Grant trust |
@@ -1715,17 +1715,17 @@ On success, `data` is [the workspace object](#the-workspace-object).
 - `40409`: `path` does not exist or is not a directory
 - `40410`: workspace not found
 
-#### `POST /api/v1/workspaces/{workspace_id}/import-project-config`
+#### `GET /api/v1/workspaces/project-config-dirs`
 
-Imports the primary directory's `workspace.additional_dir` from `local.toml` into the registry's `additional_dirs`, once: entries are unioned without duplicates, and the field is then cleared from `local.toml` (other keys are kept). Repeat calls are no-ops; creation and primary changes never trigger an import. A missing or corrupted `local.toml` is treated as nothing to import.
+Reads `workspace.additional_dir` from a project's `local.toml`, read-only: entries are resolved to absolute paths, deduplicated, and the `root` itself is dropped. Neither the registry nor `local.toml` is modified; a missing or corrupted `local.toml` yields an empty array. Clients can use this to merge legacy project config into a create/edit workspace form, taking effect on save.
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
-| `workspace_id` | path | string | **Required.** Workspace id |
+| `root` | query | string | **Required.** Absolute path of the project primary directory |
 
-On success, `data` is [the workspace object](#the-workspace-object).
+On success, `data` is `{ additional_dirs: string[] }`.
 
-- `40410`: workspace not found
+- `40001`: `root` is missing or empty
 
 #### `DELETE /api/v1/workspaces/{workspace_id}`
 
