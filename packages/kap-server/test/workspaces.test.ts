@@ -22,6 +22,7 @@ interface WorkspaceWire {
   id: string;
   root: string;
   name: string;
+  additional_dirs: string[];
   created_at: string;
   last_opened_at: string;
   session_count: number;
@@ -119,7 +120,8 @@ describe('server-v2 /api/v1/workspaces', () => {
     expect(body.code).toBe(0);
     expect(body.data.root).toBe(root);
     expect(body.data.name).toBe('proj');
-    expect(body.data.id).toMatch(/^wd_[a-z0-9._-]+_[0-9a-f]{12}$/);
+    expect(body.data.id).toMatch(/^wm_[0-9a-f-]{36}$/);
+    expect(body.data.additional_dirs).toEqual([]);
     expect(typeof body.data.session_count).toBe('number');
     expect(Number.isNaN(Date.parse(body.data.created_at))).toBe(false);
     expect(Number.isNaN(Date.parse(body.data.last_opened_at))).toBe(false);
@@ -132,11 +134,21 @@ describe('server-v2 /api/v1/workspaces', () => {
     expect(body.data.name.length).toBeGreaterThan(0);
   });
 
-  it('is idempotent on root (createOrTouch)', async () => {
+  it('mints a fresh wm_ id per call and dedupes retries by idempotency_key', async () => {
     const root = home as string;
     const first = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
     const second = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-    expect(first.body.data.id).toBe(second.body.data.id);
+    expect(first.body.data.id).not.toBe(second.body.data.id);
+
+    const keyed = await postJson<WorkspaceWire>('/api/v1/workspaces', {
+      root,
+      idempotency_key: 'retry-key-1',
+    });
+    const retried = await postJson<WorkspaceWire>('/api/v1/workspaces', {
+      root,
+      idempotency_key: 'retry-key-1',
+    });
+    expect(retried.body.data.id).toBe(keyed.body.data.id);
   });
 
   it('rejects a relative root (40001)', async () => {
@@ -190,17 +202,127 @@ describe('server-v2 /api/v1/workspaces', () => {
     expect(again.body.code).toBe(40410);
   });
 
-  it('reflects session_count for sessions created in the workspace', async () => {
+  it('attributes sessions by channel: explicit workspace_id to its bucket, cwd to the hash bucket', async () => {
     const root = home as string;
     const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
+    const wmId = created.body.data.id;
     expect(created.body.data.session_count).toBe(0);
 
-    const session = await postJson<{ id: string }>('/api/v1/sessions', { metadata: { cwd: root } });
-    expect(session.body.code).toBe(0);
+    const explicit = await postJson<{ id: string; workspace_id: string }>('/api/v1/sessions', {
+      workspace_id: wmId,
+    });
+    expect(explicit.body.code).toBe(0);
+    expect(explicit.body.data.workspace_id).toBe(wmId);
+
+    const viaCwd = await postJson<{ id: string; workspace_id: string }>('/api/v1/sessions', {
+      metadata: { cwd: root },
+    });
+    expect(viaCwd.body.code).toBe(0);
+    expect(viaCwd.body.data.workspace_id).toMatch(/^wd_[a-z0-9._-]+_[0-9a-f]{12}$/);
+    const wdId = viaCwd.body.data.workspace_id;
+    expect(wdId).not.toBe(wmId);
+
+    const { body } = await getJson<ListWire>('/api/v1/workspaces');
+    const wm = body.data.items.find((w) => w.id === wmId);
+    const wd = body.data.items.find((w) => w.id === wdId);
+    expect(wm?.session_count).toBe(1);
+    expect(wd?.session_count).toBe(1);
+
+    const wmSessions = await getJson<{ items: { id: string }[] }>(
+      `/api/v1/sessions?workspace_id=${encodeURIComponent(wmId)}`,
+    );
+    expect(wmSessions.body.data.items.map((s) => s.id)).toEqual([explicit.body.data.id]);
+    const wdSessions = await getJson<{ items: { id: string }[] }>(
+      `/api/v1/sessions?workspace_id=${encodeURIComponent(wdId)}`,
+    );
+    expect(wdSessions.body.data.items.map((s) => s.id)).toEqual([viaCwd.body.data.id]);
+  });
+
+  it('creates a workspace with additional_dirs and reflects them in GET', async () => {
+    const root = home as string;
+    const extraA = join(root, 'extra-a');
+    const extraB = join(root, 'nested', 'extra-b');
+    await mkdir(extraA, { recursive: true });
+    await mkdir(extraB, { recursive: true });
+
+    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', {
+      root,
+      additional_dirs: [extraA, 'nested/extra-b'],
+    });
+    expect(created.body.code).toBe(0);
+    expect(created.body.data.additional_dirs).toEqual([extraA, extraB]);
 
     const { body } = await getJson<ListWire>('/api/v1/workspaces');
     const ws = body.data.items.find((w) => w.id === created.body.data.id);
-    expect(ws?.session_count).toBe(1);
+    expect(ws?.additional_dirs).toEqual([extraA, extraB]);
+  });
+
+  it('rejects invalid additional_dirs on create (40409 / 40001)', async () => {
+    const root = home as string;
+    const missing = await postJson<null>('/api/v1/workspaces', {
+      root,
+      additional_dirs: [join(root, 'does-not-exist')],
+    });
+    expect(missing.body.code).toBe(40409);
+
+    const dupRoot = await postJson<null>('/api/v1/workspaces', {
+      root,
+      additional_dirs: [root],
+    });
+    expect(dupRoot.body.code).toBe(40001);
+    expect(dupRoot.body.details?.[0]?.path).toBe('additional_dirs.0');
+
+    const extra = join(root, 'extra-dup');
+    await mkdir(extra, { recursive: true });
+    const dup = await postJson<null>('/api/v1/workspaces', {
+      root,
+      additional_dirs: [extra, `${extra}/`],
+    });
+    expect(dup.body.code).toBe(40001);
+    expect(dup.body.details?.[0]?.path).toBe('additional_dirs.1');
+  });
+
+  it('replaces additional_dirs wholesale via PATCH and validates input', async () => {
+    const root = home as string;
+    const extraA = join(root, 'patch-a');
+    const extraB = join(root, 'patch-b');
+    await mkdir(extraA, { recursive: true });
+    await mkdir(extraB, { recursive: true });
+    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', {
+      root,
+      additional_dirs: [extraA],
+    });
+    const id = created.body.data.id;
+
+    const replaced = await patchJson<WorkspaceWire>(`/api/v1/workspaces/${id}`, {
+      additional_dirs: [extraB],
+      name: 'renamed',
+    });
+    expect(replaced.body.code).toBe(0);
+    expect(replaced.body.data.additional_dirs).toEqual([extraB]);
+    expect(replaced.body.data.name).toBe('renamed');
+
+    const nameOnly = await patchJson<WorkspaceWire>(`/api/v1/workspaces/${id}`, { name: 'again' });
+    expect(nameOnly.body.data.additional_dirs).toEqual([extraB]);
+
+    const cleared = await patchJson<WorkspaceWire>(`/api/v1/workspaces/${id}`, {
+      additional_dirs: [],
+    });
+    expect(cleared.body.data.additional_dirs).toEqual([]);
+
+    const empty = await patchJson<null>(`/api/v1/workspaces/${id}`, {});
+    expect(empty.body.code).toBe(40001);
+
+    const missing = await patchJson<null>(`/api/v1/workspaces/${id}`, {
+      additional_dirs: [join(root, 'does-not-exist')],
+    });
+    expect(missing.body.code).toBe(40409);
+
+    const unknown = await patchJson<null>(
+      '/api/v1/workspaces/wm_00000000-0000-0000-0000-000000000000',
+      { name: 'nope' },
+    );
+    expect(unknown.body.code).toBe(40410);
   });
 
   it('sums session_count across legacy split buckets of one root', async () => {

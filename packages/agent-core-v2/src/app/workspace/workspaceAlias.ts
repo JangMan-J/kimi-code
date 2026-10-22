@@ -186,7 +186,7 @@ export function dedupeByRoot(byId: ReadonlyMap<string, Workspace>): Workspace[] 
 
 export function isImplicitBucketSessionLine(line: SessionIndexLine): boolean {
   const segments = line.sessionDir.replaceAll('\\', '/').replace(/\/+$/, '').split('/');
-  const bucket = segments.length >= 2 ? segments.at(-2) : '';
+  const bucket = segments.at(-2) ?? '';
   return !bucket.startsWith('wm_');
 }
 
