@@ -1642,11 +1642,11 @@ Workspaces are the registered project directories sessions live in. These endpoi
 | `POST /api/v1/workspaces` | Register a workspace (fresh entry per call; retries deduped via `idempotency_key`) |
 | `PATCH /api/v1/workspaces/{workspace_id}` | Rename or replace source folders |
 | `POST /api/v1/workspaces/{workspace_id}/primary` | Promote a source folder to the primary directory |
+| `POST /api/v1/workspaces/{workspace_id}/import-project-config` | Import the primary's local.toml additional dirs once |
 | `DELETE /api/v1/workspaces/{workspace_id}` | Unregister (keeps on-disk content) |
 | `GET /api/v1/workspaces/{workspace_id}/trust` | Read the trust state |
 | `POST /api/v1/workspaces/{workspace_id}/trust` | Grant trust |
 | `POST /api/v1/workspaces/{workspace_id}/untrust` | Revoke trust |
-| `POST /api/v1/workspaces/{workspace_id}/add-dir` | Add an additional directory |
 
 #### The workspace object
 
@@ -1715,6 +1715,18 @@ On success, `data` is [the workspace object](#the-workspace-object).
 - `40409`: `path` does not exist or is not a directory
 - `40410`: workspace not found
 
+#### `POST /api/v1/workspaces/{workspace_id}/import-project-config`
+
+Imports the primary directory's `workspace.additional_dir` from `local.toml` into the registry's `additional_dirs`, once: entries are unioned without duplicates, and the field is then cleared from `local.toml` (other keys are kept). Repeat calls are no-ops; creation and primary changes never trigger an import. A missing or corrupted `local.toml` is treated as nothing to import.
+
+| Parameter | In | Type | Description |
+| --- | --- | --- | --- |
+| `workspace_id` | path | string | **Required.** Workspace id |
+
+On success, `data` is [the workspace object](#the-workspace-object).
+
+- `40410`: workspace not found
+
 #### `DELETE /api/v1/workspaces/{workspace_id}`
 
 Unregisters a workspace. Only the registry entry is removed — the on-disk directory is untouched.
@@ -1761,22 +1773,6 @@ Revokes workspace trust, unloading its project-level MCP config.
 
 On success, `data` is `{ trusted: false }`.
 
-- `40410`: workspace not found
-
-#### `POST /api/v1/workspaces/{workspace_id}/add-dir`
-
-Adds an additional directory to the workspace, with the same semantics as the CLI `--add-dir` flag and the TUI `/add-dir` command. The path accepts absolute paths, relative paths (resolved against the workspace root), and `~` expansion.
-
-| Parameter | In | Type | Description |
-| --- | --- | --- | --- |
-| `workspace_id` | path | string | **Required.** Workspace id |
-| `path` | body | string | **Required.** Directory to add |
-| `persist` | body | boolean | Defaults to `true`: appends to `workspace.additional_dir` in `<project root>/.kimi-code/local.toml`. With `false`, the directory only joins the in-memory ephemeral set shared by all sessions of the workspace |
-
-On success, `data` is `{ project_root, config_path, additional_dirs, persisted }`, where `additional_dirs` lists every additional directory (existing ones included) and `persisted` reports whether this call wrote to disk.
-
-- `40001`: validation failure (`details` lists each field), or an engine-side config validation error such as a corrupted project local config
-- `40409`: `path` does not exist or is not a directory
 - `40410`: workspace not found
 
 ### File system

@@ -940,6 +940,7 @@ function registerSessionExportServices(
     touch: async () => undefined,
     update: async () => undefined,
     setPrimary: async () => undefined,
+    importProjectConfig: async () => undefined,
     delete: async () => {},
   });
   reg.define(ISessionExportService, SessionExportService);

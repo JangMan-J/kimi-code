@@ -538,7 +538,7 @@ exports[`API surface snapshot > matches the documented v2 route table and meta e
     ],
     [
       "POST",
-      "/api/v1/workspaces/{workspace_id}/add-dir",
+      "/api/v1/workspaces/{workspace_id}/import-project-config",
     ],
     [
       "POST",

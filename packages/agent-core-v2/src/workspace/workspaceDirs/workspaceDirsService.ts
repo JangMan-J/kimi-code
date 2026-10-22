@@ -131,22 +131,26 @@ export class WorkspaceDirsService extends Disposable implements IWorkspaceDirs {
     const persist = input.persist ?? true;
 
     if (persist) {
-      const persisted = await this.localConfig.appendAdditionalDir(
-        this.workspace.cwd,
+      const resolved = await this.localConfig.resolveAdditionalDirs(this.workspace.cwd, [
         input.path,
-      );
-      this.projectRoot = persisted.projectRoot;
-      this.configPath = persisted.configPath;
-      const changed = this.setFileDirs(persisted.additionalDirs);
-      if (changed) {
-        this.onDidChangeEmitter.fire();
+      ]);
+      const dir = resolved[0];
+      if (dir === undefined) {
+        throw new Error(`additional dir ${input.path} did not resolve`);
       }
-      return {
-        projectRoot: persisted.projectRoot,
-        configPath: persisted.configPath,
-        additionalDirs: this.additionalDirs,
-        persisted: true,
-      };
+      const existing = await this.workspaces.get(this.workspace.workspaceId);
+      const target = existing ?? (await this.workspaces.createOrTouch(this.workspace.cwd));
+      const dirKey = workspaceRootKey(dir);
+      const inSet =
+        workspaceRootKey(target.root) === dirKey ||
+        target.additionalDirs.some((kept) => workspaceRootKey(kept) === dirKey);
+      if (!inSet) {
+        await this.workspaces.update(target.id, {
+          additionalDirs: [...target.additionalDirs, dir],
+        });
+        await this.reloadFromRegistry();
+      }
+      return { additionalDirs: this.additionalDirs, persisted: true };
     }
 
     const onDisk = await this.localConfig.readAdditionalDirs(this.workspace.cwd);
@@ -159,12 +163,7 @@ export class WorkspaceDirsService extends Disposable implements IWorkspaceDirs {
     if (changed) {
       this.onDidChangeEmitter.fire();
     }
-    return {
-      projectRoot: onDisk.projectRoot,
-      configPath: onDisk.configPath,
-      additionalDirs: this.additionalDirs,
-      persisted: false,
-    };
+    return { additionalDirs: this.additionalDirs, persisted: false };
   }
 
   private async reloadFromDisk(): Promise<void> {

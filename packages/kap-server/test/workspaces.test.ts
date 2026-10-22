@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { IWorkspaceInstanceManager } from '@moonshot-ai/agent-core-v2';
 import { encodeWorkDirKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
 
 import { type RunningServer, startServer } from '../src/start';
@@ -30,13 +31,6 @@ interface WorkspaceWire {
 
 interface ListWire {
   items: WorkspaceWire[];
-}
-
-interface AddDirWire {
-  project_root: string;
-  config_path: string;
-  additional_dirs: string[];
-  persisted: boolean;
 }
 
 describe('server-v2 /api/v1/workspaces', () => {
@@ -429,81 +423,61 @@ describe('server-v2 /api/v1/workspaces', () => {
     });
   });
 
-  it('adds an additional directory and persists it by default', async () => {
-    const root = home as string;
-    const extra = join(root, 'extra');
-    await mkdir(extra);
-    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-    const id = created.body.data.id;
+  it('reads and writes trust without materializing the workspace runtime', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kimi-server-v2-workspaces-trust-no-runtime-'));
+    try {
+      const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
+      expect(created.body.code).toBe(0);
+      const id = created.body.data.id;
+      const manager = (server as RunningServer).core.accessor.get(IWorkspaceInstanceManager);
+      const getOrCreate = vi.spyOn(manager, 'getOrCreate').mockRejectedValue(
+        new Error('runtime environment unavailable'),
+      );
+      try {
+        const initial = await getJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/trust`);
+        expect(initial.body.code).toBe(0);
+        expect(initial.body.data.trusted).toBe(false);
 
-    const { status, body } = await postJson<AddDirWire>(`/api/v1/workspaces/${id}/add-dir`, {
-      path: extra,
-    });
-    expect(status).toBe(200);
-    expect(body.code).toBe(0);
-    expect(body.data.persisted).toBe(true);
-    expect(body.data.additional_dirs).toContain(extra);
-    expect(body.data.project_root).toBe(root);
-    expect(body.data.config_path).toBe(join(root, '.kimi-code', 'local.toml'));
-    const toml = await readFile(body.data.config_path, 'utf8');
-    expect(toml).toContain('additional_dir');
-    expect(toml).toContain(extra);
+        const trusted = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/trust`);
+        expect(trusted.body.code).toBe(0);
+        expect(trusted.body.data.trusted).toBe(true);
+
+        const revoked = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/untrust`);
+        expect(revoked.body.code).toBe(0);
+        expect(revoked.body.data.trusted).toBe(false);
+        expect(getOrCreate).not.toHaveBeenCalled();
+      } finally {
+        getOrCreate.mockRestore();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
-  it('adds a relative directory without persisting when persist is false', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kimi-server-v2-workspaces-rel-'));
-    const extra = join(root, 'extra-rel');
-    await mkdir(extra);
+  it('shares route trust changes with an already materialized workspace', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'kimi-server-v2-workspaces-trust-shared-'));
     const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
+    expect(created.body.code).toBe(0);
     const id = created.body.data.id;
+    const manager = (server as RunningServer).core.accessor.get(IWorkspaceInstanceManager);
+    try {
+      const workspace = await manager.getOrCreate({ workspaceId: id, root });
+      await workspace.program.trust.ready;
+      const events: boolean[] = [];
+      workspace.program.trust.onDidChange((change) => events.push(change.trusted));
 
-    const { body } = await postJson<AddDirWire>(`/api/v1/workspaces/${id}/add-dir`, {
-      path: 'extra-rel',
-      persist: false,
-    });
-    expect(body.code).toBe(0);
-    expect(body.data.persisted).toBe(false);
-    expect(body.data.additional_dirs).toContain(extra);
-    await expect(readFile(body.data.config_path, 'utf8')).rejects.toThrow();
-    await rm(root, { recursive: true, force: true });
-  });
+      const trusted = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/trust`);
+      expect(trusted.body.code).toBe(0);
+      expect(workspace.program.trust.isTrusted()).toBe(true);
 
-  it('returns 40410 when adding a directory to an unknown workspace', async () => {
-    const { body } = await postJson<null>('/api/v1/workspaces/wd_missing_000000000000/add-dir', {
-      path: '/tmp',
-    });
-    expect(body.code).toBe(40410);
-  });
-
-  it('returns 40409 when the added path does not exist', async () => {
-    const root = home as string;
-    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-    const id = created.body.data.id;
-
-    const { body } = await postJson<null>(`/api/v1/workspaces/${id}/add-dir`, {
-      path: join(root, 'does-not-exist'),
-    });
-    expect(body.code).toBe(40409);
-  });
-
-  it('returns 40409 when the added path is a file', async () => {
-    const root = home as string;
-    const file = join(root, 'a-file.txt');
-    await writeFile(file, 'x', 'utf8');
-    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-    const id = created.body.data.id;
-
-    const { body } = await postJson<null>(`/api/v1/workspaces/${id}/add-dir`, { path: file });
-    expect(body.code).toBe(40409);
-  });
-
-  it('returns 40001 when path is missing', async () => {
-    const root = home as string;
-    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-    const id = created.body.data.id;
-
-    const { body } = await postJson<null>(`/api/v1/workspaces/${id}/add-dir`, {});
-    expect(body.code).toBe(40001);
+      const revoked = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/untrust`);
+      expect(revoked.body.code).toBe(0);
+      expect(workspace.program.trust.isTrusted()).toBe(false);
+      expect(events).toEqual([true, false]);
+    } finally {
+      await manager.close(id);
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('reports the effective trust state after untrust while KIMI_CODE_TRUST_WORKSPACE is set', async () => {

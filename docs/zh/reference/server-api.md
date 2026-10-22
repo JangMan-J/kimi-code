@@ -1642,11 +1642,11 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 | `POST /api/v1/workspaces` | 注册工作区（每次调用创建新条目；重试经 `idempotency_key` 去重） |
 | `PATCH /api/v1/workspaces/{workspace_id}` | 重命名或整体替换源文件夹 |
 | `POST /api/v1/workspaces/{workspace_id}/primary` | 将某个源文件夹提升为主目录 |
+| `POST /api/v1/workspaces/{workspace_id}/import-project-config` | 一次性导入主目录 local.toml 的附加目录 |
 | `DELETE /api/v1/workspaces/{workspace_id}` | 注销（保留磁盘内容） |
 | `GET /api/v1/workspaces/{workspace_id}/trust` | 读取信任状态 |
 | `POST /api/v1/workspaces/{workspace_id}/trust` | 授予信任 |
 | `POST /api/v1/workspaces/{workspace_id}/untrust` | 撤销信任 |
-| `POST /api/v1/workspaces/{workspace_id}/add-dir` | 添加附加目录 |
 
 #### workspace 对象
 
@@ -1715,6 +1715,18 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 - `40409`：`path` 不存在或不是目录
 - `40410`：工作区不存在
 
+#### `POST /api/v1/workspaces/{workspace_id}/import-project-config`
+
+把主目录 `local.toml` 的 `workspace.additional_dir` 一次性并入注册表（`additional_dirs`）：与既有项并集去重，导入后从 `local.toml` 清空该字段（保留其他键）。重复调用是空操作；创建或换主不会触发导入。`local.toml` 缺失或损坏时按无可导入处理。
+
+| 参数 | 位置 | 类型 | 说明 |
+| --- | --- | --- | --- |
+| `workspace_id` | path | string | **必填。** 工作区 id |
+
+成功时 `data` 为 [workspace 对象](#workspace-对象)。
+
+- `40410`：工作区不存在
+
 #### `DELETE /api/v1/workspaces/{workspace_id}`
 
 注销工作区。只移除注册表条目——磁盘上的目录不受影响。
@@ -1763,19 +1775,6 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 
 - `40410`：工作区不存在
 
-#### `POST /api/v1/workspaces/{workspace_id}/add-dir`
-
-为工作区添加附加目录，语义与 CLI `--add-dir` 及 TUI `/add-dir` 一致。路径支持绝对路径、相对路径（相对工作区根目录解析）与 `~` 展开。
-
-| 参数 | 位置 | 类型 | 说明 |
-| --- | --- | --- | --- |
-| `workspace_id` | path | string | **必填。** 工作区 id |
-| `path` | body | string | **必填。** 要添加的目录 |
-| `persist` | body | boolean | 缺省 `true`：追加到 `<项目根>/.kimi-code/local.toml` 的 `workspace.additional_dir`；为 `false` 时仅加入内存中的临时集合（同一工作区所有会话共享），不写盘 |
-
-成功时 `data` 为 `{ project_root, config_path, additional_dirs, persisted }`，其中 `additional_dirs` 是全部附加目录（含既有目录），`persisted` 表示本次是否写盘。
-
-- `40001`：校验失败（`details` 逐字段说明），或项目本地配置损坏等引擎校验错误
 - `40409`：`path` 不存在或不是目录
 - `40410`：工作区不存在
 

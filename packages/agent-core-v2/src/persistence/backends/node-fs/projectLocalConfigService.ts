@@ -56,33 +56,27 @@ export class FileProjectLocalConfigService implements IProjectLocalConfigService
     return this.resolveAdditionalDirsInternal(baseDir, additionalDirs);
   }
 
-  async appendAdditionalDir(
-    workDir: string,
-    inputPath: string,
-  ): Promise<ProjectAdditionalDirsLoadResult> {
+  async removeAdditionalDirs(workDir: string, dirs: readonly string[]): Promise<void> {
+    if (dirs.length === 0) return;
     const projectRoot = await this.findProjectRoot(workDir);
     const configPath = this.getProjectLocalConfigPath(projectRoot);
-    const additionalDir = await this.resolveAdditionalDir(workDir, inputPath);
-    const file = (await this.readProjectLocalToml(configPath)) ?? { raw: {}, parsed: {} };
-    const fileAdditionalDirs = file.parsed.workspace?.additional_dir ?? [];
-    const fileExistingDirs = this.resolveExistingAdditionalDirs(projectRoot, fileAdditionalDirs);
-
-    if (this.hasSameAdditionalDir(fileExistingDirs, additionalDir)) {
-      return { projectRoot, configPath, additionalDirs: fileExistingDirs };
-    }
-
+    const file = await this.readProjectLocalToml(configPath);
+    if (file === undefined) return;
+    const existing = file.parsed.workspace?.additional_dir ?? [];
+    if (existing.length === 0) return;
+    const removeKeys = new Set(dirs.map((dir) => normalize(dir)));
+    const kept = this.resolveExistingAdditionalDirs(projectRoot, existing).filter(
+      (dir) => !removeKeys.has(normalize(dir)),
+    );
     const workspace = cloneRecord(file.raw['workspace']);
-    workspace['additional_dir'] = [...fileExistingDirs, additionalDir];
+    workspace['additional_dir'] = kept;
     file.raw['workspace'] = workspace;
-
     try {
       await this.fs.mkdir(dirname(configPath), { recursive: true });
       await this.fs.writeText(configPath, `${stringifyToml(file.raw)}\n`);
     } catch (error: unknown) {
       throw toStorageIoError(error, { path: configPath, op: 'write' });
     }
-
-    return { projectRoot, configPath, additionalDirs: [...fileExistingDirs, additionalDir] };
   }
 
   private getProjectLocalConfigPath(projectRoot: string): string {

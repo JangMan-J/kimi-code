@@ -652,6 +652,75 @@ describe('WorkspaceService (file-backed)', () => {
     expect(saved.deleted_workspace_ids).toEqual([implicit.id]);
   });
 
+  it('create imports local.toml additional_dir once and clears the file', async () => {
+    const extraA = join(homeDir, 'extra-a');
+    const extraB = join(homeDir, 'extra-b');
+    await fsp.mkdir(extraA, { recursive: true });
+    await fsp.mkdir(extraB, { recursive: true });
+    await fsp.mkdir(join(homeDir, '.kimi-code'), { recursive: true });
+    await fsp.writeFile(
+      join(homeDir, '.kimi-code', 'local.toml'),
+      `[workspace]\nadditional_dir = ["${extraA.replaceAll('\\', '\\\\')}", "${extraB.replaceAll('\\', '\\\\')}"]\nother_key = "keep"\n`,
+      'utf8',
+    );
+
+    const registry = build();
+    const created = await registry.create({ root: homeDir, additionalDirs: [extraA] });
+    expect(created.additionalDirs).toEqual([extraA, extraB]);
+
+    const text = await fsp.readFile(join(homeDir, '.kimi-code', 'local.toml'), 'utf8');
+    expect(text).toContain('other_key');
+    expect(text).not.toContain('extra-a');
+    expect(text).not.toContain('extra-b');
+
+    const second = await registry.create({ root: homeDir });
+    expect(second.additionalDirs).toEqual([]);
+  });
+
+  it('importProjectConfig merges local.toml dirs once and ignores repeats', async () => {
+    const extra = join(homeDir, 'extra');
+    await fsp.mkdir(extra, { recursive: true });
+    const registry = build();
+    const created = await registry.createOrTouch(homeDir);
+    await fsp.mkdir(join(homeDir, '.kimi-code'), { recursive: true });
+    await fsp.writeFile(
+      join(homeDir, '.kimi-code', 'local.toml'),
+      `[workspace]\nadditional_dir = ["${extra.replaceAll('\\', '\\\\')}"]\n`,
+      'utf8',
+    );
+
+    const imported = await registry.importProjectConfig(created.id);
+    expect(imported?.additionalDirs).toEqual([extra]);
+    const text = await fsp.readFile(join(homeDir, '.kimi-code', 'local.toml'), 'utf8');
+    expect(text).not.toContain('extra');
+
+    const again = await registry.importProjectConfig(created.id);
+    expect(again?.additionalDirs).toEqual([extra]);
+
+    expect(await registry.importProjectConfig('wd_missing_000000000000')).toBeUndefined();
+  });
+
+  it('importProjectConfig unions without duplicating and still clears the file', async () => {
+    const extraA = join(homeDir, 'extra-a');
+    const extraB = join(homeDir, 'extra-b');
+    await fsp.mkdir(extraA, { recursive: true });
+    await fsp.mkdir(extraB, { recursive: true });
+    const registry = build();
+    const created = await registry.create({ root: homeDir, additionalDirs: [extraA] });
+    await fsp.mkdir(join(homeDir, '.kimi-code'), { recursive: true });
+    await fsp.writeFile(
+      join(homeDir, '.kimi-code', 'local.toml'),
+      `[workspace]\nadditional_dir = ["${extraA.replaceAll('\\', '\\\\')}", "${extraB.replaceAll('\\', '\\\\')}"]\n`,
+      'utf8',
+    );
+
+    const imported = await registry.importProjectConfig(created.id);
+    expect(imported?.additionalDirs).toEqual([extraA, extraB]);
+    const text = await fsp.readFile(join(homeDir, '.kimi-code', 'local.toml'), 'utf8');
+    expect(text).not.toContain('extra-a');
+    expect(text).not.toContain('extra-b');
+  });
+
   it('setPrimary swaps root with an additional dir atomically and keeps id and bucket', async () => {
     const registry = build();
     const extraA = join(homeDir, 'extra-a');

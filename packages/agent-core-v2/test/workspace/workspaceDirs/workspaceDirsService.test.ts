@@ -1,5 +1,5 @@
 import { mkdtempSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'pathe';
 
@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DisposableStore } from '#/_base/di/lifecycle';
 import type { ILogService } from '#/_base/log/log';
+import { encodeWorkDirKey } from '#/_base/utils/workdir-slug';
 import type { IEventService } from '#/app/event/event';
 import { FileProjectLocalConfigService } from '#/persistence/backends/node-fs/projectLocalConfigService';
 import { JsonAtomicDocumentStore } from '#/persistence/backends/node-fs/atomicDocumentStore';
@@ -112,13 +113,13 @@ describe('WorkspaceDirsService (registry source)', () => {
   });
 
   it('merges registry dirs with local.toml dirs and ephemeral dirs', async () => {
+    const project = await workspaces.create({ root: dirA, additionalDirs: [dirB], name: 'proj' });
     await mkdir(join(dirA, '.kimi-code'), { recursive: true });
     await writeFile(
       join(dirA, '.kimi-code', 'local.toml'),
       `[workspace]\nadditional_dir = ["${dirC.replaceAll('\\', '\\\\')}"]\n`,
       'utf8',
     );
-    const project = await workspaces.create({ root: dirA, additionalDirs: [dirB], name: 'proj' });
 
     const dirs = createDirs(dirA, project.id);
     await dirs.ready;
@@ -143,5 +144,45 @@ describe('WorkspaceDirsService (registry source)', () => {
       expect(dirs.additionalDirs).toEqual([dirB]);
     });
     expect(fired).toBeGreaterThan(0);
+  });
+
+  it('persists added dirs to the workspace registry instead of local.toml', async () => {
+    const project = await workspaces.create({ root: dirA, name: 'proj' });
+    const dirs = createDirs(dirA, project.id);
+    await dirs.ready;
+
+    const result = await dirs.addDir({ path: dirB, persist: true });
+    expect(result.persisted).toBe(true);
+    expect(result.additionalDirs).toEqual([dirB]);
+
+    const entry = await workspaces.get(project.id);
+    expect(entry?.additionalDirs).toEqual([dirB]);
+    await expect(stat(join(dirA, '.kimi-code', 'local.toml'))).rejects.toThrow();
+
+    const again = await dirs.addDir({ path: dirB, persist: true });
+    expect(again.additionalDirs).toEqual([dirB]);
+    expect((await workspaces.get(project.id))?.additionalDirs).toEqual([dirB]);
+  });
+
+  it('registers the hash entry on demand when persisting from a hash scope', async () => {
+    const dirs = createDirs(dirA, encodeWorkDirKey(dirA));
+    await dirs.ready;
+
+    await dirs.addDir({ path: dirB, persist: true });
+
+    const entry = await workspaces.get(encodeWorkDirKey(dirA));
+    expect(entry?.additionalDirs).toEqual([dirB]);
+  });
+
+  it('keeps persist:false dirs in memory only', async () => {
+    const project = await workspaces.create({ root: dirA, name: 'proj' });
+    const dirs = createDirs(dirA, project.id);
+    await dirs.ready;
+
+    const result = await dirs.addDir({ path: dirB, persist: false });
+
+    expect(result.persisted).toBe(false);
+    expect(result.additionalDirs).toEqual([dirB]);
+    expect((await workspaces.get(project.id))?.additionalDirs).toEqual([]);
   });
 });

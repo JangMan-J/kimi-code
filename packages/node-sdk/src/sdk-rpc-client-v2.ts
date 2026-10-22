@@ -1759,12 +1759,12 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
   /**
    * Through the session's handler (`IWorkspaceDirs`, workspace scope) — the
    * workspace-level add-dir surface: `persist: true` (default) appends to the
-   * project-local `.kimi-code/local.toml`, `persist: false` joins the
-   * handler's shared in-memory set. The set is shared by every session of
-   * the workspace (a v1 `persist: false` dir was session-scoped and written
-   * into session metadata to survive a resume; the v2 handler keeps it for
-   * every session of the workspace until the process exits). Returns the
-   * same `{additionalDirs, projectRoot, configPath, persisted}` shape as v1.
+   * workspace entry in the registry, `persist: false` joins the handler's
+   * shared in-memory set. The in-memory set is shared by every session of the
+   * workspace (a v1 `persist: false` dir was session-scoped and written into
+   * session metadata to survive a resume; the v2 handler keeps it for every
+   * session of the workspace until the process exits). Returns the
+   * `{additionalDirs, persisted}` shape.
    */
   override async addAdditionalDir(input: AddAdditionalDirInput): Promise<AddAdditionalDirResult> {
     const handle = this.requireLiveSession(input.id);

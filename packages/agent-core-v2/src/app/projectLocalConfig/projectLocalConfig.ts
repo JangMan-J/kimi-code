@@ -11,10 +11,7 @@ export interface IProjectLocalConfigService {
 
   readAdditionalDirs(workDir: string): Promise<ProjectAdditionalDirsLoadResult>;
   resolveAdditionalDirs(baseDir: string, additionalDirs: readonly string[]): Promise<string[]>;
-  appendAdditionalDir(
-    workDir: string,
-    inputPath: string,
-  ): Promise<ProjectAdditionalDirsLoadResult>;
+  removeAdditionalDirs(workDir: string, dirs: readonly string[]): Promise<void>;
 }
 
 export const IProjectLocalConfigService: ServiceIdentifier<IProjectLocalConfigService> =

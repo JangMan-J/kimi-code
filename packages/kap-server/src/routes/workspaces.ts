@@ -5,6 +5,7 @@ import {
   IWorkspaceService,
   IWorkspaceSessions,
   IWorkspaceTrust,
+  IWorkspaceTrustStore,
   type Scope,
   type Workspace,
 } from '@moonshot-ai/agent-core-v2';
@@ -18,11 +19,10 @@ import { requestLog } from '../lib/requestLog';
 import { defineRoute } from '../middleware/defineRoute';
 import { ErrorCode } from '../protocol/error-codes';
 import {
-  addDirRequestSchema,
-  addDirResponseSchema,
   createWorkspaceRequestSchema,
   createWorkspaceResponseSchema,
   deleteWorkspaceResponseSchema,
+  importProjectConfigResponseSchema,
   listWorkspacesResponseSchema,
   setPrimaryRequestSchema,
   setPrimaryResponseSchema,
@@ -388,70 +388,34 @@ export function registerWorkspacesRoutes(app: WorkspaceRouteHost, core: Scope): 
     setPrimaryRoute.handler as Parameters<WorkspaceRouteHost['post']>[2],
   );
 
-  const addDirRoute = defineRoute(
+  const importProjectConfigRoute = defineRoute(
     {
       method: 'POST',
-      path: '/workspaces/{workspace_id}/add-dir',
+      path: '/workspaces/{workspace_id}/import-project-config',
       params: workspaceIdParamSchema,
-      body: addDirRequestSchema,
-      success: { data: addDirResponseSchema },
+      success: { data: importProjectConfigResponseSchema },
       errors: {
-        [ErrorCode.VALIDATION_FAILED]: { detailsSchema },
-        [ErrorCode.FS_PATH_NOT_FOUND]: {},
         [ErrorCode.WORKSPACE_NOT_FOUND]: {},
       },
-      description: 'Add an additional directory to the workspace',
+      description: 'Merge the primary directory local.toml additional_dir into the registry once',
       tags: ['workspaces'],
     },
     async (req, reply) => {
       const { workspace_id } = req.params;
-      const ws = await core.accessor.get(IWorkspaceService).get(workspace_id);
+      const ws = await core.accessor.get(IWorkspaceService).importProjectConfig(workspace_id);
       if (ws === undefined) {
         reply.send(
           errEnvelope(ErrorCode.WORKSPACE_NOT_FOUND, `workspace ${workspace_id} does not exist`, req.id),
         );
         return;
       }
-      const resolved = resolveAdditionalDirPath(core, ws.root, req.body.path);
-      const hostFs = core.accessor.get(IHostFileSystem);
-      try {
-        const stat = await hostFs.stat(resolved);
-        if (!stat.isDirectory) {
-          reply.send(
-            errEnvelope(ErrorCode.FS_PATH_NOT_FOUND, `path ${req.body.path} is not a directory`, req.id),
-          );
-          return;
-        }
-      } catch {
-        reply.send(
-          errEnvelope(ErrorCode.FS_PATH_NOT_FOUND, `path ${req.body.path} does not exist`, req.id),
-        );
-        return;
-      }
-      const workspace = await core
-        .accessor.get(IWorkspaceInstanceManager)
-        .getOrCreate({ workspaceId: workspace_id, root: ws.root });
-      const result = await workspace.program.dirs.addDir({
-        path: req.body.path,
-        persist: req.body.persist,
-      });
-      reply.send(
-        okEnvelope(
-          {
-            project_root: result.projectRoot,
-            config_path: result.configPath,
-            additional_dirs: [...result.additionalDirs],
-            persisted: result.persisted,
-          },
-          req.id,
-        ),
-      );
+      reply.send(okEnvelope(await toWireWorkspace(core, ws), req.id));
     },
   );
   app.post(
-    addDirRoute.path,
-    addDirRoute.options,
-    addDirRoute.handler as Parameters<WorkspaceRouteHost['post']>[2],
+    importProjectConfigRoute.path,
+    importProjectConfigRoute.options,
+    importProjectConfigRoute.handler as Parameters<WorkspaceRouteHost['post']>[2],
   );
 }
 
@@ -530,10 +494,7 @@ async function resolveTrust(
     );
     return undefined;
   }
-  const workspace = await core
-    .accessor.get(IWorkspaceInstanceManager)
-    .getOrCreate({ workspaceId, root: ws.root });
-  return workspace.program.trust;
+  return core.accessor.get(IWorkspaceTrustStore).forRoot(ws.root);
 }
 
 export async function toWireWorkspace(core: Scope, ws: Workspace): Promise<WorkspaceWire> {

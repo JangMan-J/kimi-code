@@ -612,7 +612,7 @@ Changes apply on the next start, or immediately with `/reload-tui` (which reload
 
 In addition to the user-level files under `~/.kimi-code`, Kimi Code reads a project-local configuration file at `<project-root>/.kimi-code/local.toml`. It holds settings that are specific to one project checkout and typically should not be shared with teammates.
 
-The file is created automatically when you add an extra workspace directory with [`/add-dir`](../reference/slash-commands.md) and choose to remember it for the project. You rarely need to edit it by hand.
+Earlier versions of [`/add-dir`](../reference/slash-commands.md) wrote remembered directories to this file; current versions write them to the workspace registry in `~/.kimi-code/workspaces.json` instead. An existing `additional_dir` here is still read and honored, and is imported into the registry once when the workspace is created or first edited, then cleared from this file.
 
 ### `[workspace]`
 
@@ -620,7 +620,7 @@ The `[workspace]` table groups project-level workspace settings:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `additional_dir` | `array<string>` | No | Additional workspace directories (absolute paths); written automatically when you confirm "remember this directory" in `/add-dir`, and available in every session of this project |
+| `additional_dir` | `array<string>` | No | Additional workspace directories (absolute paths, legacy compatibility field); written by older versions of `/add-dir`, no longer written by current versions, and cleared once imported into the registry |
 
 ```toml
 [workspace]

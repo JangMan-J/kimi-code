@@ -110,9 +110,10 @@ export class WorkspaceService implements IWorkspaceService {
   create(input: WorkspaceCreate): Promise<Workspace> {
     return this.runExclusive(async () => {
       await this.requireDirectory(input.root);
+      const fromProject = await this.readProjectDirs(input.root);
       const additionalDirs = await this.normalizeAdditionalDirs(
         input.root,
-        input.additionalDirs ?? [],
+        [...(input.additionalDirs ?? []), ...fromProject],
       );
       await this.ensureMerged();
       const catalog = await this.loadCatalog();
@@ -140,8 +141,44 @@ export class WorkspaceService implements IWorkspaceService {
         deletedIds: catalog.deletedIds,
         idempotencyKeys,
       });
+      if (fromProject.length > 0) {
+        await this.localConfig.removeAdditionalDirs(input.root, fromProject);
+      }
       this.event.publish(new WorkspaceCreated({ payload: { workspace: ws } }));
       return ws;
+    });
+  }
+
+  importProjectConfig(id: string): Promise<Workspace | undefined> {
+    return this.runExclusive(async () => {
+      await this.ensureMerged();
+      const catalog = await this.loadCatalog();
+      const existing = catalog.workspaces.find((ws) => ws.id === id);
+      if (existing === undefined) return undefined;
+      const fromProject = await this.readProjectDirs(existing.root);
+      const rootKey = workspaceRootKey(existing.root);
+      const kept = new Set(existing.additionalDirs.map((dir) => workspaceRootKey(dir)));
+      const newDirs = fromProject.filter(
+        (dir) => workspaceRootKey(dir) !== rootKey && !kept.has(workspaceRootKey(dir)),
+      );
+      if (newDirs.length === 0) {
+        if (fromProject.length > 0) {
+          await this.localConfig.removeAdditionalDirs(existing.root, fromProject);
+        }
+        return existing;
+      }
+      const additionalDirs = await this.normalizeAdditionalDirs(existing.root, [
+        ...existing.additionalDirs,
+        ...newDirs,
+      ]);
+      const updated: Workspace = { ...existing, additionalDirs, lastOpenedAt: Date.now() };
+      await this.store.save({
+        workspaces: catalog.workspaces.map((ws) => (ws.id === id ? updated : ws)),
+        deletedIds: catalog.deletedIds,
+      });
+      await this.localConfig.removeAdditionalDirs(existing.root, fromProject);
+      this.event.publish(new WorkspaceUpdated({ payload: { workspace: updated } }));
+      return updated;
     });
   }
 
@@ -383,6 +420,18 @@ export class WorkspaceService implements IWorkspaceService {
       result.push(dir);
     }
     return result;
+  }
+
+  private async readProjectDirs(root: string): Promise<readonly string[]> {
+    try {
+      const onDisk = await this.localConfig.readAdditionalDirs(root);
+      return onDisk.additionalDirs;
+    } catch (error) {
+      this.log.warn(`project local.toml additional_dir import skipped for ${root}`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   private runExclusive<T>(op: () => Promise<T>): Promise<T> {

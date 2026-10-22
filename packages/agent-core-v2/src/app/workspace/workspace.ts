@@ -31,6 +31,7 @@ export interface IWorkspaceService {
   touch(id: string): Promise<Workspace | undefined>;
   update(id: string, patch: WorkspaceUpdate): Promise<Workspace | undefined>;
   setPrimary(id: string, path: string): Promise<Workspace | undefined>;
+  importProjectConfig(id: string): Promise<Workspace | undefined>;
   delete(id: string): Promise<void>;
 }
 
