@@ -555,7 +555,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
       } else if (['function_call_output', 'custom_tool_call_output', 'tool_search_output'].includes(item.type ?? '')) {
         stats.toolResults++;
         if (!callIds.has(item.call_id ?? '')) stats.unmatchedToolResults++;
-        add({ kind: 'tool_result', name: item.name, callId: item.call_id, text: textBlocks(output ?? item['tools'], stats), timestamp, metadata });
+        add({ kind: 'tool_result', name: item.name, callId: item.call_id, text: output === undefined ? asText(item['tools']) : textBlocks(output, stats), timestamp, metadata });
       } else if (item.type === 'compaction' || item.type === 'context_compaction') {
         stats.opaqueCompactionSteps++;
         add({ kind: 'event', text: '[Source compaction checkpoint: encrypted state is unavailable as plaintext.]', timestamp, metadata });

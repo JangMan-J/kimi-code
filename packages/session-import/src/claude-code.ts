@@ -127,7 +127,7 @@ interface ReaderStats extends Record<string, unknown> {
 }
 
 const CHAIN_TYPES = new Set(['user', 'assistant', 'system', 'attachment', 'progress']);
-const METADATA_TYPES = new Set(['summary', 'mode', 'permission-mode', 'atis-latch', 'file-history-snapshot', 'last-prompt', 'ai-title', 'queue-operation', 'cost-state', 'file-history-delta', 'pr-link', 'frame-link', 'custom-title', 'agent-name', 'continued-in']);
+const METADATA_TYPES = new Set(['summary', 'mode', 'permission-mode', 'atis-latch', 'file-history-snapshot', 'last-prompt', 'ai-title', 'queue-operation', 'cost-state', 'file-history-delta', 'pr-link', 'frame-link', 'custom-title', 'agent-name', 'continued-in', 'agent-setting', 'artifact-comment-monitor', 'artifact-autoreact-ledger']);
 const REQUEST_LOG_TYPES = new Set(['api-request', 'api-request-blob', 'api-request-shape']);
 const isChainRecord = (row: SourceRecord) => CHAIN_TYPES.has(row.type ?? '') || (!METADATA_TYPES.has(row.type ?? '') && Boolean(row.parentUuid ?? row.logicalParentUuid));
 const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use', 'server_tool_use', 'tool_result', 'image', 'document']);
@@ -262,22 +262,31 @@ function selectHistory(entries: Entry[], stats: ReaderStats) {
   const sidechainMode = !entries.some(({ row }) => row.uuid && !row.isSidechain && isChainRecord(row));
   const eligible = (row: SourceRecord) => sidechainMode || !row.isSidechain;
   const find = (id: string | undefined, before = Infinity): Entry | undefined => versions.get(id ?? '')?.findLast((entry) => entry.order < before && eligible(entry.row));
+  const findLater = (id: string | undefined, after: number): Entry | undefined => versions.get(id ?? '')?.find((entry) => entry.order > after && eligible(entry.row));
   const leaf = entries.findLast(({ row }) => row.uuid && eligible(row) && isChainRecord(row));
   if (!leaf) return { selected: [], boundary: undefined, leaf: undefined, find, sidechainMode };
   const selected = new Map<string | undefined, Entry>();
   const traversed = new Set<number>();
   let current: Entry | undefined = leaf;
   let boundary: Entry | undefined;
+  let laterParentOffset = 1;
   while (current) {
-    if (traversed.has(current.order)) { stats.chainCycles++; break; }
-    traversed.add(current.order);
+    if (traversed.has(current.line)) { stats.chainCycles++; break; }
+    traversed.add(current.line);
     selected.set(current.row.uuid, current);
     if (isBoundary(current.row)) { boundary = current; break; }
     const parent: string | undefined = current.row.logicalParentUuid ?? current.row.parentUuid;
     if (!parent) break;
-    const next: Entry | undefined = find(parent, current.order) ?? find(current.row.parentUuid, current.order);
-    if (!next) { stats.unresolvedParentReferences++; break; }
-    current = next;
+    const earlier: Entry | undefined = find(parent, current.order) ?? find(current.row.parentUuid, current.order);
+    if (earlier) {
+      laterParentOffset = 1;
+      current = earlier;
+      continue;
+    }
+    const later: Entry | undefined = findLater(parent, current.order) ?? findLater(current.row.parentUuid, current.order);
+    if (!later) { stats.unresolvedParentReferences++; break; }
+    laterParentOffset /= 2;
+    current = { ...later, order: current.order - laterParentOffset };
   }
 
   // Some compact writers retain the segment's original parents and record its

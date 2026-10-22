@@ -17,7 +17,7 @@ if (result.status !== 'unreliable') {
 }
 ```
 
-`source` accepts `claude-code` and `codex`. The latter supports JSONL and JSONL.zst. An optional `stateDatabasePath` enables read-only title lookup for that source. A recorded user title wins over a generated one; without either, the title is the first prompt line with a letter or digit after control wrappers, up to 120 characters. Source files are never modified. `attachmentDirectory` must be an absolute path owned by the target session. The host appends the returned message as an ordinary visible message through its existing context API and owns session creation, persistence, and user-visible status handling.
+`source` accepts `claude-code` and `codex`. The latter supports JSONL and JSONL.zst. An optional `stateDatabasePath` enables read-only title lookup for that source. A recorded user title wins over a generated one; without either, the title is the first prompt line with a letter or digit after control wrappers, up to 120 characters. When a prompt carries IDE context ahead of a `## My request:` line, only the request counts, and image reference lines are ignored; the same applies to `lastPrompt`. Source files are never modified. `attachmentDirectory` must be an absolute path owned by the target session. The host appends the returned message as an ordinary visible message through its existing context API and owns session creation, persistence, and user-visible status handling.
 
 ## Finding sessions
 

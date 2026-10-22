@@ -7,12 +7,16 @@ import { DEFAULT_IMPORT_RATIO, renderHistory } from '#/render';
 import type { ConversionIssue, ConversionOptions, ConversionResult, EffectiveHistory, HistoryTurn } from '#/types';
 
 const CONTROL_WRAPPER = /^\s*<(command-message|command-name|command-args|local-command-caveat|local-command-stderr|local-command-stdout|task-notification|system-reminder|ide_opened_file|ide_selection)>[\s\S]*?<\/\1>/;
+const IDE_REQUEST = /^## My request(?: for Codex)?:[ \t]*$/m;
+const IMAGE_LINES = /^(?:\[Imported image reference: .*\]|<image name=.*>|<\/image>)$/gm;
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 function promptText(user: string): string {
   let text = user;
   for (let wrapper = CONTROL_WRAPPER.exec(text); wrapper; wrapper = CONTROL_WRAPPER.exec(text)) text = text.slice(wrapper[0].length);
-  return text.trim();
+  const request = IDE_REQUEST.exec(text);
+  if (request) text = text.slice(request.index + request[0].length);
+  return text.replaceAll(IMAGE_LINES, '').trim();
 }
 
 function fallbackTitle(turns: readonly HistoryTurn[]): string | undefined {

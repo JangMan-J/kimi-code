@@ -92,6 +92,17 @@ test('context annotations keep skills and environment out of real user turns', a
   expect(actual.turns[0]!.steps.filter((step) => step.beforeUser).length).toBe(2);
 });
 
+test('tool search results keep their tool list as JSON without counting unknown content', async (t) => {
+  const tools = [{ type: 'namespace', name: 'example', description: 'Example namespace', tools: [] }];
+  const actual = await readSession(await fixture(t, [meta(), response(message('user', 'Find a tool')),
+    response({ type: 'tool_search_call', call_id: 'search', name: 'tool_search', arguments: '{}' }),
+    response({ type: 'tool_search_output', call_id: 'search', status: 'completed', tools }),
+  ]));
+  const result = actual.turns[0]!.steps.find((step) => step.kind === 'tool_result');
+  expect(JSON.parse(result!.text)).toEqual(tools);
+  expect(actual.stats['unknownContentBlocks']).toBe(0);
+});
+
 test('function/custom inputs and outputs remain verbatim, with orphan outputs counted', async (t) => {
   const patch = '*** Begin Patch\n*** Update File: example.txt\n@@\n-old\n+new\n*** End Patch';
   const actual = await readSession(await fixture(t, [meta(), response(message('user', 'Edit')),

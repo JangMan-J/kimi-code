@@ -606,6 +606,31 @@ test('unknown unlinked metadata is retained and marked without replacing the act
   expect(steps(session).filter((step) => step.text.includes('retained metadata'))).toHaveLength(1);
 });
 
+test('a parent written after its child still links the main chain in conversation order', async () => {
+  const session = await read([
+    user('root', null, 'Early question'), assistant('root-answer', 'root', [txt('Early answer')]),
+    user('middle', 'late-parent', 'Middle question'), assistant('late-parent', 'root-answer', [txt('Answer written late')]),
+    user('latest', 'middle', 'Latest question'), assistant('latest-answer', 'latest', [txt('Latest answer')]),
+  ]);
+  expect(session.turns.map((turn) => turn.user)).toEqual(['Early question', 'Middle question', 'Latest question']);
+  expect(session.turns[0]!.steps.map((step) => step.text)).toEqual(['Early answer', 'Answer written late']);
+  expect(session.stats['unresolvedParentReferences']).toBe(0);
+  const cycle = await read([user('first', 'second', 'First'), user('second', 'first', 'Second')]);
+  expect(cycle.stats['chainCycles']).toBe(1);
+  expect(cycle.turns.map((turn) => turn.user)).toEqual(['First', 'Second']);
+});
+
+test('recent metadata records are not reported as unknown', async () => {
+  const session = await read([
+    { type: 'agent-setting', sessionId: 'example-session', agentSetting: { mode: 'example' } },
+    { type: 'artifact-comment-monitor', v: 1, sessionId: 'example-session', artifacts: [] },
+    { type: 'artifact-autoreact-ledger', v: 1, sessionId: 'example-session', artifacts: [] },
+    user('u', null, 'task'), assistant('a', 'u', [txt('answer')]),
+  ]);
+  expect(session.stats['unknownRecords']).toBe(0);
+  expect(session.turns[0]!.user).toBe('task');
+});
+
 test('the source API request log is skipped instead of repeating the conversation', async () => {
   const session = await read([
     user('u', null, 'task'), assistant('a', 'u', [call('c')]), user('r', 'a', [result('c', 'output')]),

@@ -261,6 +261,19 @@ describe('session conversion', () => {
     expect(await convertSession({ ...long, source: 'claude-code', contextWindow: 32768 })).toMatchObject({ title: `${'标'.repeat(117)}...` });
   });
 
+  it('titles and summarizes prompts by the request after IDE context, without image lines', async () => {
+    const codex = (first: string) => fixture([
+      { type: 'session_meta', payload: { id: 'example', cwd: '/example/project' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: first }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Done.' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Check this screenshot' }, { type: 'input_image', image_url: 'https://example.test/screenshot.png' }] } },
+    ]);
+    const mentioned = await codex('# Files mentioned by the user:\n\n## example.md: /example/project/example.md\n\n## My request:\nDo the actual example task');
+    expect(await convertSession({ ...mentioned, source: 'codex', contextWindow: 32768 })).toMatchObject({ title: 'Do the actual example task', lastPrompt: 'Check this screenshot' });
+    const ide = await codex('# Context from my IDE setup:\n\n## Active file: example.ts\n\n## My request for Codex:\nRefactor the example');
+    expect(await convertSession({ ...ide, source: 'codex', contextWindow: 32768 })).toMatchObject({ title: 'Refactor the example' });
+  });
+
   it('returns unreliable for a source without conversation and writes no attachment', async () => {
     const paths = await fixture([{ type: 'session_meta', payload: { id: 'example', cwd: '/example/project' } }, { type: 'event_msg', payload: { type: 'task_started' } }]);
     const result = await convertSession({ ...paths, source: 'codex', contextWindow: 32768 });
