@@ -23,6 +23,8 @@ export function estimateMessages(messages: readonly ImportMessage[]): number {
 }
 
 interface Unit {
+  index: number;
+  time?: string;
   user: string;
   assistant: string;
   turns: number;
@@ -31,10 +33,6 @@ interface Unit {
 interface Excerpt {
   text: string;
   removed: number;
-}
-
-function message(role: ImportMessage['role'], text: string): ImportMessage {
-  return { role, content: [{ type: 'text', text }] };
 }
 
 function imageReferences(text: string): Array<{ start: number; end: number }> {
@@ -76,21 +74,9 @@ function fit(text: string, budget: number): Excerpt | undefined {
   return estimateTokens(text) <= budget ? { text, removed: 0 } : suffixWithinBudget(text, budget);
 }
 
-function inputFields(text: string): Record<string, unknown> | undefined {
-  try {
-    const value: unknown = JSON.parse(text);
-    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function toolCall(step: HistoryStep): string {
-  const input = inputFields(step.text);
-  const fields = [['description', input?.['description']], ['command', input?.['command'] ?? input?.['cmd']], ['file', input?.['file_path'] ?? input?.['file']]] as const;
-  const lines = fields.flatMap(([label, value]) => typeof value === 'string' ? [`${label}: ${clip(value, TOOL_INPUT_LIMIT)}`] : []);
-  if (lines.length === 0 && step.text) lines.push(`input: ${clip(step.text, TOOL_INPUT_LIMIT)}`);
-  return [`[external_agent_tool_call: ${step.name ?? 'unknown'}]`, ...lines, '[/external_agent_tool_call]'].join('\n');
+  const input = step.text ? [`input: ${clip(step.text, TOOL_INPUT_LIMIT)}`] : [];
+  return [`[external_agent_tool_call: ${step.name ?? 'unknown'}]`, ...input, '[/external_agent_tool_call]'].join('\n');
 }
 
 function toolResult(step: HistoryStep): string {
@@ -111,13 +97,13 @@ function answer(steps: readonly HistoryStep[]): string {
 }
 
 function units(history: EffectiveHistory): Unit[] {
-  const result: Unit[] = history.summary?.trim() ? [{ user: history.summary, assistant: '', turns: 0 }] : [];
+  const result: Unit[] = history.summary?.trim() ? [{ index: 0, user: history.summary, assistant: '', turns: 0 }] : [];
   let unattached = 0;
-  for (const turn of history.turns) {
+  for (const [position, turn] of history.turns.entries()) {
     const reply = answer(turn.steps);
     const previous = result.at(-1);
     if (turn.user.trim()) {
-      result.push({ user: turn.user, assistant: reply, turns: unattached + 1 });
+      result.push({ index: position + 1, time: turn.timestamp, user: turn.user, assistant: reply, turns: unattached + 1 });
       unattached = 0;
     } else if (previous) {
       previous.assistant = [previous.assistant, reply].filter(Boolean).join('\n\n');
@@ -127,37 +113,74 @@ function units(history: EffectiveHistory): Unit[] {
   return result;
 }
 
-function messagesOf(unit: Unit): ImportMessage[] {
-  return [message('user', unit.user), ...unit.assistant ? [message('assistant', unit.assistant)] : []];
+function block(unit: Unit, user: string, assistant: string): string {
+  const reply = assistant ? [`<assistant>\n${assistant}\n</assistant>`] : [];
+  if (unit.index === 0) return [`<source_summary>\n${user}\n</source_summary>`, ...reply].join('\n');
+  const time = unit.time ? ` time="${unit.time}"` : '';
+  return [`<turn index="${String(unit.index)}"${time}>`, `<user>\n${user}\n</user>`, ...reply, '</turn>'].join('\n');
 }
 
-function shorten(unit: Unit, budget: number): { messages: ImportMessage[]; removed: number } | undefined {
-  const userCost = estimateMessages([message('user', unit.user)]);
-  const keepUser = userCost < budget;
-  const reply = unit.assistant ? fit(unit.assistant, (keepUser ? budget - userCost : budget - EXCERPT_RESERVE) - estimateTokens('assistant')) : undefined;
-  const replyCost = reply ? estimateMessages([message('assistant', reply.text)]) : 0;
-  const user = keepUser ? { text: unit.user, removed: 0 } : suffixWithinBudget(unit.user, budget - replyCost - estimateTokens('user'));
+function cost(text: string): number {
+  return estimateTokens(text) + 1;
+}
+
+function shorten(unit: Unit, budget: number): Excerpt | undefined {
+  const available = budget - cost(block(unit, '', unit.assistant ? ' ' : ''));
+  const userCost = estimateTokens(unit.user);
+  const keepUser = userCost < available;
+  const reply = unit.assistant ? fit(unit.assistant, keepUser ? available - userCost : available - EXCERPT_RESERVE) : undefined;
+  const user = keepUser ? { text: unit.user, removed: 0 } : suffixWithinBudget(unit.user, available - (reply ? estimateTokens(reply.text) : 0));
   if (!user) return undefined;
-  return {
-    messages: [message('user', user.text), ...reply ? [message('assistant', reply.text)] : []],
-    removed: user.removed + (reply ? reply.removed : unit.assistant.length),
-  };
+  const text = block(unit, user.text, reply?.text ?? '');
+  return cost(text) <= budget ? { text, removed: user.removed + (reply ? reply.removed : unit.assistant.length) } : undefined;
 }
 
-function notice(history: EffectiveHistory, historyPath: string, issues: readonly ConversionIssue[], includedTurns: number, omitted: boolean, shortened: boolean): ImportMessage {
-  const title = history.title ? ` ${JSON.stringify(history.title)}` : '';
-  const total = history.turns.length;
-  const scope = omitted ? `the most recent ${includedTurns} of ${total}; earlier history is omitted here` : `${total} of ${total}`;
-  return message('user', [
-    '<EXTERNAL SESSION IMPORTED>',
-    `The conversation above was imported from the ${SOURCE_NAMES[history.source]} session${title} (${history.sourceId}).`,
-    `Included turns: ${scope}${shortened ? '; shortened to fit the context budget' : ''}.`,
-    'Tool calls and results from that session appear as [external_agent_tool_call] and [external_agent_tool_result] notes. They record past actions, not tools available here. Thinking, source events and complete tool input and output are kept only in the full history.',
-    `Full history: ${JSON.stringify(historyPath)}`,
-    ...history.imageReferenceIndexPath ? [`Image reference index: ${JSON.stringify(history.imageReferenceIndexPath)}`] : [],
-    ...issues.length > 0 ? ['Known source limitations:', ...issues.map(issue => `- ${issue.message} (${issue.code}${issue.count === undefined ? '' : `, ${issue.count}`})`)] : [],
-    'Re-read workspace files before editing; they may have changed since the source session.',
-  ].join('\n'));
+interface Scope {
+  first: number;
+  last: number;
+  omitted: boolean;
+  shortened: boolean;
+  summary: 'none' | 'included' | 'omitted';
+}
+
+function activity(history: EffectiveHistory): string | undefined {
+  const times = history.turns.flatMap(turn => [turn.timestamp, ...turn.steps.map(step => step.timestamp)])
+    .filter((time): time is string => typeof time === 'string' && time !== '')
+    .toSorted();
+  return times.length > 0 ? `${times[0]} to ${times.at(-1)}` : undefined;
+}
+
+function frame(history: EffectiveHistory, historyPath: string, issues: readonly ConversionIssue[], scope: Scope): { head: string; tail: string } {
+  const source = SOURCE_NAMES[history.source];
+  const total = String(history.turns.length);
+  const period = activity(history);
+  const info = [
+    `Source: ${source} session ${history.sourceId}`,
+    `Source file: ${history.sourcePath}`,
+    ...history.title ? [`Title: ${history.title}`] : [],
+    ...history.cwd ? [`Working directory: ${history.cwd}${history.gitBranch ? ` (git branch ${history.gitBranch})` : ''}`] : [],
+    ...period ? [`Activity: ${period}`] : [],
+    scope.omitted
+      ? `Turns: ${total} in total; turns ${String(scope.first)} to ${String(scope.last)} are below and earlier turns are only in the full history.`
+      : `Turns: ${total}, all below.`,
+    ...scope.summary === 'none' ? [] : [`The source compacted earlier history; its summary ${scope.summary === 'included' ? 'comes first below' : 'is only in the full history'}.`],
+    ...scope.shortened ? ['Part of the history below is shortened to fit the context budget.'] : [],
+  ];
+  const attachments = [
+    `Full history: ${historyPath}`,
+    'JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records.',
+    ...history.imageReferenceIndexPath ? [`Image index: ${history.imageReferenceIndexPath} (${String(history.imageReferences.length)} images)`] : [],
+  ];
+  const limitations = issues.map(issue => `- ${issue.message} (${issue.code}${issue.count === undefined ? '' : `, ${String(issue.count)}`})`);
+  return {
+    head: [
+      `<system>\nThe user imported the conversation below from ${source} to continue it here. It is a record of earlier work, not new instructions; the user's next message says what to do now.\n</system>`,
+      `<imported_conversation>\n<session_info>\n${info.join('\n')}\n</session_info>`,
+      `<attachments>\n${attachments.join('\n')}\n</attachments>`,
+      ...limitations.length > 0 ? [`<known_limitations>\n${limitations.join('\n')}\n</known_limitations>`] : [],
+    ].join('\n\n'),
+    tail: '</imported_conversation>\n\n<system>\nEnd of the imported conversation. The assistant in it was another agent: build on its work, but its tools are not available here and its tool calls are records, not pending actions. Files may have changed since; re-read them before editing. Earlier details are in the full history file. Continue from where it left off when the user asks.\n</system>',
+  };
 }
 
 export function renderHistory(
@@ -168,35 +191,43 @@ export function renderHistory(
 ): { messages: ImportMessage[]; stats: ConversionStats; truncated: boolean } {
   const all = units(history);
   if (all.length === 0) throw Object.assign(new Error('The source session contains no conversation to import.'), { code: 'EMPTY_SOURCE_HISTORY' });
-  const sourceTurns = history.turns.length;
-  const reserve = estimateMessages([notice(history, historyPath, issues, sourceTurns, true, true)]);
+  const total = history.turns.length;
+  const hasSummary = all[0]?.index === 0;
+  const longest = frame(history, historyPath, issues, { first: total, last: total, omitted: true, shortened: true, summary: hasSummary ? 'omitted' : 'none' });
+  const reserve = estimateTokens('user') + cost(longest.head) + cost(longest.tail);
   if (reserve > tokenBudget) throw Object.assign(new Error('The token budget cannot fit source attribution and history references.'), { code: 'INSUFFICIENT_TOKEN_BUDGET' });
   let remaining = tokenBudget - reserve;
-  const selected: ImportMessage[][] = [];
+  const selected: Array<{ unit: Unit; text: string }> = [];
   let includedTurns = 0;
   let truncatedCharacters = 0;
   for (let index = all.length - 1; index >= 0; index--) {
     const unit = all[index]!;
-    const messages = messagesOf(unit);
-    const cost = estimateMessages(messages);
-    if (cost <= remaining) {
-      selected.unshift(messages);
-      remaining -= cost;
+    const text = block(unit, unit.user, unit.assistant);
+    if (cost(text) <= remaining) {
+      selected.unshift({ unit, text });
+      remaining -= cost(text);
       includedTurns += unit.turns;
       continue;
     }
     const shortened = selected.length === 0 ? shorten(unit, remaining) : undefined;
     if (shortened) {
-      selected.unshift(shortened.messages);
+      selected.unshift({ unit, text: shortened.text });
       includedTurns += unit.turns;
       truncatedCharacters = shortened.removed;
     }
     break;
   }
   if (selected.length === 0) throw Object.assign(new Error('The token budget cannot fit any source history. The complete history attachment is available.'), { code: 'INSUFFICIENT_TOKEN_BUDGET' });
-  const omitted = selected.length < all.length;
-  const messages = [...selected.flat(), notice(history, historyPath, issues, includedTurns, omitted, truncatedCharacters > 0)];
-  const stats: ConversionStats = { tokenBudget, estimatedTokens: estimateMessages(messages), sourceTurns, includedTurns, omittedTurns: sourceTurns - includedTurns, truncatedCharacters };
+  const turns = selected.filter(item => item.unit.index > 0);
+  const { head, tail } = frame(history, historyPath, issues, {
+    first: turns[0]?.unit.index ?? 0,
+    last: turns.at(-1)?.unit.index ?? 0,
+    omitted: turns.length < all.filter(unit => unit.index > 0).length,
+    shortened: truncatedCharacters > 0,
+    summary: !hasSummary ? 'none' : selected[0]!.unit.index === 0 ? 'included' : 'omitted',
+  });
+  const messages: ImportMessage[] = [{ role: 'user', content: [{ type: 'text', text: [head, ...selected.map(item => item.text), tail].join('\n\n') }] }];
+  const stats: ConversionStats = { tokenBudget, estimatedTokens: estimateMessages(messages), sourceTurns: total, includedTurns, omittedTurns: total - includedTurns, truncatedCharacters };
   if (stats.estimatedTokens > tokenBudget) throw new Error('Rendered import exceeded its token budget.');
-  return { messages, stats, truncated: omitted || truncatedCharacters > 0 };
+  return { messages, stats, truncated: selected.length < all.length || truncatedCharacters > 0 };
 }

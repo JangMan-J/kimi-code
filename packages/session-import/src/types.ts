@@ -54,6 +54,7 @@ export interface EffectiveHistory {
   sourceId: string;
   title?: string;
   cwd?: string;
+  gitBranch?: string;
   metadata: Record<string, unknown>;
   summary?: string;
   turns: HistoryTurn[];
@@ -68,7 +69,7 @@ export interface ReadOptions {
 }
 
 export interface ImportMessage {
-  role: 'user' | 'assistant';
+  role: 'user';
   content: Array<{ type: 'text'; text: string }>;
 }
 
@@ -103,6 +104,7 @@ export type ConversionResult = {
   sourceId: string;
   title?: string;
   cwd?: string;
+  lastPrompt?: string;
   messages: ImportMessage[];
   historyPath: string;
   imageReferenceIndexPath?: string;

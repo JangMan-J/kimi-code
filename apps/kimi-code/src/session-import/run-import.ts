@@ -12,12 +12,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { importedSessionDir, writeImportedSession } from '@moonshot-ai/migration-legacy';
-import {
-  convertSession,
-  findSessions,
-  type ImportMessage,
-  type SessionCandidate,
-} from '@moonshot-ai/session-import';
+import { convertSession, findSessions, type SessionCandidate } from '@moonshot-ai/session-import';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FALLBACK_CONTEXT_WINDOW = 131_072;
@@ -118,11 +113,6 @@ function isDirectory(path: string): boolean {
   }
 }
 
-function lastPrompt(messages: readonly ImportMessage[]): string {
-  const prompts = messages.filter((message) => message.role === 'user');
-  return prompts.at(-2)?.content.map((part) => part.text).join('') ?? '';
-}
-
 async function discard(sessionDir: string): Promise<void> {
   await rm(sessionDir, { recursive: true, force: true });
   await rmdir(dirname(sessionDir)).catch(() => undefined);
@@ -156,7 +146,7 @@ async function importOne(candidate: ImportCandidate, options: ImportOptions): Pr
       sessionId: candidate.sessionId,
       workDir: candidate.cwd,
       title: result.title ?? 'Imported session',
-      lastPrompt: lastPrompt(result.messages),
+      lastPrompt: result.lastPrompt ?? '',
       updatedAtMs: Math.round(candidate.modifiedAt),
       messages: result.messages,
       custom: {

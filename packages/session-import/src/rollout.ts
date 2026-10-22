@@ -642,6 +642,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
   const metadata = object(sanitize((await imageStore.rewrite({ metadata: canonicalMeta }, { cwd: canonicalMeta.cwd })).metadata, stats));
   const finalStats = { ...stats, selectedRecords: selected.length, selectedTurns: turns.length, sourceFingerprint: first.digest, imageReferences: imageStore.report() };
   const imageReferenceIndexPath = await imageStore.saveManifest();
+  const gitBranch = object(canonicalMeta['git'])['branch'];
   return { source: 'codex', sourcePath: path, sourceId: canonicalMeta.id ?? basename(path), title: title ?? canonicalMeta.title,
-    cwd: canonicalMeta.cwd, metadata, summary: sourceSummary, turns, imageReferences: imageStore.manifest(), imageReferenceIndexPath, stats: finalStats };
+    cwd: canonicalMeta.cwd, gitBranch: typeof gitBranch === 'string' ? gitBranch : undefined, metadata, summary: sourceSummary, turns, imageReferences: imageStore.manifest(), imageReferenceIndexPath, stats: finalStats };
 }

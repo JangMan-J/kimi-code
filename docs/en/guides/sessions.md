@@ -128,7 +128,7 @@ kimi import-sessions
 
 Inside the TUI, `/import-sessions` opens the same page. Choose the last 15 days (the default) or the last 30 days. Each run imports at most the newest 100 sessions, and sessions imported before are skipped.
 
-Imported sessions return to the workspace of their original project folder and keep their title and last activity time: run `kimi` in that folder and use `/sessions` to find them, marked `[Claude Code]` or `[Codex]`. An imported session shows the conversation as regular messages, with tool calls and results as short text notes. It includes the most recent turns that fit 80% of the model's context window, and the complete history is saved with the session as a file the agent can read when it needs earlier details.
+Imported sessions return to the workspace of their original project folder and keep their title and last activity time: run `kimi` in that folder and use `/sessions` to find them, marked `[Claude Code]` or `[Codex]`. An imported session starts with one message that holds the imported conversation, with tool calls and results as short text notes, together with where the conversation came from and where its complete history is saved. It includes the most recent turns that fit 80% of the model's context window; the complete history is saved with the session as a file the agent can read when it needs earlier details.
 
 Conversion runs locally: the original session files are not changed and no model is called.
 

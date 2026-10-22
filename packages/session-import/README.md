@@ -1,6 +1,6 @@
 # Session import
 
-This Node.js package converts one external session into ordinary user and assistant messages and session-owned attachments. It has no engine, provider, CLI, or UI dependency and does not create or resume a session.
+This Node.js package converts one external session into a single user message that carries the conversation, and session-owned attachments. It has no engine, provider, CLI, or UI dependency and does not create or resume a session.
 
 ```ts
 import { convertSession } from '@moonshot-ai/session-import';
@@ -17,7 +17,7 @@ if (result.status !== 'unreliable') {
 }
 ```
 
-`source` accepts `claude-code` and `codex`. The latter supports JSONL and JSONL.zst. An optional `stateDatabasePath` enables read-only title lookup for that source. A recorded user title wins over a generated one; without either, the title is the first prompt line with a letter or digit after control wrappers, up to 120 characters. Source files are never modified. `attachmentDirectory` must be an absolute path owned by the target session. The host appends returned messages as ordinary visible messages through its existing context API and owns session creation, persistence, and user-visible status handling.
+`source` accepts `claude-code` and `codex`. The latter supports JSONL and JSONL.zst. An optional `stateDatabasePath` enables read-only title lookup for that source. A recorded user title wins over a generated one; without either, the title is the first prompt line with a letter or digit after control wrappers, up to 120 characters. Source files are never modified. `attachmentDirectory` must be an absolute path owned by the target session. The host appends the returned message as an ordinary visible message through its existing context API and owns session creation, persistence, and user-visible status handling.
 
 ## Finding sessions
 
@@ -28,13 +28,15 @@ if (result.status !== 'unreliable') {
 
 Discovery reads only the beginning of each recent file and never modifies it.
 
-## Messages
+## Message
 
-Each source turn becomes a user message with the original prompt and, when the turn produced output, one assistant message. Assistant text is kept verbatim. Tool calls become `[external_agent_tool_call: NAME]` notes that list the `description`, `command` (or `cmd`) and `file_path` (or `file`) arguments, or the first 2,000 characters of the raw input when none of them exist. Tool results become `[external_agent_tool_result]` notes, marked `: error` when the source flagged an error, with the first 4,000 characters of their text. Clipping never splits an image reference. Returned messages contain no executable tool calls.
+The result is one user message:
 
-Thinking, source events, injected source context, and API error records are not rendered; they remain in the full history attachment. A turn without a user prompt is appended to the previous assistant message, and assistant output before the first prompt is dropped. A source compaction summary becomes the first user message.
+- A `<system>` paragraph says the conversation was imported from another tool and is a record of earlier work, not new instructions.
+- `<imported_conversation>` holds `<session_info>` (source tool and session id, source file, title, working directory and git branch, activity period, which turns are included, and whether the source compacted earlier history), `<attachments>` (the full history path and format, and the image index), `<known_limitations>` when there are any, the source compaction summary as `<source_summary>`, and each included turn as `<turn index="N" time="...">` with `<user>` and `<assistant>`. Turn N is line N + 1 of the full history.
+- A closing `<system>` paragraph says the conversation ended, that the other agent's tools and tool calls are records rather than pending actions, that files may have changed, and to continue when the user asks.
 
-The final user message starts with `<EXTERNAL SESSION IMPORTED>` and states the source session, how many turns are included, the full history and image index paths, and known source limitations. Messages always start with a user message and never contain two consecutive assistant messages.
+Inside a turn, assistant text is kept verbatim. Tool calls become `[external_agent_tool_call: NAME]` notes with the first 2,000 characters of the input as the source recorded it, the same for every tool. Tool results become `[external_agent_tool_result]` notes, marked `: error` when the source flagged an error, with the first 4,000 characters of their text. Clipping never splits an image reference. Thinking, source events, injected source context, and API error records are left out and remain in the full history attachment. A turn without a user prompt joins the previous turn, and assistant output before the first prompt is dropped. Source text is not escaped, so tags written inside the conversation itself are kept as they are.
 
 ## Budget and selection
 

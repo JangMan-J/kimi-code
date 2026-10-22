@@ -98,7 +98,7 @@ describe('importing sessions', () => {
     });
     const wire = await readFile(join(sessionDir, 'agents', 'main', 'wire.jsonl'), 'utf8');
     expect(wire).toContain('Fix the login flow');
-    expect(wire).toContain('<EXTERNAL SESSION IMPORTED>');
+    expect(wire).toContain('<imported_conversation>');
     expect((await readdir(join(sessionDir, 'attachments'))).some((name) => name.startsWith('effective-history-'))).toBe(true);
 
     expect(await scanImportableSessions({ kimiHome, claudeHome, codexHome, now: NOW })).toEqual({ candidates: [], alreadyImported: 2 });

@@ -9,11 +9,15 @@ import type { ConversionIssue, ConversionOptions, ConversionResult, EffectiveHis
 const CONTROL_WRAPPER = /^\s*<(command-message|command-name|command-args|local-command-caveat|local-command-stderr|local-command-stdout|task-notification|system-reminder|ide_opened_file|ide_selection)>[\s\S]*?<\/\1>/;
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
+function promptText(user: string): string {
+  let text = user;
+  for (let wrapper = CONTROL_WRAPPER.exec(text); wrapper; wrapper = CONTROL_WRAPPER.exec(text)) text = text.slice(wrapper[0].length);
+  return text.trim();
+}
+
 function fallbackTitle(turns: readonly HistoryTurn[]): string | undefined {
   for (const turn of turns) {
-    let text = turn.user;
-    for (let wrapper = CONTROL_WRAPPER.exec(text); wrapper; wrapper = CONTROL_WRAPPER.exec(text)) text = text.slice(wrapper[0].length);
-    const line = text.split('\n').map(part => part.trim()).find(part => /[\p{L}\p{N}]/u.test(part));
+    const line = promptText(turn.user).split('\n').map(part => part.trim()).find(part => /[\p{L}\p{N}]/u.test(part));
     if (!line) continue;
     const graphemes = Array.from(GRAPHEMES.segment(line), ({ segment }) => segment);
     return graphemes.length > 120 ? `${graphemes.slice(0, 117).join('')}...` : line;
@@ -81,7 +85,7 @@ export async function convertSession(options: ConversionOptions): Promise<Conver
       count: stats.omittedTurns || undefined,
     });
     return { status: issues.length > 0 ? 'partial' : 'complete', source: history.source, sourceId: history.sourceId,
-      title: history.title, cwd: history.cwd, messages, historyPath,
+      title: history.title, cwd: history.cwd, lastPrompt: history.turns.map(turn => promptText(turn.user)).findLast(Boolean), messages, historyPath,
       imageReferenceIndexPath: history.imageReferenceIndexPath, imageReferences: history.imageReferences, stats, issues };
   } catch (error) {
     const code = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'CONVERSION_FAILED';

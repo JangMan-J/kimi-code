@@ -579,6 +579,7 @@ export async function readClaudeSession(path: string, options: ReadOptions): Pro
   return {
     source: 'claude-code', sourcePath, sourceId, title,
     cwd: relevant.findLast((row) => row.cwd)?.cwd,
+    gitBranch: timeline.findLast(({ row }) => row.gitBranch)?.row.gitBranch,
     metadata: {
       sourceKind: sidechainMode ? 'subagent' : 'main', parentSessionId: sidechainMode ? parentSessionId : undefined,
       versions: unique(relevant.map((row) => row.version)), gitBranches: unique(relevant.map((row) => row.gitBranch)),
