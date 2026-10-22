@@ -43,6 +43,7 @@ import {
   getLiveSessionById,
   HostProcessError,
   IAgentIdentity,
+  IAgentContextMemoryService,
   IAgentTodoService,
   IAgentLifecycleService,
   IAgentProfileService,
@@ -267,7 +268,7 @@ describe('SDKRpcClientV2 (agent-core-v2 wiring)', () => {
     return { harness, client, homeDir };
   }
 
-  async function attachFakeBoxEnvironment(client: SDKRpcClientV2) {
+  async function attachFakeBoxEnvironment(client: SDKRpcClientV2, hostInfo: { homeDir?: string } = {}) {
     // The constructor attaches the real remote-exec provider, which owns every
     // declared environment as a placeholder; retire it so the fake provider can
     // register the same environment id.
@@ -280,7 +281,7 @@ describe('SDKRpcClientV2 (agent-core-v2 wiring)', () => {
       attach: async (host) => {
         const fake = new FakeEnvironment(
           { environmentId: 'fake-box', generation: 'fake-generation' },
-          { capabilities: ['fs', 'process'] },
+          { capabilities: ['fs', 'process'], host: hostInfo },
         );
         const environment = Object.assign(fake, {
           fs: new HostFileSystem(),
@@ -325,6 +326,50 @@ describe('SDKRpcClientV2 (agent-core-v2 wiring)', () => {
       expect(restored.summary?.additionalDirs).toContain(sharedDir);
       expect(await restored.getEnvironment()).toMatchObject({ environmentId: 'fake-box', cwd: remoteDir });
       expect(getLiveSessionById(client.engineAccessor, session.id)!.accessor.get(ISessionContext).cwd).toBe(workDir);
+    } finally {
+      await provider.dispose(); await harness.close(); vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps remote AGENTS.md change notifications on the session workdir across reloads', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-agents-local-'));
+    const remoteDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-agents-remote-'));
+    const remoteHome = await mkdtemp(join(tmpdir(), 'kimi-sdk-agents-home-'));
+    tempDirs.push(workDir, remoteDir, remoteHome);
+    const remoteAgentsMd = join(remoteDir, 'AGENTS.md');
+    const remotePersonalAgentsMd = join(remoteHome, '.agents', 'AGENTS.md');
+    await writeFile(join(workDir, 'AGENTS.md'), 'local project');
+    await writeFile(remoteAgentsMd, 'remote v1');
+    await mkdir(join(remoteHome, '.agents'));
+    await writeFile(remotePersonalAgentsMd, 'remote personal');
+    const { harness, client, homeDir } = await makeEnvironmentHarness({ defaultCwd: remoteDir });
+    await writeFile(join(homeDir, 'AGENTS.md'), 'local personal');
+    const provider = await attachFakeBoxEnvironment(client, { homeDir: remoteHome });
+    try {
+      const session = await harness.createSession({ workDir, environmentId: 'fake-box' });
+      const main = () => getLiveSessionById(client.engineAccessor, session.id)!.accessor
+        .get(IAgentLifecycleService)
+        .handleOf(MAIN_AGENT_ID)!;
+      const changeMessages = () => main().accessor.get(IAgentContextMemoryService).get()
+        .filter((message) => message.origin?.kind === 'injection' && message.origin.variant === 'agents_md_change')
+        .map((message) => message.content.map((part) => part.type === 'text' ? part.text : '').join(''));
+      const prompt = main().accessor.get(IAgentProfileService).getSystemPrompt();
+      expect(prompt).toContain('remote v1');
+      expect(prompt).toContain('local personal');
+      expect(prompt).not.toContain('local project');
+      expect(prompt).not.toContain('remote personal');
+
+      await harness.reloadSession({ id: session.id });
+      expect(changeMessages()).toEqual([]);
+
+      await writeFile(remoteAgentsMd, 'remote v2');
+      await harness.reloadSession({ id: session.id });
+      expect(changeMessages()).toHaveLength(1);
+      const message = changeMessages()[0]!;
+      expect(message).toContain(`- ${remoteAgentsMd}\n`);
+      expect(message).not.toContain('(deleted)');
+      expect(message).not.toContain(join(workDir, 'AGENTS.md'));
+      expect(message).not.toContain(remotePersonalAgentsMd);
     } finally {
       await provider.dispose(); await harness.close(); vi.unstubAllEnvs();
     }
