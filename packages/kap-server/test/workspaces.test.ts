@@ -4,7 +4,6 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { IWorkspaceInstanceManager } from '@moonshot-ai/agent-core-v2';
 import { encodeWorkDirKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
 
 import { type RunningServer, startServer } from '../src/start';
@@ -372,6 +371,49 @@ describe('server-v2 /api/v1/workspaces', () => {
     expect(unknown.body.code).toBe(40410);
   });
 
+  it('create imports the primary local.toml additional_dir once and clears it', async () => {
+    const root = home as string;
+    const extra = join(root, 'toml-extra');
+    await mkdir(extra, { recursive: true });
+    await mkdir(join(root, '.kimi-code'), { recursive: true });
+    await writeFile(
+      join(root, '.kimi-code', 'local.toml'),
+      `[workspace]\nadditional_dir = ["${extra}"]\n`,
+      'utf8',
+    );
+
+    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
+    expect(created.body.code).toBe(0);
+    expect(created.body.data.additional_dirs).toEqual([extra]);
+    const text = await readFile(join(root, '.kimi-code', 'local.toml'), 'utf8');
+    expect(text).not.toContain('toml-extra');
+  });
+
+  it('import-project-config merges local.toml dirs on demand (40410)', async () => {
+    const root = home as string;
+    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
+    const id = created.body.data.id;
+    const extra = join(root, 'toml-import');
+    await mkdir(extra, { recursive: true });
+    await mkdir(join(root, '.kimi-code'), { recursive: true });
+    await writeFile(
+      join(root, '.kimi-code', 'local.toml'),
+      `[workspace]\nadditional_dir = ["${extra}"]\n`,
+      'utf8',
+    );
+
+    const imported = await postJson<WorkspaceWire>(`/api/v1/workspaces/${id}/import-project-config`);
+    expect(imported.body.code).toBe(0);
+    expect(imported.body.data.additional_dirs).toEqual([extra]);
+    const again = await postJson<WorkspaceWire>(`/api/v1/workspaces/${id}/import-project-config`);
+    expect(again.body.data.additional_dirs).toEqual([extra]);
+
+    const unknown = await postJson<null>(
+      '/api/v1/workspaces/wm_00000000-0000-0000-0000-000000000000/import-project-config',
+    );
+    expect(unknown.body.code).toBe(40410);
+  });
+
   it('sums session_count across legacy split buckets of one root', async () => {
     const typedRoot = 'C:\\Users\\Foo\\Proj';
     const lowerRoot = 'c:\\users\\foo\\proj';
@@ -421,63 +463,6 @@ describe('server-v2 /api/v1/workspaces', () => {
       expect(unions).toHaveLength(1);
       expect(unions[0]?.session_count).toBe(2);
     });
-  });
-
-  it('reads and writes trust without materializing the workspace runtime', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kimi-server-v2-workspaces-trust-no-runtime-'));
-    try {
-      const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-      expect(created.body.code).toBe(0);
-      const id = created.body.data.id;
-      const manager = (server as RunningServer).core.accessor.get(IWorkspaceInstanceManager);
-      const getOrCreate = vi.spyOn(manager, 'getOrCreate').mockRejectedValue(
-        new Error('runtime environment unavailable'),
-      );
-      try {
-        const initial = await getJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/trust`);
-        expect(initial.body.code).toBe(0);
-        expect(initial.body.data.trusted).toBe(false);
-
-        const trusted = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/trust`);
-        expect(trusted.body.code).toBe(0);
-        expect(trusted.body.data.trusted).toBe(true);
-
-        const revoked = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/untrust`);
-        expect(revoked.body.code).toBe(0);
-        expect(revoked.body.data.trusted).toBe(false);
-        expect(getOrCreate).not.toHaveBeenCalled();
-      } finally {
-        getOrCreate.mockRestore();
-      }
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('shares route trust changes with an already materialized workspace', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'kimi-server-v2-workspaces-trust-shared-'));
-    const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
-    expect(created.body.code).toBe(0);
-    const id = created.body.data.id;
-    const manager = (server as RunningServer).core.accessor.get(IWorkspaceInstanceManager);
-    try {
-      const workspace = await manager.getOrCreate({ workspaceId: id, root });
-      await workspace.program.trust.ready;
-      const events: boolean[] = [];
-      workspace.program.trust.onDidChange((change) => events.push(change.trusted));
-
-      const trusted = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/trust`);
-      expect(trusted.body.code).toBe(0);
-      expect(workspace.program.trust.isTrusted()).toBe(true);
-
-      const revoked = await postJson<{ trusted: boolean }>(`/api/v1/workspaces/${id}/untrust`);
-      expect(revoked.body.code).toBe(0);
-      expect(workspace.program.trust.isTrusted()).toBe(false);
-      expect(events).toEqual([true, false]);
-    } finally {
-      await manager.close(id);
-      await rm(root, { recursive: true, force: true });
-    }
   });
 
   it('reports the effective trust state after untrust while KIMI_CODE_TRUST_WORKSPACE is set', async () => {
