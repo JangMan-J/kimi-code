@@ -1,0 +1,45 @@
+import type { Message } from '#/llm/message';
+import type { ToolCallIdPolicy } from '#/llm/requester/requester';
+
+import type { PassContext, PassRunner } from '../pipeline';
+import type { LlmModule } from '../protocol';
+import { legalizeMedia, relocateToolMedia, type MediaSupport } from './media';
+import { legalizeModel, type ModelLegality } from './model';
+import { legalizeToolCallIds } from './tool-call-ids';
+import { applyPatterns, type Pattern } from '../rewrite';
+
+export type PatternSet<TOptions> = (
+  module: LlmModule<TOptions>,
+  ctx: PassContext,
+) => readonly Pattern<Message>[];
+
+export interface LegalizeSpec<TOptions> {
+  readonly media: MediaSupport;
+  readonly toolCallId?: ToolCallIdPolicy;
+  readonly thinkingHistory?: PatternSet<TOptions>;
+  readonly legality: ModelLegality;
+}
+
+export function legalize<TOptions>(
+  input: LlmModule<TOptions>,
+  spec: LegalizeSpec<TOptions>,
+  keepCacheKey: boolean,
+  pass: PassRunner<TOptions>,
+): LlmModule<TOptions> {
+  const mediaLegal = pass.messages('legalize-media', input, (messages) =>
+    legalizeMedia(messages, spec.media),
+  );
+  const relocated = pass.messages('relocate-tool-media', mediaLegal, (messages) =>
+    relocateToolMedia(messages, spec.media),
+  );
+  const idsLegal = pass.messages('legalize-tool-call-ids', relocated, (messages) =>
+    legalizeToolCallIds(messages, spec.toolCallId),
+  );
+  const thinkingLegal = pass.messages('legalize-thinking-history', idsLegal, (messages, ctx) => {
+    const patterns = spec.thinkingHistory?.(idsLegal, ctx) ?? [];
+    return patterns.length === 0 ? messages : applyPatterns(messages, patterns);
+  });
+  return pass.model('legalize-model', thinkingLegal, (module, ctx) =>
+    legalizeModel(module, spec.legality, keepCacheKey, ctx),
+  );
+}
