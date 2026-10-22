@@ -11,6 +11,7 @@ import {
 import { DockSection, type DockLayout, type DockPart } from '#/tui/components/chrome/dock-section';
 import { SELECT_POINTER } from '#/tui/constant/symbols';
 import { currentTheme } from '#/tui/theme';
+import { isSettlingClick } from '#/tui/utils/terminal-focus';
 
 export type StartPermissionChoice = 'auto' | 'yolo' | 'manual' | 'cancel';
 
@@ -38,7 +39,11 @@ export class StartPermissionPromptComponent<
   focused = false;
   private selectedIndex = 0;
   private choiceRows: readonly number[] = [];
+  /** Option under the pointer: underlined and previewed, but not selected. */
+  private hoverIndex: number | undefined;
   private readonly isFocusingClick: () => boolean;
+  /** A click this soon after the prompt appeared was aimed at what was there before. */
+  private readonly shownAt = Date.now();
 
   constructor(private readonly opts: StartPermissionPromptOptions<TChoice>) {
     super(opts.layout);
@@ -46,6 +51,7 @@ export class StartPermissionPromptComponent<
   }
 
   handleInput(data: string): void {
+    this.hoverIndex = undefined;
     if (matchesKey(data, Key.escape)) {
       this.opts.onCancel();
       return;
@@ -104,10 +110,11 @@ export class StartPermissionPromptComponent<
       const option = this.opts.options[i]!;
       const selected = i === this.selectedIndex;
       const pointer = selected ? SELECT_POINTER : ' ';
+      const label = styleLabel(option.label, selected);
       choiceRows.push(lines.length);
       lines.push(
         currentTheme.fg(selected ? 'primary' : 'textDim', `  ${pointer} `) +
-          styleLabel(option.label, selected),
+          (i === this.hoverIndex ? currentTheme.underline(label) : label),
       );
       if (!docked) {
         for (const line of wrapPlain(option.description, Math.max(20, width - 4))) {
@@ -124,7 +131,7 @@ export class StartPermissionPromptComponent<
       );
       const areaHeight = Math.min(3, Math.max(0, ...descriptions.map((rows) => rows.length)));
       if (areaHeight > 0) {
-        const rows = descriptions[this.selectedIndex] ?? [];
+        const rows = descriptions[this.hoverIndex ?? this.selectedIndex] ?? [];
         lines.push('');
         for (let row = 0; row < areaHeight; row += 1) {
           const cut = row === areaHeight - 1 && rows.length > areaHeight;
@@ -143,20 +150,25 @@ export class StartPermissionPromptComponent<
     return lines.map((line) => truncateToWidth(line, width));
   }
 
+  /**
+   * Hovering an option underlines it and previews its description without
+   * selecting it; a click picks it, except right after the prompt appeared
+   * or the terminal window regained focus.
+   */
   protected override handlePartMouse(
     part: DockPart,
     event: TuiMouseEvent,
   ): TuiMouseEventResult | undefined {
-    if (this.layout === undefined || part !== 'foot') return undefined;
-    const index = this.choiceRows.indexOf(event.y);
-    if (index === -1) return undefined;
+    if (this.layout === undefined) return undefined;
+    const index = part === 'foot' ? this.choiceRows.indexOf(event.y) : -1;
     if (event.type === 'move') {
-      if (index === this.selectedIndex) return { handled: true };
-      this.selectedIndex = index;
+      const hovered = index === -1 ? undefined : index;
+      if (hovered === this.hoverIndex) return index === -1 ? undefined : { handled: true };
+      this.hoverIndex = hovered;
       return { handled: true, render: true };
     }
-    if (event.button !== 'left') return undefined;
-    if (event.type === 'click' && !this.isFocusingClick()) {
+    if (index === -1 || event.button !== 'left') return undefined;
+    if (event.type === 'click' && !isSettlingClick(this.shownAt) && !this.isFocusingClick()) {
       this.opts.onSelect(this.opts.options[index]!.value);
     }
     return { handled: true };

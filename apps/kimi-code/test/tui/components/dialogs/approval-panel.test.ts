@@ -668,20 +668,58 @@ describe('ApprovalPanelComponent', () => {
       };
     }
 
-    it('selects a choice on hover and submits it on click, ignoring the click that focused the window', () => {
-      let focusing = true;
-      const { dialog, responses } = dockedDialog(goalPending(), () => focusing);
+    it('underlines and previews a hovered choice without selecting it', () => {
+      const previousLevel = chalk.level;
+      chalk.level = 3;
+      onTestFinished(() => {
+        chalk.level = previousLevel;
+      });
+      const { dialog } = dockedDialog(goalPending());
       const row = footRow(dialog, 'Start in Always Ask');
+      const underline = '\u001B[4m';
 
       expect(footPart(dialog).handleMouse?.(mouse('move', row))).toEqual({ handled: true, render: true });
-      expect(foot(dialog)[row]).toContain('▶ 2. Start in Always Ask');
+      expect(footPart(dialog).handleMouse?.(mouse('move', row))).toEqual({ handled: true });
+      let lines = foot(dialog);
+      expect(lines[row - 1]).toContain('▶ 1. Switch to Never Ask and start');
+      expect(lines[row]).toBe('     2. Start in Always Ask');
+      expect(lines).toContain('   Ask every time.');
+      expect(dialog.render(60).find((line) => line.includes('Start in Always Ask'))).toContain(underline);
 
-      for (const type of ['press', 'release', 'click'] as const) footPart(dialog).handleMouse?.(mouse(type, row));
+      expect(footPart(dialog).handleMouse?.(mouse('move', footRow(dialog, '↑/↓ select')))).toEqual({
+        handled: true,
+        render: true,
+      });
+      lines = foot(dialog);
+      expect(lines).not.toContain('   Ask every time.');
+      expect(lines).toContain('   Tools are approved automatically, and questions are');
+      expect(dialog.render(60).join('\n')).not.toContain(underline);
+
+      footPart(dialog).handleMouse?.(mouse('move', row));
+      dialog.handleInput('\u001B[B');
+      dialog.handleInput('\u001B[B');
+      expect(foot(dialog)).toContain('   ▶ 3. Do not start');
+      expect(foot(dialog)).not.toContain('   Ask every time.');
+    });
+
+    it('submits a deliberate click, ignoring clicks right after it appeared or the window was focused', () => {
+      const advance = useClock();
+      let focusing = false;
+      const { dialog, responses } = dockedDialog(goalPending(), () => focusing);
+      const row = footRow(dialog, 'Do not start');
+
+      advance(299);
+      expect(click(dialog, row)).toEqual({ handled: true });
+      expect(responses).toEqual([]);
+
+      advance(1);
+      focusing = true;
+      click(dialog, row);
       expect(responses).toEqual([]);
 
       focusing = false;
-      for (const type of ['press', 'release', 'click'] as const) footPart(dialog).handleMouse?.(mouse(type, row));
-      expect(responses).toEqual([{ response: 'approved', feedback: undefined, selected_label: undefined }]);
+      click(dialog, row);
+      expect(responses).toEqual([{ response: 'cancelled', feedback: undefined, selected_label: undefined }]);
     });
 
     it('only takes the keyboard back on the first click while faded', () => {
@@ -699,6 +737,23 @@ describe('ApprovalPanelComponent', () => {
       dialog.focused = true;
       click(dialog, row);
       expect(responses).toEqual([{ response: 'cancelled', feedback: undefined, selected_label: undefined }]);
+    });
+
+    it('only moves the selection on a click while typing feedback, keeping the text', () => {
+      const advance = useClock();
+      const { dialog, responses } = dockedDialog(makePending());
+      advance(1_000);
+      dialog.handleInput('4');
+      for (const key of 'too risky') dialog.handleInput(key);
+
+      click(dialog, footRow(dialog, '1. Approve once'));
+      expect(responses).toEqual([]);
+      expect(foot(dialog)).toContain('   ▶ 1. Approve once');
+
+      click(dialog, footRow(dialog, '4. Reject with feedback'));
+      expect(responses).toEqual([]);
+      dialog.handleInput('\r');
+      expect(responses).toEqual([{ response: 'rejected', feedback: 'too risky', selected_label: undefined }]);
     });
   });
 });

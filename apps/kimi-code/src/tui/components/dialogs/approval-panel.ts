@@ -23,6 +23,7 @@ import {
 import { DockSection, type DockLayout, type DockPart } from '#/tui/components/chrome/dock-section';
 import { normalizeCapsLockedCtrl } from '#/tui/components/editor/custom-editor';
 import { currentTheme } from '#/tui/theme';
+import { isSettlingClick } from '#/tui/utils/terminal-focus';
 import { highlightLines, langFromPath } from '#/tui/components/media/code-highlight';
 import { renderDiffLinesClustered } from '#/tui/components/media/diff-preview';
 import type {
@@ -240,8 +241,12 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
   private readonly isFocusingClick: () => boolean;
   private readonly isTerminalFocused: () => boolean;
   private readonly onFocusUpdates: (() => boolean) | undefined;
+  /** A click this soon after the panel appeared was aimed at what was there before. */
+  private readonly shownAt = Date.now();
   /** Foot row of each choice in the last render, for mouse hit-testing. */
   private choiceRows: readonly number[] = [];
+  /** Choice under the pointer: underlined and previewed, but not selected. */
+  private hoverIndex: number | undefined;
 
   constructor(
     request: PendingApproval,
@@ -289,6 +294,7 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
   }
 
   handleInput(data: string): void {
+    this.hoverIndex = undefined;
     if (matchesKey(normalizeCapsLockedCtrl(data), Key.ctrl('n')) && this.onFocusUpdates?.() === true) {
       return;
     }
@@ -368,29 +374,39 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
   }
 
   /**
-   * Hovering a choice selects it, so the description area follows the
-   * pointer; a click picks it like its number key. A click on a faded panel
-   * only takes the keyboard back, a click that only focused the terminal
-   * window is ignored, and a hover does not interrupt typed feedback.
+   * Hovering a choice underlines it and previews its description without
+   * selecting it; a click picks it like its number key. A click on a faded
+   * panel only takes the keyboard back. Clicks right after the panel
+   * appeared or the terminal window regained focus are ignored, and a click
+   * while typing feedback only moves the selection.
    */
   protected override handlePartMouse(
     part: DockPart,
     event: TuiMouseEvent,
   ): TuiMouseEventResult | undefined {
-    if (event.type === 'click' && event.button === 'left' && !this.focused) {
-      return { handled: true, focus: true };
-    }
-    if (part !== 'foot') return undefined;
-    const index = this.choiceRows.indexOf(event.y);
-    if (index === -1) return undefined;
+    const index = part === 'foot' ? this.choiceRows.indexOf(event.y) : -1;
     if (event.type === 'move') {
-      if (this.feedbackMode || !this.focused || index === this.selectedIndex) return { handled: true };
-      this.selectedIndex = index;
+      const hovered = index === -1 || this.feedbackMode || !this.focused ? undefined : index;
+      if (hovered === this.hoverIndex) return index === -1 ? undefined : { handled: true };
+      this.hoverIndex = hovered;
       return { handled: true, render: true };
     }
     if (event.button !== 'left') return undefined;
-    if (event.type === 'click' && !this.isFocusingClick()) this.selectAndSubmit(index);
+    if (event.type === 'click' && !this.focused) return { handled: true, focus: true };
+    if (index === -1) return undefined;
+    if (event.type === 'click' && !isSettlingClick(this.shownAt) && !this.isFocusingClick()) {
+      this.clickChoice(index);
+    }
     return { handled: true };
+  }
+
+  private clickChoice(index: number): void {
+    if (!this.feedbackMode) {
+      this.selectAndSubmit(index);
+      return;
+    }
+    this.selectedIndex = index;
+    this.feedbackMode = this.choiceAt(index)?.requires_feedback === true;
   }
 
   private renderHead(width: number): string[] {
@@ -437,6 +453,9 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     const selectColorBold = (text: string) => currentTheme.boldFg('accent', text);
     const indent = (text: string): string => `  ${text}`;
     const docked = this.layout !== undefined;
+    const hovered = this.focused && !this.feedbackMode ? this.hoverIndex : undefined;
+    const label = (idx: number, text: string): string =>
+      idx === hovered ? currentTheme.underline(text) : text;
     const descriptionRows = (option: ApprovalPanelChoice, rowWidth: number): string[] =>
       option.description === undefined || option.description.length === 0
         ? []
@@ -452,9 +471,9 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
       if (typingFeedback) {
         lines.push(indent(this.renderInlineFeedbackLine(width - 2, labelWithNum)));
       } else if (isSelected) {
-        lines.push(indent(`${selectColorBold('▶')} ${selectColorBold(labelWithNum)}`));
+        lines.push(indent(`${selectColorBold('▶')} ${label(idx, selectColorBold(labelWithNum))}`));
       } else {
-        lines.push(indent(strong(`  ${labelWithNum}`)));
+        lines.push(indent(`  ${label(idx, strong(labelWithNum))}`));
       }
       if (!docked && !typingFeedback) {
         for (const descLine of descriptionRows(option, Math.max(20, width - 7))) {
@@ -471,8 +490,8 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
         Math.max(0, ...data.choices.map((choice) => descriptionRows(choice, areaWidth).length)),
       );
       if (areaHeight > 0) {
-        const selected = data.choices[this.selectedIndex];
-        const rows = selected === undefined ? [] : descriptionRows(selected, areaWidth);
+        const shown = data.choices[hovered ?? this.selectedIndex];
+        const rows = shown === undefined ? [] : descriptionRows(shown, areaWidth);
         lines.push('');
         for (let row = 0; row < areaHeight; row++) {
           const cut = row === areaHeight - 1 && rows.length > areaHeight;

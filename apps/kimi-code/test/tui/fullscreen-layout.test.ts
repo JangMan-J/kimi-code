@@ -1064,6 +1064,11 @@ describe('fullscreen layout', () => {
   });
 
   it('docks the local goal start prompt and keeps its choices and hint visible', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(10_000);
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
     const { state, vt } = await mountFullscreen(24);
     vt.resize(80, 24);
     const onSelect = vi.fn();
@@ -1091,9 +1096,16 @@ describe('fullscreen layout', () => {
     await vt.waitForRender();
     rows = screenRows(vt);
     expect(rows.findIndex((row) => row.includes('Switch to Ask When Needed and start'))).toBe(secondChoice);
+    expect(rows[secondChoice - 1]).toContain('❯ Switch to Never Ask and start');
     expect(rows.join('\n')).toContain('Tools and plan changes are approved automatically');
     expect(rows.join('\n')).not.toContain('Best if you want Kimi Code to keep working while you are away');
 
+    vt.sendInput(`\u001B[<0;5;${String(secondChoice + 1)}M`);
+    vt.sendInput(`\u001B[<0;5;${String(secondChoice + 1)}m`);
+    await vt.waitForRender();
+    expect(onSelect).not.toHaveBeenCalled();
+
+    vi.setSystemTime(10_300);
     vt.sendInput(`\u001B[<0;5;${String(secondChoice + 1)}M`);
     vt.sendInput(`\u001B[<0;5;${String(secondChoice + 1)}m`);
     await vt.waitForRender();
