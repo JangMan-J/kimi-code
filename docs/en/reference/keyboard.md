@@ -14,7 +14,7 @@ The following keys are always available in the input box:
 | `Esc` | Close a popup / cancel completion / interrupt streaming output or context compaction |
 | `Ctrl-C` | Interrupt the current streaming output, or clear the input box |
 | `Ctrl-D` | Exit Kimi Code CLI when the input box is empty |
-| `Ctrl-N` | Focus the experimental `Updates` panel. While it is focused, `←` / `→` switch agents, `↑` / `↓` page through updates, and `Shift-↑` / `Shift-↓` scroll a long update in fullscreen mode. `Esc` or `Ctrl-N` returns to the input box; typing or any other input-box key also returns there and takes effect |
+| `Ctrl-N` | Focus the experimental `Updates` panel, also while an approval or question waits; in fullscreen mode, clicking the panel does the same. While it is focused, `←` / `→` switch agents, `Shift-←` / `Shift-→` page through updates, and `↑` / `↓` scroll a long update in fullscreen mode. `Esc`, `Ctrl-N`, or `Enter` returns to the input box, or to the waiting approval or question, without submitting anything; typing or any other input-box key also returns to the input box and takes effect there, but never answers an approval or question |
 
 Pressing `Ctrl-C` **during streaming** cancels immediately — no second confirmation needed.
 
@@ -84,8 +84,9 @@ When the Agent initiates a tool call that requires confirmation, the TUI display
 | `Ctrl-E` | Expand or collapse the full content when the panel contains a diff or file preview |
 | `Ctrl-O` | Toggle the collapsed state of other tool output |
 | `Shift-↑` / `Shift-↓` | Scroll a request that is longer than the panel (fullscreen mode) |
+| `Ctrl-N` | Move the keyboard to the `Updates` panel to read what the Agent is doing; the approval panel fades until you come back with `Esc` or `Ctrl-N` |
 
-In fullscreen mode, hovering an option selects it and clicking an option chooses it.
+In fullscreen mode, hovering an option underlines it and previews its description without selecting it, and clicking an option chooses it. A click right after the panel appears is ignored, and while the panel is faded, the first click only brings the keyboard back.
 
 Options that require feedback (such as "Reject" or "Revise") switch to a feedback input state after confirmation: type the feedback text and press `Enter` to submit; press `Esc` to exit feedback input and return to the candidate list.
 
