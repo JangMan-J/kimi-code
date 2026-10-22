@@ -24,11 +24,12 @@ export type {
   RawUsage as AnthropicRawUsage,
 } from './decode';
 export type { AnthropicExtraParams } from './extra-params';
-export type {
-  AnthropicParams,
-  Request as AnthropicRequest,
-  NativeMessage as AnthropicNativeMessage,
-  NativePart as AnthropicNativePart,
+export {
+  lowerMessage,
+  type AnthropicParams,
+  type Request as AnthropicRequest,
+  type NativeMessage as AnthropicNativeMessage,
+  type NativePart as AnthropicNativePart,
 } from './lower';
 
 export interface AnthropicOptions {

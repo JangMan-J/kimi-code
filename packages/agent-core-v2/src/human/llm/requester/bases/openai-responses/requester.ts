@@ -11,7 +11,6 @@ import { createRunRequester } from '#/llm/requester/run';
 
 import { getOpenAIResponsesModelCapability } from './capability';
 import { openAIResponsesProtocol } from './protocol';
-import type { OpenAIResponsesTrait } from './trait';
 
 export interface OpenAIResponsesRequesterOptions {
   readonly connection?: ProviderConnection;
@@ -33,7 +32,7 @@ export function createOpenAIResponsesRequester(
   });
 }
 
-export const openAIResponsesBase: ProtocolBase<OpenAIResponsesTrait> = {
+export const openAIResponsesBase: ProtocolBase = {
   capability: getOpenAIResponsesModelCapability,
   createRequester: createOpenAIResponsesRequester,
 };

@@ -24,13 +24,17 @@ export type {
   RawStreamToolCallDelta as OpenAIRawStreamToolCallDelta,
   RawUsage as OpenAIRawUsage,
 } from './decode';
-export type {
-  Request as OpenAIRequest,
-  NativeMessage as OpenAINativeMessage,
-  NativePart as OpenAINativePart,
-  NativeToolCall as OpenAINativeToolCall,
-  OpenAIParams,
+export {
+  lowerMessage,
+  openAIPipeline,
+  type NativeMessage as OpenAINativeMessage,
+  type OpenAILowerContext,
+  type Request as OpenAIRequest,
+  type NativePart as OpenAINativePart,
+  type NativeToolCall as OpenAINativeToolCall,
+  type OpenAIParams,
 } from './lower';
+export { openAIModelLegality, resolveOpenAIReasoningKey } from './legalize';
 
 export interface OpenAIOptions {
   readonly extras?: OpenAIExtraParams;

@@ -23,11 +23,13 @@ export type {
   RawResponse as OpenAIResponsesRawResponse,
   RawUsage as OpenAIResponsesRawUsage,
 } from './decode';
-export type {
-  Request as OpenAIResponsesRequest,
-  NativeMessage as OpenAIResponsesNativeMessage,
-  NativePart as OpenAIResponsesNativePart,
-  OpenAIResponsesParams,
+export { openAIResponsesModelLegality } from './legalize';
+export {
+  openAIResponsesPipeline,
+  type Request as OpenAIResponsesRequest,
+  type NativeMessage as OpenAIResponsesNativeMessage,
+  type NativePart as OpenAIResponsesNativePart,
+  type OpenAIResponsesParams,
 } from './lower';
 
 export interface OpenAIResponsesOptions {

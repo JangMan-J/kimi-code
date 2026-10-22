@@ -11,7 +11,6 @@ import { createRunRequester } from '#/llm/requester/run';
 
 import { getGoogleGenAIModelCapability } from './capability';
 import { googleGenAIProtocol } from './protocol';
-import type { GoogleGenAITrait } from './trait';
 
 export interface GoogleGenAIRequesterOptions {
   readonly connection?: ProviderConnection;
@@ -34,7 +33,7 @@ export function createGoogleGenAIRequester(options?: GoogleGenAIRequesterOptions
 
 export function createGoogleGenAIBase(
   options?: Pick<GoogleGenAIRequesterOptions, 'clientFactory' | 'vertexai'>,
-): ProtocolBase<GoogleGenAITrait> {
+): ProtocolBase {
   return {
     capability: getGoogleGenAIModelCapability,
     createRequester: (requesterOptions) =>
@@ -42,4 +41,4 @@ export function createGoogleGenAIBase(
   };
 }
 
-export const googleGenAIBase: ProtocolBase<GoogleGenAITrait> = createGoogleGenAIBase();
+export const googleGenAIBase: ProtocolBase = createGoogleGenAIBase();

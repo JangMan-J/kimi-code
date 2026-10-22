@@ -11,7 +11,6 @@ import { createRunRequester } from '#/llm/requester/run';
 
 import { getAnthropicModelCapability } from './capability';
 import { anthropicProtocol } from './protocol';
-import type { AnthropicTrait } from './trait';
 
 export interface AnthropicRequesterOptions {
   readonly connection?: ProviderConnection;
@@ -34,7 +33,7 @@ export function createAnthropicRequester(options?: AnthropicRequesterOptions): L
 
 export function createAnthropicBase(options?: {
   betaApi?: boolean;
-}): ProtocolBase<AnthropicTrait> {
+}): ProtocolBase {
   return {
     capability: getAnthropicModelCapability,
     createRequester: (requesterOptions) =>
@@ -42,8 +41,8 @@ export function createAnthropicBase(options?: {
   };
 }
 
-export const anthropicBase: ProtocolBase<AnthropicTrait> = createAnthropicBase();
+export const anthropicBase: ProtocolBase = createAnthropicBase();
 
-export const anthropicBetaBase: ProtocolBase<AnthropicTrait> = createAnthropicBase({
+export const anthropicBetaBase: ProtocolBase = createAnthropicBase({
   betaApi: true,
 });
