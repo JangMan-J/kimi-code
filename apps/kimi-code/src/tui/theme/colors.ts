@@ -23,6 +23,10 @@ export interface ColorPalette {
   /** Secondary highlight: approval "▶" prefix, device-code box, image
    *  placeholder, BTW / queue panes, custom-registry import. */
   accent: string;
+  /** Fixed Kimi brand background for the NotifyUser transcript mark. */
+  notifyBrand: string;
+  /** Foreground drawn on the fixed Kimi brand background. */
+  notifyBrandText: string;
 
   // ── Text ──
   /** Default body text: dialog bodies, todo titles, footer model label,
@@ -82,6 +86,8 @@ export interface ColorPalette {
 export const darkColors: ColorPalette = {
   primary: '#4FA8FF',
   accent: '#5BC0BE',
+  notifyBrand: '#1783FF',
+  notifyBrandText: '#FFFFFF',
 
   text: '#E0E0E0',
   textStrong: '#F5F5F5',
@@ -109,6 +115,8 @@ export const darkColors: ColorPalette = {
 export const lightColors: ColorPalette = {
   primary: '#1565C0',
   accent: '#00838F',
+  notifyBrand: '#1783FF',
+  notifyBrandText: '#FFFFFF',
 
   text: '#1A1A1A',
   textStrong: '#1A1A1A',

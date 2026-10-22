@@ -103,6 +103,8 @@ Collaboration tools handle inter-Agent coordination, user interaction, and Skill
 
 In the TUI, updates appear in the `Updates` panel above the input box, with one tab per source: the main agent first, then each subagent that posts an update, labeled with its agent type. Press `Ctrl-N` (or click the panel in fullscreen mode) to focus it, `←`/`→` to switch tabs, `Shift-←`/`Shift-→` to page through a tab's updates, and `Esc` to leave. Until you focus it, the panel follows the newest update. It stays open while an approval or question waits, unless a short fullscreen terminal needs the rows. When the turn ends, the panel folds into a one-line summary that shows the current update's title; the next main-agent turn clears it. New sessions, `/clear`, and reopening a session start with an empty panel.
 
+In the transcript, displayed updates also remain as cards with a Kimi mark. A collapsed card shows only its title; click it or press `Ctrl-O` to reveal the full title and message.
+
 In the desktop app and the web UI (`kimi web`), each update appears in the conversation as a progress row showing its title; click it to read the message.
 
 The feature is off by default. To enable it, set `KIMI_CODE_EXPERIMENTAL_NOTIFY_USER=1`, put `[experimental] notify_user = true` in `config.toml`, or turn it on in `/experiments` (in the TUI) or in the settings' Lab section (in the desktop app and web UI); this applies to sessions created afterwards. Sessions created while it is disabled have neither the tool nor its prompt guidance.
