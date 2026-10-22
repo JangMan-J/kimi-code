@@ -173,6 +173,16 @@ test('rollback removes response-backed and event-only user turns without phantom
   }
 });
 
+test('rollback without source turn ids keeps the preceding answer', async (t) => {
+  const actual = await readSession(await fixture(t, [meta(),
+    response(message('user', 'Keep')), response(message('assistant', 'Keep answer')),
+    response(message('user', 'Drop')), response(message('assistant', 'Drop answer')), event('thread_rolled_back', { num_turns: 1 }),
+  ]));
+  expect(actual.turns.map((turn) => turn.user)).toEqual(['Keep']);
+  expect(text(actual)).toContain('Keep answer');
+  expect(text(actual)).not.toContain('Drop');
+});
+
 test('unsupported ancestor history and ambiguous compaction rollback fail explicitly', async (t) => {
   await expect(readSession(await fixture(t, [meta({ history_base: { thread_id: 'example-parent', end_ordinal_exclusive: 20 } })]))).rejects.toMatchObject({ code: 'UNSUPPORTED_HISTORY_BASE' });
   await expect(readSession(await fixture(t, [meta(), { type: 'compacted', payload: { message: 'Legacy summary' } }]))).rejects.toMatchObject({ code: 'UNSUPPORTED_LEGACY_COMPACTION' });
@@ -299,6 +309,16 @@ test('image-bearing response and projection mirrors do not duplicate turns or im
   expect(actual.stats['mirroredEventsOmitted']).toBe(2);
   expect((actual.stats['imageReferences'] as Record<string, number>)['contentReferences']).toBe(2);
   expect(!JSON.stringify(actual).includes(PNG_BASE64)).toBeTruthy();
+});
+
+test('an assistant projection keeps media its matching response lacks', async (t) => {
+  const url = 'https://example.test/returned.png';
+  const actual = await readSession(await fixture(t, [meta(), event('task_started', { turn_id: 'one' }), response(message('user', 'Request')),
+    response(message('assistant', 'Returned image')),
+    event('item_completed', { turn_id: 'one', item: { type: 'AgentMessage', content: [{ type: 'text', text: 'Returned image' }, { type: 'input_image', image_url: url }] } }),
+  ]));
+  expect(actual.turns[0]!.steps.filter((step) => step.kind === 'assistant').map((step) => step.text)).toEqual(['Returned image', expect.stringContaining(url)]);
+  expect(actual.imageReferences.map((reference) => reference.url)).toEqual([url]);
 });
 
 test('legacy event-only image arrays preserve both saved images and local path references', async (t) => {
@@ -548,30 +568,37 @@ test('context summary settings and unknown same-named fields are not decoded as 
   expect(text(actual)).toContain('"type":"future_event","content":12,"summary":false,"message":{"retained":true}');
 });
 
-test('unknown rows and response kinds retain JSON and report partial conversion', async (t) => {
+test('unknown rows, responses, events and projections retain JSON and report partial conversion', async (t) => {
   const path = await fixture(t, [meta(), response(message('user', 'Continue')),
     { type: 'future_context', payload: { retained: 'unknown row' } },
     response({ type: 'future_response', retained: 'unknown response' }),
+    event('future_event', { retained: 'unknown event' }),
+    event('item_completed', { item: { type: 'FutureItem', id: 'future-item', retained: 'unknown projection' } }),
   ]);
   const actual = await convertSession({ source: 'codex', sourcePath: path, attachmentDirectory: join(dirname(path), 'attachments'), contextWindow: 32768 });
   expect(actual.status).toBe('partial');
-  expect(actual.issues).toContainEqual(expect.objectContaining({ code: 'UNRECOGNIZED_SOURCE_CONTENT', count: 2 }));
-  expect(JSON.stringify(actual)).toContain('unknown row');
-  expect(JSON.stringify(actual)).toContain('unknown response');
+  expect(actual.issues).toContainEqual(expect.objectContaining({ code: 'UNRECOGNIZED_SOURCE_CONTENT', count: 4 }));
+  for (const retained of ['unknown row', 'unknown response', 'unknown event', 'unknown projection']) expect(JSON.stringify(actual)).toContain(retained);
 });
 
-test('supported contextual and inter-agent records are not counted as unknown', async (t) => {
+test('supported contextual, inter-agent and lifecycle records are not counted as unknown', async (t) => {
   const actual = await readSession(await fixture(t, [meta(),
     { type: 'turn_context', payload: { turn_id: 'one', summary: 'auto' } },
     { type: 'world_state', payload: { recorded: 'state' } },
     { type: 'inter_agent_communication_metadata', payload: { recorded: 'message metadata' } },
+    event('task_started', { turn_id: 'one' }),
     response(message('user', 'Continue')),
     response({ type: 'additional_tools', tools: [] }),
     response({ type: 'agent_message', content: [{ type: 'input_text', text: 'Delegated context' }] }),
+    event('patch_apply_end', { call_id: 'patch', success: true }),
+    event('item_completed', { turn_id: 'one', item: { type: 'Plan', id: 'plan', text: 'Recorded plan' } }),
+    event('context_compacted'),
+    event('turn_aborted', { reason: 'interrupted' }),
   ]));
   expect(actual.stats['unknownRecords']).toBe(0);
   expect(text(actual)).toContain('Delegated context');
   expect(text(actual)).toContain('message metadata');
+  expect(text(actual)).toContain('Recorded plan');
 });
 
 test('unknown records removed by replacement do not mark the effective history as unknown', async (t) => {

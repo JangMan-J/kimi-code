@@ -116,7 +116,12 @@ test('keeps unsupported references explicit rather than expanding home or using 
 
 test('does not interpret ordinary text, tool arguments or unknown binary fields as images', async () => {
   const { store } = await fixture();
-  const input = { text: `data:image/png;base64,${encoded}`, arguments: JSON.stringify(embedded()), other: { base64: encoded, type: 'file' }, content: [{ type: 'text', text: encoded }] };
+  const input = { text: `data:image/png;base64,${encoded}`, arguments: JSON.stringify(embedded()), other: { base64: encoded, type: 'file' }, content: [{ type: 'text', text: encoded }], calls: [
+    { type: 'tool_use', input: { type: 'image', prompt: 'Draw a tree' } },
+    { type: 'server_tool_use', input: { type: 'image', path: 'tree.png', prompt: 'Draw a tree' } },
+    { type: 'McpToolCall', arguments: embedded() },
+    { invocation: { arguments: [{ type: 'local_image', path: 'tree.png' }] } },
+  ] };
   expect(await store.rewrite(input)).toEqual(input);
   expect(store.manifest()).toEqual([]);
 });

@@ -174,6 +174,17 @@ const inputKinds = (item: SourceItem) => item.internal_chat_message_metadata_pas
 const itemTurn = (item: SourceItem, fallback?: string) => item.internal_chat_message_metadata_passthrough?.turn_id ?? item.turn_id ?? fallback;
 const fail = (code: string) => Object.assign(new Error(code), { code });
 const sameStamp = (left: BigIntStats, right: BigIntStats) => left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+const RETAINED_EVENTS = new Set([
+  'task_started', 'turn_started', 'turn_aborted', 'task_aborted', 'agent_reasoning_raw_content', 'context_compacted',
+  'entered_review_mode', 'exited_review_mode', 'undo_completed', 'thread_goal_updated', 'thread_name_updated', 'session_renamed',
+  'sub_agent_activity', 'image_generation_end', 'patch_apply_end', 'mcp_tool_call_end', 'web_search_end', 'exec_command_end',
+  'view_image_tool_call', 'error', 'guardian_assessment', 'dynamic_tool_call_request', 'dynamic_tool_call_response',
+  'collab_agent_spawn_end', 'collab_agent_interaction_end', 'collab_waiting_end', 'collab_close_end', 'collab_resume_end',
+]);
+const RETAINED_PROJECTIONS = new Set([
+  'FunctionCallOutput', 'HookPrompt', 'Plan', 'CommandExecution', 'DynamicToolCall', 'CollabAgentToolCall', 'SubAgentActivity', 'WebSearch',
+  'ImageView', 'Extension', 'Sleep', 'ImageGeneration', 'EnteredReviewMode', 'ExitedReviewMode', 'FileChange', 'McpToolCall', 'ContextCompaction',
+]);
 const SUMMARY_PREFIX = 'Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:';
 
 function isSourceSummary(item: SourceItem) {
@@ -347,7 +358,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
         if (count > 0 && boundaries.length > 0) {
           let cutoff = boundaries[Math.max(0, boundaries.length - count)]!;
           const owner = selected[cutoff]?.turnId;
-          while (cutoff > 0 && selected[cutoff - 1]?.turnId === owner && !selected[cutoff - 1]?.user) cutoff--;
+          if (owner !== undefined) while (cutoff > 0 && selected[cutoff - 1]?.turnId === owner && !selected[cutoff - 1]?.user) cutoff--;
           stats.rolledBackRecords += selected.length - cutoff;
           selected.length = cutoff;
         }
@@ -433,7 +444,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
     }
   });
   if (first.digest !== second.digest || !sameStamp(before, await stat(path, { bigint: true }))) throw fail('SOURCE_CHANGED');
-  const responseFingerprints = new Map<string, number>();
+  const responseFingerprints = new Map<string, number[]>();
   const reasoningBlocks = new Set<string>();
   const callIds = new Set<string>();
   const responseIds = new Map<string, { digest: string; line: number }>();
@@ -453,11 +464,11 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
     if (callId && item.type?.endsWith('call')) callIds.add(callId);
     if (item.type === 'message' && (candidate.user || item.role === 'assistant')) {
       const key = `${candidate.turnId ?? ''}:${candidate.user ? 'user' : 'assistant'}:${hash(contentText(item.content))}`;
-      responseFingerprints.set(key, (responseFingerprints.get(key) ?? 0) + 1);
+      responseFingerprints.set(key, [...responseFingerprints.get(key) ?? [], candidate.line]);
     }
     if (item.type === 'reasoning') {
       const key = `${candidate.turnId ?? ''}:thinking:${hash(contentText(item.summary))}`;
-      responseFingerprints.set(key, (responseFingerprints.get(key) ?? 0) + 1);
+      responseFingerprints.set(key, [...responseFingerprints.get(key) ?? [], candidate.line]);
       for (const [form, parts] of [['summary', item.summary], ['content', item.content]] as const) {
         for (const part of parts ?? []) if (typeof part.text === 'string') reasoningBlocks.add(`${candidate.turnId ?? ''}:${form}:${hash(part.text)}`);
       }
@@ -475,11 +486,16 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
         : raw.type === 'agent_message' || projected?.type === 'AgentMessage' ? 'assistant'
         : raw.type === 'agent_reasoning' ? 'thinking' : undefined;
       const key = `${candidate.turnId ?? ''}:${role}:${hash(candidate.originalText)}`;
-      const available = role ? responseFingerprints.get(key) ?? 0 : 0;
-      if (available > 0 || projected?.id && callIds.has(projected.id)) {
-        if (available > 0) responseFingerprints.set(key, available - 1);
-        candidate.omittedMirror = true;
-        continue;
+      const mirroredLine = role ? responseFingerprints.get(key)?.shift() : undefined;
+      if (mirroredLine !== undefined || projected?.id && callIds.has(projected.id)) {
+        const media = role === 'assistant' && mirroredLine !== undefined
+          ? projected?.content?.filter((part) => typeof part?.text !== 'string' && !responseImages.get(mirroredLine)?.has(imageKey(part, candidate.cwd))) ?? []
+          : [];
+        if (media.length === 0) {
+          candidate.omittedMirror = true;
+          continue;
+        }
+        candidate.item = { ...raw, item: { ...projected, content: media } };
       }
     }
     if (candidate.mirroredUserLine !== undefined && projected?.content) {
@@ -598,7 +614,10 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
       if (['task_complete', 'turn_complete'].includes(item.type ?? '')) {
         const { last_agent_message: _lastAgentMessage, ...completion } = item;
         add({ kind: 'event', text: JSON.stringify(completion), timestamp, metadata });
-      } else add({ kind: 'event', text: JSON.stringify(item), timestamp, metadata });
+      } else {
+        if (!(projected ? RETAINED_PROJECTIONS : RETAINED_EVENTS).has((projected ?? item).type ?? '')) stats.unknownRecords++;
+        add({ kind: 'event', text: JSON.stringify(item), timestamp, metadata });
+      }
     } else {
       if (!['turn_context', 'world_state', 'inter_agent_communication_metadata'].includes(candidate.type ?? '')) stats.unknownRecords++;
       add({ kind: 'source_context', text: JSON.stringify(item), timestamp, metadata });

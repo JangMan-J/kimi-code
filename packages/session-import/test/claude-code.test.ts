@@ -343,6 +343,13 @@ test('metadata image payload duplicates reuse saved files while dimensions remai
   expect(steps(session).at(-1)!.metadata).toHaveProperty('toolUseResult.file.dimensions.originalWidth', 1);
 });
 
+test('tool inputs shaped like image blocks stay verbatim', async () => {
+  const inputs = [{ type: 'image', prompt: 'Draw a tree' }, { type: 'image', path: 'tree.png', prompt: 'Draw a tree' }];
+  const session = await read([user('u', null, 'Draw'), assistant('a', 'u', inputs.map((input, index) => ({ type: 'tool_use', id: `c${index}`, name: 'Generate', input })))]);
+  expect(steps(session).map((step) => step.text)).toEqual(inputs.map((input) => JSON.stringify(input)));
+  expect(session.imageReferences).toEqual([]);
+});
+
 test('events preceding the first user turn are marked beforeUser', async () => {
   const session = await read([{ type: 'mode', mode: 'example-mode' }, user('u', null, 'task'), assistant('a', 'u', [txt('reply')])]);
   expect(session.turns[0]!.steps[0]!.beforeUser).toBe(true);

@@ -313,6 +313,8 @@ export async function createImageStore({ directory, cwd }: { directory: string; 
             items.push(await visit(imageNode, `${childLocation}[${index}]`, childMetadata));
           }
           transformed = items;
+        } else if (key === 'arguments' || (key === 'input' && (object['type'] === 'tool_use' || object['type'] === 'server_tool_use'))) {
+          transformed = child;
         } else transformed = await visit(child, childLocation, childMetadata);
         Object.defineProperty(result, key, { value: transformed, enumerable: true, writable: true, configurable: true });
       }
