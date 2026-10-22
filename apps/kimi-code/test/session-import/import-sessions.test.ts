@@ -77,7 +77,16 @@ describe('importing sessions', () => {
     expect(candidatesWithin(scan, 15, NOW).map((candidate) => candidate.sessionId)).toEqual(['ses_claude-one']);
 
     const report = await importSessions(scan.candidates, { kimiHome, contextWindow: 32_768, now: NOW });
-    expect(report).toEqual({ imported: 2, alreadyImported: 0, missingFolder: 0, inUse: 0, empty: 0, unsupported: 0, failed: [], stopped: false });
+    expect(report).toEqual({
+      imported: ['ses_claude-one', 'ses_thread-one'],
+      alreadyImported: 0,
+      missingFolder: 0,
+      inUse: 0,
+      empty: 0,
+      unsupported: 0,
+      failed: [],
+      stopped: false,
+    });
     const sessionDir = importedSessionDir(kimiHome, project, 'ses_claude-one');
     expect(JSON.parse(await readFile(join(sessionDir, 'state.json'), 'utf8'))).toMatchObject({
       id: 'ses_claude-one',
@@ -120,7 +129,7 @@ describe('importing sessions', () => {
     };
     const report = await importSessions([...scan.candidates, commandsOnly], { kimiHome, contextWindow: 32_768, now: NOW });
 
-    expect(report).toEqual({ imported: 0, alreadyImported: 0, missingFolder: 1, inUse: 0, empty: 1, unsupported: 1, failed: [], stopped: false });
+    expect(report).toEqual({ imported: [], alreadyImported: 0, missingFolder: 1, inUse: 0, empty: 1, unsupported: 1, failed: [], stopped: false });
     expect(await readdir(join(kimiHome, 'sessions')).catch(() => [])).toEqual([]);
   });
 
@@ -170,7 +179,7 @@ describe('importing sessions', () => {
         sessionId: `ses_${code}`,
       }));
       expect(await importWithConversion(candidates, { kimiHome, contextWindow: 32_768, now: NOW })).toEqual({
-        imported: 0,
+        imported: [],
         alreadyImported: 0,
         missingFolder: 0,
         inUse: 1,
@@ -209,7 +218,7 @@ describe('ImportSessionsScreenComponent', () => {
   });
   const scan = { candidates: [candidate('a', 'claude-code', 1), candidate('b', 'codex', 3), candidate('c', 'claude-code', 20)], alreadyImported: 2 };
   const report = (overrides: Partial<ImportReport> = {}): ImportReport => ({
-    imported: 0,
+    imported: [],
     alreadyImported: 0,
     missingFolder: 0,
     inUse: 0,
@@ -235,7 +244,7 @@ describe('ImportSessionsScreenComponent', () => {
   it('imports the chosen window and summarizes the outcome', async () => {
     const run = vi.fn(async (candidates: readonly ImportCandidate[], hooks: { onProgress: (progress: { index: number; total: number; candidate: ImportCandidate }) => void }) => {
       hooks.onProgress({ index: 0, total: candidates.length, candidate: candidates[0]! });
-      return report({ imported: 2, missingFolder: 1, failed: [{ path: '/sources/broken.jsonl', message: 'Broken record' }] });
+      return report({ imported: ['a', 'b'], missingFolder: 1, failed: [{ path: '/sources/broken.jsonl', message: 'Broken record' }] });
     });
     const onClose = vi.fn();
     const screen = new ImportSessionsScreenComponent({ now: NOW, scan: async () => scan, run, onClose });
@@ -255,7 +264,7 @@ describe('ImportSessionsScreenComponent', () => {
     expect(out).toContain('broken.jsonl: Broken record');
     expect(out).toContain('/sessions');
     screen.handleInput('\r');
-    expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ imported: 2 }));
+    expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ imported: ['a', 'b'] }));
   });
 
   it('stops after the current session when escape is pressed during an import', async () => {
@@ -263,7 +272,7 @@ describe('ImportSessionsScreenComponent', () => {
     const run = vi.fn((_candidates: readonly ImportCandidate[], hooks: { shouldStop: () => boolean }) =>
       new Promise<ImportReport>((resolve) => {
         finish = () => {
-          resolve(report({ imported: 1, stopped: hooks.shouldStop() }));
+          resolve(report({ imported: ['a'], stopped: hooks.shouldStop() }));
         };
       }));
     const screen = new ImportSessionsScreenComponent({ now: NOW, scan: async () => scan, run, onClose: vi.fn() });
@@ -295,31 +304,50 @@ describe('ImportSessionsScreenComponent', () => {
 });
 
 describe('/import-sessions', () => {
-  it('replaces the editor with the import page while idle and restores it on close', async () => {
-    const { root, kimiHome } = await setup();
+  async function openPage(root: string, kimiHome: string) {
     vi.stubEnv('CLAUDE_CONFIG_DIR', join(root, 'claude'));
     vi.stubEnv('CODEX_HOME', join(root, 'codex'));
-    try {
-      expect(resolveSlashCommandAvailability(findBuiltInSlashCommand('import-sessions')!, '')).toBe('idle-only');
-      const host = {
-        harness: { homeDir: kimiHome },
-        state: { appState: { maxContextTokens: 32_768 }, ui: { requestRender: vi.fn() } },
-        mountEditorReplacement: vi.fn(),
-        restoreEditor: vi.fn(),
-      };
+    const host = {
+      harness: { homeDir: kimiHome, listSessions: vi.fn(async () => []) },
+      state: { appState: { maxContextTokens: 32_768 }, ui: { requestRender: vi.fn() } },
+      mountEditorReplacement: vi.fn(),
+      restoreEditor: vi.fn(),
+    };
+    handleImportSessionsCommand(host as unknown as SlashCommandHost);
+    const screen = host.mountEditorReplacement.mock.calls[0]![0] as ImportSessionsScreenComponent;
+    expect(screen).toBeInstanceOf(ImportSessionsScreenComponent);
+    return { host, screen };
+  }
 
-      handleImportSessionsCommand(host as unknown as SlashCommandHost);
-      const screen = host.mountEditorReplacement.mock.calls[0]![0] as ImportSessionsScreenComponent;
-      expect(screen).toBeInstanceOf(ImportSessionsScreenComponent);
-      await vi.waitFor(() => {
-        expect(render(screen)).toContain('No sessions from the last 30 days to import.');
-      });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
 
-      screen.handleInput('\r');
-      expect(host.restoreEditor).toHaveBeenCalledOnce();
-    } finally {
-      vi.unstubAllEnvs();
-    }
+  it('replaces the editor with the import page while idle and restores it on close', async () => {
+    const { root, kimiHome } = await setup();
+    expect(resolveSlashCommandAvailability(findBuiltInSlashCommand('import-sessions')!, '')).toBe('idle-only');
+    const { host, screen } = await openPage(root, kimiHome);
+    await vi.waitFor(() => {
+      expect(render(screen)).toContain('No sessions from the last 30 days to import.');
+    });
+
+    screen.handleInput('\r');
+    expect(host.restoreEditor).toHaveBeenCalledOnce();
+  });
+
+  it('looks up each imported session so the running session list includes it right away', async () => {
+    const { root, project, kimiHome } = await setup();
+    await write(join(root, 'claude', 'projects', '-project', 'claude-one.jsonl'), claudeSession(project, 'Fix the login flow'), 1);
+    const { host, screen } = await openPage(root, kimiHome);
+    await vi.waitFor(() => {
+      expect(render(screen)).toContain('Last 15 days');
+    });
+
+    screen.handleInput('\r');
+    await vi.waitFor(() => {
+      expect(render(screen)).toContain('Imported 1 session.');
+    });
+    expect(host.harness.listSessions).toHaveBeenCalledWith({ sessionId: 'ses_claude-one' });
   });
 });
 

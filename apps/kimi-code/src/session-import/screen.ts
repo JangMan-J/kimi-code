@@ -206,9 +206,9 @@ export class ImportSessionsScreenComponent extends Container implements Focusabl
     const text = chalk.hex(colors.text);
     const muted = chalk.hex(colors.textMuted);
     const headline = report.stopped
-      ? `Import stopped. Imported ${sessions(report.imported)}.`
-      : report.imported > 0
-        ? `Imported ${sessions(report.imported)}.`
+      ? `Import stopped. Imported ${sessions(report.imported.length)}.`
+      : report.imported.length > 0
+        ? `Imported ${sessions(report.imported.length)}.`
         : 'No sessions were imported.';
     const skipped = [
       [report.missingFolder, 'with a missing project folder'],
@@ -218,7 +218,7 @@ export class ImportSessionsScreenComponent extends Container implements Focusabl
       [report.alreadyImported, 'already imported'],
     ] as const;
     const skippedTotal = skipped.reduce((total, [count]) => total + count, 0);
-    const lines = [chalk.hex(report.imported > 0 ? colors.success : colors.text)(` ${headline}`)];
+    const lines = [chalk.hex(report.imported.length > 0 ? colors.success : colors.text)(` ${headline}`)];
     if (skippedTotal > 0) {
       lines.push(text(` Skipped ${String(skippedTotal)}:`));
       for (const [count, reason] of skipped) {
@@ -234,7 +234,7 @@ export class ImportSessionsScreenComponent extends Container implements Focusabl
         lines.push(muted(`   and ${String(report.failed.length - MAX_LISTED_FAILURES)} more`));
       }
     }
-    if (report.imported > 0) {
+    if (report.imported.length > 0) {
       lines.push('', muted(' Find them with /sessions; ctrl+a shows all projects.'));
     }
     return [...lines, '', muted(' enter close')];

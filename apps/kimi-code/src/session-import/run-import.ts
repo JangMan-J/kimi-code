@@ -46,7 +46,8 @@ export interface ImportFailure {
 }
 
 export interface ImportReport {
-  imported: number;
+  /** Session ids written by this run. */
+  readonly imported: string[];
   alreadyImported: number;
   missingFolder: number;
   inUse: number;
@@ -177,7 +178,7 @@ export async function importSessions(
   candidates: readonly ImportCandidate[],
   options: ImportOptions,
 ): Promise<ImportReport> {
-  const report: ImportReport = { imported: 0, alreadyImported: 0, missingFolder: 0, inUse: 0, empty: 0, unsupported: 0, failed: [], stopped: false };
+  const report: ImportReport = { imported: [], alreadyImported: 0, missingFolder: 0, inUse: 0, empty: 0, unsupported: 0, failed: [], stopped: false };
   const batch = candidates.slice(0, IMPORT_BATCH_LIMIT);
   for (const [index, candidate] of batch.entries()) {
     if (options.shouldStop?.() === true) {
@@ -186,7 +187,8 @@ export async function importSessions(
     }
     options.onProgress?.({ index, total: batch.length, candidate });
     const outcome = await importOne(candidate, options);
-    if (typeof outcome === 'string') report[outcome]++;
+    if (outcome === 'imported') report.imported.push(candidate.sessionId);
+    else if (typeof outcome === 'string') report[outcome]++;
     else report.failed.push(outcome);
   }
   return report;
