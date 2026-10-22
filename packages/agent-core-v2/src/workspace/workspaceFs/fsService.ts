@@ -109,7 +109,7 @@ export class WorkspaceFsService implements IWorkspaceFsService {
   private readonly path: EnvironmentPath;
 
   constructor(
-    @IWorkspaceContext workspace: IWorkspaceContext,
+    @IWorkspaceContext workspace: Pick<IWorkspaceContext, 'workspaceId' | 'cwd'>,
     @IWorkspaceDirs private readonly workspaceDirs: Pick<IWorkspaceDirs, 'additionalDirs'>,
     @IHostFileSystem private readonly hostFs: IHostFileSystem,
     @IEnvironmentService private readonly resolver: EnvironmentResolver,

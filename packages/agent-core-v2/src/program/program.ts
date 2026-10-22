@@ -180,6 +180,7 @@ export class Program {
         skills: generation.skills,
         instructions: generation.instructions,
         mcp: generation.mcp,
+        fs: generation.fs,
         createWorkdir: (environmentId, cwd, contextKey) => this.createWorkdir(generation, environmentId, cwd, contextKey),
         onDispose: release,
       });

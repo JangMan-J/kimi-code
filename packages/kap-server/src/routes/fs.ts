@@ -4,8 +4,8 @@ import { Readable } from 'node:stream';
 import {
   ErrorCodes,
   IHostFileSystem,
-  ISessionContext,
-  ISessionWorkspaceContext,
+  IEnvironmentService,
+  ISessionWorkdir,
   IWorkspaceFsService,
   IWorkspaceInstanceManager,
   IWorkspaceService,
@@ -13,9 +13,14 @@ import {
   resumeSessionById,
   isError2,
   Error2,
-  resolvedEnvironmentId,
+  LOCAL_ENVIRONMENT_ID,
+  WorkspaceFsService,
+  WorkspaceGitService,
+  ITelemetryService,
   type Scope,
 } from '@moonshot-ai/agent-core-v2';
+import { Event } from '@moonshot-ai/agent-core-v2/_base/event';
+import { IGitService } from '@moonshot-ai/agent-core-v2/app/git/git';
 import { encodeWorkDirKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
 import {
   fsDiffRequestSchema,
@@ -33,10 +38,6 @@ import {
   fsSuggestResponseSchema,
 } from '@moonshot-ai/agent-core-v2/workspace/workspaceFs/fs';
 import type { EnvironmentCapability, EnvironmentLease } from '@moonshot-ai/agent-core-v2/environment/environment';
-import {
-  createEnvironmentFs,
-  type EnvironmentFsScope,
-} from '@moonshot-ai/agent-core-v2/workspace/workspaceFs/environmentFs';
 import { z } from 'zod';
 
 import { errEnvelope, okEnvelope } from '../envelope';
@@ -88,27 +89,16 @@ const sessionIdAndTailParamSchema = z.object({
   tail: z.string().min(1),
 });
 
-const fsDownloadQuerySchema = z.object({
-  environment_id: z.string().min(1).optional(),
-  runtime_id: z.string().min(1).optional(),
-});
-
 const workspaceFsSearchBodySchema = fsSearchRequestSchema.extend({
   workspace: z.string().min(1),
-  environment_id: z.string().min(1).optional(),
-  runtime_id: z.string().min(1).optional(),
 });
 
 const workspaceFsSuggestBodySchema = fsSuggestRequestSchema.extend({
   workspace: z.string().min(1),
-  environment_id: z.string().min(1).optional(),
-  runtime_id: z.string().min(1).optional(),
 });
 
 const rootFsSuggestBodySchema = fsSuggestRequestSchema.extend({
   roots: z.array(z.string().min(1)).min(1).max(32),
-  environment_id: z.string().min(1).optional(),
-  runtime_id: z.string().min(1).optional(),
 });
 
 const detailsSchema = z.array(z.object({ path: z.string(), message: z.string() }));
@@ -131,25 +121,45 @@ const FS_ACTIONS = [
 type FsAction = (typeof FS_ACTIONS)[number];
 const FS_TAIL_PREFIX = 'fs:';
 
-function acquireSessionFs(
-  core: Scope,
-  sessionId: string,
-  environmentId: string,
-  required: readonly EnvironmentCapability[],
-): EnvironmentFsScope {
+interface FsScope extends EnvironmentReadStreamSource {
+  readonly fs: IWorkspaceFsService;
+  readonly environmentId: string;
+  readonly lease: EnvironmentLease;
+}
+
+function acquireSessionFs(core: Scope, sessionId: string, required: readonly EnvironmentCapability[]): FsScope {
   const session = getLiveSessionById(core.accessor, sessionId);
   if (session === undefined) throw new Error2(ErrorCodes.SESSION_NOT_FOUND, `session ${sessionId} does not exist`);
-  const context = session.accessor.get(ISessionContext);
-  const workspace = session.accessor.get(ISessionWorkspaceContext);
-  return createEnvironmentFs(core.accessor, context.workspaceId, workspace, environmentId, required);
+  const workdir = session.accessor.get(ISessionWorkdir);
+  const lease = core.accessor.get(IEnvironmentService).acquire({ environmentId: workdir.environmentId }, required);
+  return { fs: workdir.fs, hostFs: lease.environment.fs!, lease, environmentId: workdir.environmentId };
+}
+
+function acquireLocalRootedFs(
+  core: Scope,
+  workspaceId: string,
+  roots: { readonly workDir: string; readonly additionalDirs: readonly string[] },
+  required: readonly EnvironmentCapability[],
+): FsScope {
+  const environments = core.accessor.get(IEnvironmentService);
+  const lease = environments.acquire({ environmentId: LOCAL_ENVIRONMENT_ID }, required);
+  try {
+    const hostFs = lease.environment.fs!;
+    const context = { workspaceId, cwd: roots.workDir };
+    const git = new WorkspaceGitService(context, { current: core.accessor.get(IGitService), onDidChange: Event.None as Event<void> });
+    const fs = new WorkspaceFsService(context, { additionalDirs: roots.additionalDirs }, hostFs, environments, core.accessor.get(ITelemetryService), git);
+    return { fs, hostFs, lease, environmentId: LOCAL_ENVIRONMENT_ID };
+  } catch (error) {
+    lease.dispose();
+    throw error;
+  }
 }
 
 async function resolveWorkspaceFs(
   core: Scope,
   ref: string,
-  environmentId: string,
   required: readonly EnvironmentCapability[],
-): Promise<EnvironmentFsScope | undefined> {
+): Promise<FsScope | undefined> {
   const workspaces = core.accessor.get(IWorkspaceService);
   let ws = await workspaces.get(ref);
   if (ws === undefined) {
@@ -163,7 +173,7 @@ async function resolveWorkspaceFs(
   await core.accessor
     .get(IWorkspaceInstanceManager)
     .getOrCreate({ workspaceId: ws.id, root: ws.root });
-  return createEnvironmentFs(core.accessor, ws.id, { workDir: ws.root }, environmentId, required);
+  return acquireLocalRootedFs(core, ws.id, { workDir: ws.root, additionalDirs: [] }, required);
 }
 
 export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
@@ -212,33 +222,25 @@ export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
       const fsAction = action as FsAction;
 
       const session = await resumeSessionById(core.accessor, session_id);
-      let environmentFs: EnvironmentFsScope | undefined;
+      let environmentFs: FsScope | undefined;
       try {
-        const result = z.object({ environment_id: z.string().min(1).optional(), runtime_id: z.string().min(1).optional() }).passthrough().safeParse(req.body ?? {});
-        if (!result.success) {
-          reply.send(errEnvelope(ErrorCode.VALIDATION_FAILED, 'request body must be an object', req.id));
-          return;
-        }
-        const { environment_id, runtime_id, ...request } = result.data;
-        const environmentId = resolvedEnvironmentId({ environment_id, runtime_id }, 'local');
-        req.body = request;
         const required: EnvironmentCapability[] = ['fs'];
         if (fsAction === 'search' || fsAction === 'grep' || fsAction === 'git_status' || fsAction === 'diff') {
           required.push('process');
         }
         environmentFs = session === undefined && fsAction === 'search'
-          ? await resolveWorkspaceFs(core, session_id, environmentId, required)
+          ? await resolveWorkspaceFs(core, session_id, required)
           : session === undefined
             ? undefined
-            : acquireSessionFs(core, session_id, environmentId, required);
+            : acquireSessionFs(core, session_id, required);
         if (environmentFs === undefined) {
           reply.send(
             errEnvelope(ErrorCode.SESSION_NOT_FOUND, `session ${session_id} does not exist`, req.id),
           );
           return;
         }
-        if ((fsAction === 'open' || fsAction === 'open-in' || fsAction === 'reveal') && environmentFs.lease.environment.identity.environmentId !== 'local') {
-          throw new Error(`filesystem action ${fsAction} is unavailable on environment ${environmentId}`);
+        if ((fsAction === 'open' || fsAction === 'open-in' || fsAction === 'reveal') && environmentFs.environmentId !== LOCAL_ENVIRONMENT_ID) {
+          throw new Error(`filesystem action ${fsAction} is unavailable on environment ${environmentFs.environmentId}`);
         }
         switch (fsAction) {
           case 'list':
@@ -313,10 +315,10 @@ export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
       operationId: 'workspaceFsSearch',
     },
     async (req, reply) => {
-      const { workspace, environment_id, runtime_id, ...searchRequest } = req.body;
-      let environmentFs: EnvironmentFsScope | undefined;
+      const { workspace, ...searchRequest } = req.body;
+      let environmentFs: FsScope | undefined;
       try {
-        environmentFs = await resolveWorkspaceFs(core, workspace, resolvedEnvironmentId({ environment_id, runtime_id }, 'local'), ['fs', 'process']);
+        environmentFs = await resolveWorkspaceFs(core, workspace, ['fs', 'process']);
         if (environmentFs === undefined) {
           reply.send(
             errEnvelope(
@@ -360,10 +362,10 @@ export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
       operationId: 'workspaceFsSuggest',
     },
     async (req, reply) => {
-      const { workspace, environment_id, runtime_id, ...suggestRequest } = req.body;
-      let environmentFs: EnvironmentFsScope | undefined;
+      const { workspace, ...suggestRequest } = req.body;
+      let environmentFs: FsScope | undefined;
       try {
-        environmentFs = await resolveWorkspaceFs(core, workspace, resolvedEnvironmentId({ environment_id, runtime_id }, 'local'), ['fs']);
+        environmentFs = await resolveWorkspaceFs(core, workspace, ['fs']);
         if (environmentFs === undefined) {
           reply.send(
             errEnvelope(
@@ -407,7 +409,7 @@ export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
       operationId: 'fsSuggest',
     },
     async (req, reply) => {
-      const { roots, environment_id, runtime_id, ...suggestRequest } = req.body;
+      const { roots, ...suggestRequest } = req.body;
       for (const root of roots) {
         if (!isAbsolute(root)) {
           reply.send(
@@ -416,12 +418,11 @@ export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
           return;
         }
       }
-      const environmentId = resolvedEnvironmentId({ environment_id, runtime_id }, 'local');
       const fsRoots = { workDir: roots[0]!, additionalDirs: roots.slice(1) };
-      let environmentFs: EnvironmentFsScope | undefined;
+      let environmentFs: FsScope | undefined;
       try {
-        environmentFs = createEnvironmentFs(core.accessor, encodeWorkDirKey(fsRoots.workDir), fsRoots, environmentId, ['fs']);
-        for (const root of [environmentFs.roots.workDir, ...environmentFs.roots.additionalDirs]) {
+        environmentFs = acquireLocalRootedFs(core, encodeWorkDirKey(fsRoots.workDir), fsRoots, ['fs']);
+        for (const root of [fsRoots.workDir, ...fsRoots.additionalDirs]) {
           let stat;
           try {
             stat = await environmentFs.hostFs.stat(root);
@@ -455,7 +456,6 @@ export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
     {
       method: 'GET',
       path: '/sessions/{session_id}/fs/*',
-      querystring: fsDownloadQuerySchema,
       rawResponse: {
         200: { type: 'string', format: 'binary' },
       },
@@ -497,9 +497,9 @@ export function registerFsRoutes(app: FsRouteHost, core: Scope): void {
       }
 
       let resolved: Awaited<ReturnType<IWorkspaceFsService['resolveDownload']>>;
-      let environmentFs: EnvironmentFsScope | undefined;
+      let environmentFs: FsScope | undefined;
       try {
-        environmentFs = acquireSessionFs(core, session_id, resolvedEnvironmentId(req.query, 'local'), ['fs']);
+        environmentFs = acquireSessionFs(core, session_id, ['fs']);
         resolved = await environmentFs.fs.resolveDownload(relPath);
       } catch (error) {
         environmentFs?.lease.dispose();

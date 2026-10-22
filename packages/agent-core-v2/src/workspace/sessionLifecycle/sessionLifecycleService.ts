@@ -68,6 +68,8 @@ import { ISessionSkillCatalogData } from '#/features/skill/session/skillCatalogD
 import { ISessionInstructionsProvider } from '#/session/sessionInstructions/instructionsProvider';
 import { ISessionMcpHandle } from '#/session/mcp/sessionMcpHandle';
 import { ISessionWorkspaceInfo } from '#/session/workspaceInfo/workspaceInfo';
+import { ISessionWorkdir } from '#/session/workdir/workdir';
+import { IWorkspaceFsService } from '#/workspace/workspaceFs/fs';
 import {
   drainSessionMetadataWrites,
   encodeSessionMeta,
@@ -207,6 +209,7 @@ export class SessionLifecycleService extends Disposable implements ISessionLifec
     @IWorkspaceSkillCatalog private readonly workspaceSkillCatalog: IWorkspaceSkillCatalog,
     @IWorkspaceInstructionsService private readonly workspaceInstructions: IWorkspaceInstructionsService,
     @IWorkspaceMcpService private readonly workspaceMcp: IWorkspaceMcpService,
+    @IWorkspaceFsService private readonly workspaceFs: IWorkspaceFsService,
     @IModelService private readonly models: IModelService,
     @IProviderService private readonly providers: IProviderService,
     private readonly environments: IEnvironmentService,
@@ -321,6 +324,11 @@ export class SessionLifecycleService extends Disposable implements ISessionLifec
             [ISessionInstructionsProvider, (workdir?.instructions ?? this.workspaceInstructions).sessionProvider()],
             [ISessionMcpHandle, this.workspaceMcp.sessionHandle()],
             [ISessionWorkspaceInfo, dirs.sessionInfo()],
+            [ISessionWorkdir, {
+              _serviceBrand: undefined,
+              environmentId: environment?.environmentId ?? LOCAL_ENVIRONMENT_ID,
+              fs: workdir?.fs ?? this.workspaceFs,
+            }],
             ...sessionEphemeralMcpServersSeed(opts.mcpServers ?? {}),
           ],
           configureContainer: (container) => {

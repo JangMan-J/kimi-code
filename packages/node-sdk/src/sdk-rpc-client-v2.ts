@@ -144,10 +144,6 @@ import { ITowerRateLimitService } from '@moonshot-ai/agent-core-v2/features/towe
 import { readTowerStatusSummary } from '@moonshot-ai/agent-core-v2/features/tower/tools/status/statusReader';
 import { loadMcpServers } from '@moonshot-ai/agent-core-v2/app/mcpConfig/configLoader';
 import { fsSuggestRequestSchema } from '@moonshot-ai/agent-core-v2/workspace/workspaceFs/fs';
-import {
-  createEnvironmentFs,
-  type EnvironmentFsScope,
-} from '@moonshot-ai/agent-core-v2/workspace/workspaceFs/environmentFs';
 import { ILogService } from '@moonshot-ai/agent-core-v2/_base/log/log';
 import { IAppendLogStore } from '@moonshot-ai/agent-core-v2/persistence/interface/appendLogStore';
 import { ISessionLockService } from '@moonshot-ai/agent-core-v2/persistence/interface/sessionLock';
@@ -197,6 +193,7 @@ import {
   IProviderService,
   ISessionBtwService,
   ISessionContext,
+  ISessionWorkdir,
   ISessionExportService,
   ISessionIndex,
   ISessionIndexMirror,
@@ -724,7 +721,7 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
   /**
    * The same engine suggest the kap-server `fs:suggest` routes serve (fuzzy
    * scoring, directories included, gitignore respected), either through the
-   * workspace handler's local fs or an explicitly selected environment.
+   * workspace handler's local fs or a live session's own working directory.
    */
   override async suggestFiles(workDir: string, input: SuggestFilesInput): Promise<SuggestFilesResult | undefined> {
     const parsed = fsSuggestRequestSchema.safeParse({
@@ -741,35 +738,19 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
         `suggestFiles ${where}${issue?.message ?? 'invalid input'}`,
       );
     }
-    const handler = await this.workspaceHandlerFor('suggestFiles', workDir);
-    let environmentFs: EnvironmentFsScope | undefined;
-    try {
-      const fs =
-        input.environment === undefined || input.environment.environmentId === 'local'
-          ? handler.program.fs
-          : (environmentFs = createEnvironmentFs(
-              this.engineAccessor,
-              handler.id,
-              {
-                workDir: input.environment.cwd ?? workDir,
-                additionalDirs: input.additionalDirs,
-              },
-              input.environment.environmentId,
-              ['fs'],
-            )).fs;
-      const result = await fs.suggest(parsed.data);
-      return {
-        items: result.items.map((item) => ({
-          path: item.path,
-          name: item.name,
-          kind: item.kind,
-          matchPositions: item.match_positions,
-        })),
-        truncated: result.truncated,
-      };
-    } finally {
-      environmentFs?.lease.dispose();
-    }
+    const fs = input.sessionId === undefined
+      ? (await this.workspaceHandlerFor('suggestFiles', workDir)).program.fs
+      : this.requireLiveSession(input.sessionId).accessor.get(ISessionWorkdir).fs;
+    const result = await fs.suggest(parsed.data);
+    return {
+      items: result.items.map((item) => ({
+        path: item.path,
+        name: item.name,
+        kind: item.kind,
+        matchPositions: item.match_positions,
+      })),
+      truncated: result.truncated,
+    };
   }
 
   /**

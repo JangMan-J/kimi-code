@@ -1758,7 +1758,7 @@ On success, `data` is `{ project_root, config_path, additional_dirs, persisted }
 
 ### File system
 
-In-session file operations go through `POST /api/v1/sessions/{session_id}/fs:{action}` with JSON bodies; actions are `list` / `read` / `list_many` / `stat` / `stat_many` / `mkdir` / `search` / `grep` / `git_status` / `diff` / `open` / `open-in` / `reveal`. Every action body also accepts an optional `environment_id` (string, default `local`) selecting the environment that executes the operation; `open`, `open-in`, and `reveal` only work on the `local` environment. In addition:
+In-session file operations go through `POST /api/v1/sessions/{session_id}/fs:{action}` with JSON bodies; actions are `list` / `read` / `list_many` / `stat` / `stat_many` / `mkdir` / `search` / `grep` / `git_status` / `diff` / `open` / `open-in` / `reveal`. Actions run on the environment the session was created on; `open`, `open-in`, and `reveal` only work for sessions on the `local` environment. In addition:
 
 | Method and path | Description |
 | --- | --- |
@@ -2011,7 +2011,6 @@ Downloads a file from the session workspace; `{path}` is the workspace-relative 
 | --- | --- | --- | --- |
 | `session_id` | path | string | **Required.** Session id |
 | `path` | path | string | **Required.** Workspace-relative file path plus the `:download` suffix |
-| `environment_id` | query | string | Environment to read from. Default `local` |
 
 - `40001`: missing or empty path
 - `40401`: session not found
@@ -2030,7 +2029,6 @@ The session-less form of `fs:search`: the workspace travels in the body instead 
 | `include_globs` | body | string[] | Only paths matching one of these globs |
 | `exclude_globs` | body | string[] | Skip paths matching these globs |
 | `follow_gitignore` | body | boolean | Skip gitignored paths. Default `true` |
-| `environment_id` | body | string | Environment to search on. Default `local` |
 
 On success, `data` is `{ items, truncated }` with the same hit shape and ordering as `fs:search`.
 
@@ -2050,7 +2048,6 @@ Suggests file and directory completion candidates in a workspace without a sessi
 | `show_hidden` | body | boolean | Include dotfiles. Default `false` |
 | `include_globs` | body | string[] | Only paths matching one of these globs |
 | `exclude_globs` | body | string[] | Skip paths matching these globs |
-| `environment_id` | body | string | Environment to complete on. Default `local` |
 
 On success, `data` is `{ items, truncated }` where each item is `{ path, name, kind, score, match_positions }`, the same hit shape as `fs:search`.
 
@@ -2341,7 +2338,7 @@ Lists every MCP server the management plane knows about; the second route return
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
-| `name` | path | string | **Required (get only).** Environment name of the server |
+| `name` | path | string | **Required (get only).** Runtime name of the server |
 | `cwd` | query | string | Include the project layers of this (trusted) directory |
 
 On success, `data` is an array of managed servers (a single object for the get route), each `{ name, config, source, origin, mutable, plugin? }`:
@@ -2368,7 +2365,7 @@ Probes a real connection to one server and never persists anything. Pass either 
 
 | Parameter | In | Type | Description |
 | --- | --- | --- | --- |
-| `name` | body | string | Environment name of a registry entry |
+| `name` | body | string | Runtime name of a registry entry |
 | `server` | body | object | Inline server config to probe as-is |
 | `cwd` | body | string | Project layers join the resolution; also the stdio working directory |
 

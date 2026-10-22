@@ -86,40 +86,16 @@ describe('server-v2 /api/v1 fs routes', () => {
     return body.data.id;
   }
 
-  async function postFs<T>(id: string, action: string, body: unknown, environmentId = 'local'): Promise<Envelope<T>> {
+  async function postFs<T>(id: string, action: string, body: unknown): Promise<Envelope<T>> {
     const res = await fetch(`${base}/api/v1/sessions/${id}/fs:${action}`, {
       method: 'POST',
       headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ environment_id: environmentId, ...(body as object) }),
+      body: JSON.stringify(body),
     } as never);
     return (await res.json()) as Envelope<T>;
   }
 
-  async function addRemoteFsEnvironment(options: {
-    environmentId: string;
-    capabilities: readonly EnvironmentCapability[];
-    workDir: string;
-  }): Promise<{ dispose: () => Promise<void> }> {
-    return server!.core.accessor.get(IEnvironmentService).addProvider({
-      id: `${options.environmentId}-provider`,
-      attach: async (host) => {
-        const environment = Object.assign(
-          new FakeEnvironment(
-            { environmentId: options.environmentId, generation: 'remote-generation' },
-            {
-              capabilities: options.capabilities,
-              mapWorkspaceRoots: () => ({ workDir: options.workDir, additionalDirs: [] }),
-            },
-          ),
-          { fs: new HostFileSystem(), process: new HostProcessService() },
-        );
-        const registration = host.registerEnvironment(environment);
-        return { dispose: () => registration.remove() };
-      },
-    });
-  }
-
-  it('defaults fs actions to the local environment when environment_id is omitted', async () => {
+  it('serves fs actions from a local session workspace', async () => {
     await writeFile(join(work!, 'a.txt'), 'hello');
     const id = await createSession();
     const res = await fetch(`${base}/api/v1/sessions/${id}/fs:stat`, {
@@ -164,37 +140,41 @@ describe('server-v2 /api/v1 fs routes', () => {
     expect(body.data.size).toBe(11);
   });
 
-  it('fs:read uses the selected non-local environment and mapped workspace root', async () => {
+  it('serves fs actions and downloads from the environment the session was created on', async () => {
     await writeFile(join(work!, 'selected.txt'), 'local');
-    const remote = await mkdtemp(join(tmpdir(), 'kimi-server-v2-fs-remote-'));
+    const remote = await realpath(await mkdtemp(join(tmpdir(), 'kimi-server-v2-fs-remote-')));
     await writeFile(join(remote, 'selected.txt'), 'remote');
-    const id = await createSession();
     const provider = await server!.core.accessor.get(IEnvironmentService).addProvider({
-      id: 'remote-test-provider',
+      id: 'remote-session-provider',
       attach: async (host) => {
         const environment = Object.assign(
           new FakeEnvironment(
-            { environmentId: 'remote-test', generation: 'remote-generation' },
-            {
-              capabilities: ['fs'],
-              mapWorkspaceRoots: () => ({ workDir: remote, additionalDirs: [] }),
-            },
+            { environmentId: 'remote-session', generation: 'remote-generation' },
+            { capabilities: ['fs', 'process'] },
           ),
-          { fs: new HostFileSystem() },
+          { fs: new HostFileSystem(), process: new HostProcessService() },
         );
         const registration = host.registerEnvironment(environment);
         return { dispose: () => registration.remove() };
       },
     });
     try {
-      const body = await postFs<{ content: string }>(
-        id,
-        'read',
-        { path: 'selected.txt' },
-        'remote-test',
-      );
+      const created = await fetch(`${base}/api/v1/sessions`, {
+        method: 'POST',
+        headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
+        body: JSON.stringify({ metadata: { cwd: work as string }, environment_id: 'remote-session', environment_cwd: remote }),
+      } as never);
+      const session = (await created.json()) as Envelope<{ id: string }>;
+      expect(session.code).toBe(0);
+      const body = await postFs<{ content: string }>(session.data.id, 'read', { path: 'selected.txt' });
       expect(body.code).toBe(0);
       expect(body.data.content).toBe('remote');
+      const download = await fetch(`${base}/api/v1/sessions/${session.data.id}/fs/selected.txt:download`, {
+        headers: authHeaders(server as RunningServer),
+      } as never);
+      expect(await download.text()).toBe('remote');
+      const opened = await postFs<null>(session.data.id, 'reveal', { path: 'selected.txt' });
+      expect(opened.code).not.toBe(0);
     } finally {
       await provider.dispose();
       await rm(remote, { recursive: true, force: true });
@@ -205,100 +185,6 @@ describe('server-v2 /api/v1 fs routes', () => {
     const id = await createSession();
     const body = await postFs<null>(id, 'read', { path: '.' });
     expect(body.code).toBe(ErrorCode.FS_IS_DIRECTORY);
-  });
-
-  it.each<[
-    string,
-    readonly EnvironmentCapability[],
-    (alias: string, remote: string) => Promise<void>,
-  ]>([
-    [
-      'fs:read',
-      ['fs'],
-      async (alias, remote) => {
-        await writeFile(join(work!, 'selected.txt'), 'local');
-        await writeFile(join(remote, 'selected.txt'), 'remote');
-        const id = await createSession();
-        const res = await fetch(`${base}/api/v1/sessions/${id}/fs:read`, {
-          method: 'POST',
-          headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-          body: JSON.stringify({ runtime_id: alias, path: 'selected.txt' }),
-        } as never);
-        const body = (await res.json()) as Envelope<{ content: string }>;
-        expect(body.code).toBe(0);
-        expect(body.data.content).toBe('remote');
-      },
-    ],
-    [
-      'download',
-      ['fs'],
-      async (alias, remote) => {
-        await writeFile(join(remote, 'dl.txt'), 'remote-download');
-        const id = await createSession();
-        const res = await fetch(`${base}/api/v1/sessions/${id}/fs/dl.txt:download?runtime_id=${alias}`, {
-          headers: authHeaders(server as RunningServer),
-        } as never);
-        expect(res.status).toBe(200);
-        expect(await res.text()).toBe('remote-download');
-      },
-    ],
-    [
-      'workspace fs:search',
-      ['fs', 'process'],
-      async (alias, remote) => {
-        await writeFile(join(remote, 'remote-only-search.ts'), '');
-        const res = await fetch(`${base}/api/v1/workspace/fs:search`, {
-          method: 'POST',
-          headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-          body: JSON.stringify({ workspace: work, query: 'remote-only-search', runtime_id: alias }),
-        } as never);
-        const body = (await res.json()) as Envelope<{ items: { path: string }[]; truncated: boolean }>;
-        expect(body.code).toBe(0);
-        expect(body.data.items.map((i) => i.path)).toContain('remote-only-search.ts');
-      },
-    ],
-    [
-      'workspace fs:suggest',
-      ['fs'],
-      async (alias, remote) => {
-        await writeFile(join(remote, 'remote-only-suggest.ts'), '');
-        const res = await fetch(`${base}/api/v1/workspace/fs:suggest`, {
-          method: 'POST',
-          headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-          body: JSON.stringify({ workspace: work, query: 'remote-only-suggest', runtime_id: alias }),
-        } as never);
-        const body = (await res.json()) as Envelope<{ items: SuggestItemWire[]; truncated: boolean }>;
-        expect(body.code).toBe(0);
-        expect(body.data.items.map((i) => i.path)).toContain('remote-only-suggest.ts');
-      },
-    ],
-    [
-      'fs:suggest',
-      ['fs'],
-      async (alias, remote) => {
-        await writeFile(join(remote, 'remote-only-alias.ts'), '');
-        const body = await postRootSuggest<{ items: SuggestItemWire[] }>({
-          roots: [remote],
-          query: 'remote-only-alias',
-          runtime_id: alias,
-        });
-        expect(body.code).toBe(0);
-        expect(body.data.items.map((i) => i.path)).toContain('remote-only-alias.ts');
-      },
-    ],
-  ])('honors the deprecated runtime_id alias for %s', async (_route, capabilities, run) => {
-    const remote = await mkdtemp(join(tmpdir(), 'kimi-server-v2-fs-remote-'));
-    const provider = await addRemoteFsEnvironment({
-      environmentId: 'remote-alias',
-      capabilities,
-      workDir: remote,
-    });
-    try {
-      await expect(run('remote-alias', remote)).resolves.toBeUndefined();
-    } finally {
-      await provider.dispose();
-      await rm(remote, { recursive: true, force: true });
-    }
   });
 
   it('fs:read maps a permission-denied host error to FS_PERMISSION_DENIED', async () => {
@@ -577,7 +463,7 @@ describe('server-v2 /api/v1 fs routes', () => {
       const body = await postFs<null>(id, 'read', { path: 'docs/secret.txt' });
       expect(body.code).toBe(ErrorCode.FS_PATH_ESCAPES_SESSION);
 
-      const res = await fetch(`${base}/api/v1/sessions/${id}/fs/docs/secret.txt:download?environment_id=local`, {
+      const res = await fetch(`${base}/api/v1/sessions/${id}/fs/docs/secret.txt:download`, {
         headers: authHeaders(server as RunningServer),
       } as never);
       const downloadBody = (await res.json()) as Envelope<null>;
@@ -614,7 +500,7 @@ describe('server-v2 /api/v1 fs routes', () => {
     const res = await fetch(`${base}/api/v1/workspace/fs:search`, {
       method: 'POST',
       headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ environment_id: 'local', ...(body as object) }),
+      body: JSON.stringify(body),
     } as never);
     return (await res.json()) as Envelope<T>;
   }
@@ -657,7 +543,7 @@ describe('server-v2 /api/v1 fs routes', () => {
     expect(body.data.items.map((i) => i.path)).toContain('eta.ts');
   });
 
-  it('workspace fs:search defaults to the local environment when environment_id is omitted', async () => {
+  it('workspace fs:search serves the local workspace', async () => {
     await writeFile(join(work!, 'theta.ts'), '');
     const res = await fetch(`${base}/api/v1/workspace/fs:search`, {
       method: 'POST',
@@ -691,7 +577,7 @@ describe('server-v2 /api/v1 fs routes', () => {
     const res = await fetch(`${base}/api/v1/workspace/fs:suggest`, {
       method: 'POST',
       headers: authHeaders(server as RunningServer, { 'content-type': 'application/json' }),
-      body: JSON.stringify({ environment_id: 'local', ...(body as object) }),
+      body: JSON.stringify(body),
     } as never);
     return (await res.json()) as Envelope<T>;
   }
@@ -782,7 +668,7 @@ describe('server-v2 /api/v1 fs routes', () => {
     expect(shown.data.items.map((i) => i.path)).toContain('.theta.ts');
   });
 
-  it('workspace fs:suggest defaults to the local environment when environment_id is omitted', async () => {
+  it('workspace fs:suggest serves the local workspace', async () => {
     await writeFile(join(work!, 'iota.ts'), '');
     const res = await fetch(`${base}/api/v1/workspace/fs:suggest`, {
       method: 'POST',
@@ -1010,47 +896,5 @@ describe('server-v2 /api/v1 fs routes', () => {
   it('fs:suggest rejects a missing query field with VALIDATION_FAILED', async () => {
     const body = await postRootSuggest<null>({ roots: [work] });
     expect(body.code).toBe(ErrorCode.VALIDATION_FAILED);
-  });
-
-  it('fs:suggest maps an unknown environment to ENVIRONMENT_NOT_FOUND', async () => {
-    const body = await postRootSuggest<null>({
-      roots: [work],
-      query: 'x',
-      environment_id: 'no-such-environment',
-    });
-    expect(body.code).toBe(ErrorCode.ENVIRONMENT_NOT_FOUND);
-  });
-
-  it('fs:suggest resolves a non-local environment through its registered workspace instead of the root path', async () => {
-    const remote = await mkdtemp(join(tmpdir(), 'kimi-server-v2-fs-remote-'));
-    await writeFile(join(remote, 'remote-only.ts'), '');
-    const id = await createSession();
-    expect(id).toBeTruthy();
-    const provider = await server!.core.accessor.get(IEnvironmentService).addProvider({
-      id: 'remote-suggest-provider',
-      attach: async (host) => {
-        const environment = Object.assign(
-          new FakeEnvironment(
-            { environmentId: 'remote-suggest', generation: 'remote-generation' },
-            { capabilities: ['fs'] },
-          ),
-          { fs: new HostFileSystem() },
-        );
-        const registration = host.registerEnvironment(environment);
-        return { dispose: () => registration.remove() };
-      },
-    });
-    try {
-      const body = await postRootSuggest<{ items: SuggestItemWire[] }>({
-        roots: [remote],
-        query: 'remote-only',
-        environment_id: 'remote-suggest',
-      });
-      expect(body.code).toBe(0);
-      expect(body.data.items.map((i) => i.path)).toContain('remote-only.ts');
-    } finally {
-      await provider.dispose();
-      await rm(remote, { recursive: true, force: true });
-    }
   });
 });

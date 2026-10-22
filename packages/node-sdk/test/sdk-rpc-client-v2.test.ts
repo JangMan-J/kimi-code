@@ -1372,47 +1372,31 @@ key = "${titleOAuthRef.key}"
     }
   });
 
-  it('serves suggestFiles from the selected environment and its additional roots', async () => {
+  it('serves suggestFiles from a live remote session working directory', async () => {
     const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-v2-work-'));
     const remoteDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-v2-remote-'));
-    const additionalDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-v2-additional-'));
-    tempDirs.push(workDir, remoteDir, additionalDir);
+    tempDirs.push(workDir, remoteDir);
     await mkdir(join(workDir, 'src'), { recursive: true });
     await mkdir(join(remoteDir, 'src'), { recursive: true });
-    await mkdir(join(additionalDir, 'lib'), { recursive: true });
     await writeFile(join(workDir, 'src', 'local-only.ts'), 'local');
     await writeFile(join(remoteDir, 'src', 'app.ts'), 'remote');
-    await writeFile(join(additionalDir, 'lib', 'extra.ts'), 'extra');
     const { harness, client } = await makeEnvironmentHarness({ defaultCwd: remoteDir });
-    await attachFakeBoxEnvironment(client);
+    const provider = await attachFakeBoxEnvironment(client);
     try {
-      const matched = await harness.suggestFiles(workDir, {
-        query: 'app',
-        environment: { environmentId: 'fake-box', cwd: remoteDir },
-        additionalDirs: [additionalDir],
-      });
+      const session = await harness.createSession({ workDir, environmentId: 'fake-box' });
+      const matched = await harness.suggestFiles(workDir, { query: 'app', sessionId: session.id });
       expect(matched?.items).toContainEqual(
         expect.objectContaining({ kind: 'file', path: 'src/app.ts', name: 'app.ts' }),
       );
-      expect(matched?.items.some((item) => item.name === 'local-only.ts')).toBe(false);
+      const remoteOnly = await harness.suggestFiles(workDir, { query: 'local', sessionId: session.id });
+      expect(remoteOnly?.items.some((item) => item.name === 'local-only.ts')).toBe(false);
 
-      const additional = await harness.suggestFiles(workDir, {
-        query: 'extra',
-        environment: { environmentId: 'fake-box', cwd: remoteDir },
-        additionalDirs: [additionalDir],
-      });
-      expect(additional?.items).toContainEqual(
-        expect.objectContaining({ kind: 'file', name: 'extra.ts' }),
-      );
-
-      const explicitLocal = await harness.suggestFiles(workDir, {
-        query: 'local',
-        environment: { environmentId: 'local' },
-      });
-      expect(explicitLocal?.items).toContainEqual(
+      const local = await harness.suggestFiles(workDir, { query: 'local' });
+      expect(local?.items).toContainEqual(
         expect.objectContaining({ kind: 'file', path: 'src/local-only.ts' }),
       );
     } finally {
+      await provider.dispose();
       await harness.close();
       vi.unstubAllEnvs();
     }

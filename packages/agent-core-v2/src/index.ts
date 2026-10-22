@@ -306,6 +306,7 @@ export * from '#/session/sessionAgentProfileCatalog/agentProfileCatalogSeed';
 export * from '#/session/sessionAgentProfileCatalog/sessionAgentProfileCatalogService';
 export * from '#/session/sessionInstructions/instructionsProvider';
 export * from '#/session/workspaceInfo/workspaceInfo';
+export * from '#/session/workdir/workdir';
 export * from '#/workspace/workspaceDirs/workspaceDirs';
 export * from '#/workspace/workspaceDirs/workspaceDirsService';
 export * from '#/features/skill/workspace/workspaceSkillCatalog';

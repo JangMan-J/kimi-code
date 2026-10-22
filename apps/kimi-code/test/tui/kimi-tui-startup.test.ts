@@ -661,7 +661,7 @@ describe('KimiTUI startup', () => {
     expect((driver as unknown as { startupProgressLabel(): string }).startupProgressLabel()).toBe('Connecting to dev-box…');
   });
 
-  it('uses the resolved remote default for @ while the first session is still connecting', async () => {
+  it('offers no remote @ candidates while the first remote session is still connecting', async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => { release = resolve; });
     const session = makeSession();
@@ -678,28 +678,29 @@ describe('KimiTUI startup', () => {
       driver.refreshSlashCommandAutocomplete();
       const provider = providerSpy.mock.calls.at(-1)![0];
       await provider.getSuggestions(['@app'], 0, 4, { signal: new AbortController().signal });
-      expect(suggestFiles).toHaveBeenCalledWith('/tmp/proj-a', expect.objectContaining({ environment: { environmentId: 'dev-box', cwd: '/remote/work' } }));
+      expect(suggestFiles).not.toHaveBeenCalled();
     } finally {
       release();
       await (driver as unknown as { waitForSessionAssembly(): Promise<void> }).waitForSessionAssembly();
     }
   });
 
-  it('uses the bound environment for remote @ completion', async () => {
+  it('completes remote @ mentions through the live session', async () => {
     const suggestFiles = vi.fn(async () => ({
       items: [{ path: 'src/app.ts', name: 'app.ts', kind: 'file', matchPositions: [0] }],
       truncated: false,
     }));
-    const harness = makeHarness(makeSession(), { suggestFiles });
+    const session = makeSession();
+    const harness = makeHarness(session, { suggestFiles });
     const driver = makeDriver(harness, makeStartupInput({ model: 'k2' }));
     await driver.init();
+    await driver.setSession(session);
     driver.state.appState.environment = {
       environmentId: 'dev-box',
       type: 'ssh',
       status: 'ready',
       cwd: '/remote/work',
     };
-    driver.state.appState.additionalDirs = ['/remote/shared'];
     const setAutocompleteProvider = vi.spyOn(driver.state.editor, 'setAutocompleteProvider');
     driver.refreshSlashCommandAutocomplete();
     const provider = setAutocompleteProvider.mock.calls.at(-1)?.[0];
@@ -710,8 +711,7 @@ describe('KimiTUI startup', () => {
 
     expect(suggestFiles).toHaveBeenCalledWith(driver.state.appState.workDir, {
       query: 'app',
-      environment: { environmentId: 'dev-box', cwd: '/remote/work' },
-      additionalDirs: ['/remote/shared'],
+      sessionId: session.id,
     });
     expect(result?.items[0]).toMatchObject({ value: '@src/app.ts' });
   });

@@ -1758,7 +1758,7 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 
 ### 文件系统
 
-会话内文件操作走 `POST /api/v1/sessions/{session_id}/fs:{action}`，请求体为 JSON；动作包括 `list` / `read` / `list_many` / `stat` / `stat_many` / `mkdir` / `search` / `grep` / `git_status` / `diff` / `open` / `open-in` / `reveal`。每个动作的请求体还接受可选的 `environment_id`（string，默认 `local`），用于选择执行操作的环境；`open`、`open-in` 与 `reveal` 仅在 `local` 环境上可用。另有：
+会话内文件操作走 `POST /api/v1/sessions/{session_id}/fs:{action}`，请求体为 JSON；动作包括 `list` / `read` / `list_many` / `stat` / `stat_many` / `mkdir` / `search` / `grep` / `git_status` / `diff` / `open` / `open-in` / `reveal`。动作在会话创建时所在的环境上执行；`open`、`open-in` 与 `reveal` 仅对 `local` 环境上的会话可用。另有：
 
 | 方法与路径 | 说明 |
 | --- | --- |
@@ -2011,7 +2011,6 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 | --- | --- | --- | --- |
 | `session_id` | path | string | **必填。** 会话 id |
 | `path` | path | string | **必填。** 相对于工作区的文件路径，加 `:download` 后缀 |
-| `environment_id` | query | string | 从哪个环境读取。默认 `local` |
 
 - `40001`：路径缺失或为空
 - `40401`：会话不存在
@@ -2030,7 +2029,6 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 | `include_globs` | body | string[] | 只保留匹配这些 glob 之一的路径 |
 | `exclude_globs` | body | string[] | 跳过匹配这些 glob 的路径 |
 | `follow_gitignore` | body | boolean | 跳过 gitignore 的路径。默认 `true` |
-| `environment_id` | body | string | 在哪个环境上搜索。默认 `local` |
 
 成功时 `data` 为 `{ items, truncated }`，命中结构与排序同 `fs:search`。
 
@@ -2050,7 +2048,6 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 | `show_hidden` | body | boolean | 包含点文件。默认 `false` |
 | `include_globs` | body | string[] | 只保留匹配这些 glob 之一的路径 |
 | `exclude_globs` | body | string[] | 跳过匹配这些 glob 的路径 |
-| `environment_id` | body | string | 在哪个环境上补全。默认 `local` |
 
 成功时 `data` 为 `{ items, truncated }`，每项为 `{ path, name, kind, score, match_positions }`，命中结构同 `fs:search`。
 

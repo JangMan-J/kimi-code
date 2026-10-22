@@ -23,6 +23,7 @@ import type { IPluginAgentProfileLoader } from '#/workspace/workspaceAgentProfil
 import type { IUserAgentProfileLoader } from '#/workspace/workspaceAgentProfileLoader/userAgentProfileLoader';
 import type { IWorkspaceAgentProfileLoader } from '#/workspace/workspaceAgentProfileLoader/workspaceAgentProfileLoader';
 import type { IWorkspaceDirs } from '#/workspace/workspaceDirs/workspaceDirs';
+import type { IWorkspaceFsService } from '#/workspace/workspaceFs/fs';
 import type { IWorkspaceInstructionsService } from '#/workspace/workspaceInstructions/workspaceInstructions';
 import type { IWorkspaceMcpService } from '#/workspace/workspaceMcp/workspaceMcp';
 import type { IWorkspaceSkillCatalog } from '#/features/skill/workspace/workspaceSkillCatalog';
@@ -39,6 +40,7 @@ export interface ProgramSessionControllerInput {
   readonly skills: IWorkspaceSkillCatalog;
   readonly instructions: IWorkspaceInstructionsService;
   readonly mcp: IWorkspaceMcpService;
+  readonly fs: IWorkspaceFsService;
   readonly createWorkdir: (environmentId: string, cwd: string, contextKey: string) => ProgramWorkdir;
   readonly onDispose: () => void;
 }

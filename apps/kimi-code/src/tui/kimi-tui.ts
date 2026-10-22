@@ -564,16 +564,16 @@ export class KimiTUI {
             environmentId: this.options.startup.environment,
             cwd: this.options.startup.environmentCwd,
           };
-    const { environmentId, cwd } = environmentBinding;
+    const { environmentId } = environmentBinding;
     const remoteSuggest =
       environmentId === undefined || environmentId === 'local'
         ? undefined
         : async (query: string) => {
-            if (cwd === undefined) return undefined;
+            const session = this.session;
+            if (session === undefined) return undefined;
             const result = await this.harness.suggestFiles(this.state.appState.workDir, {
               query,
-              environment: { environmentId, cwd },
-              additionalDirs: this.state.appState.additionalDirs,
+              sessionId: session.id,
             });
             return result?.items;
           };
