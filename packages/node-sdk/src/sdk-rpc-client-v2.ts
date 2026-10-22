@@ -128,7 +128,7 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { encodeWorkDirKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
+import { encodeWorkDirKey, workspaceRootKey } from '@moonshot-ai/agent-core-v2/_base/utils/workdir-slug';
 import { McpConnectionManager } from '@moonshot-ai/agent-core-v2/mcpCore/connection-manager';
 import { ITowerRateLimitService } from '@moonshot-ai/agent-core-v2/features/tower/towerRateLimit';
 import { readTowerStatusSummary } from '@moonshot-ai/agent-core-v2/features/tower/tools/status/statusReader';
@@ -1253,8 +1253,25 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     };
   }
 
+  /**
+   * Directory view for `workDir` (already normalized): the hash bucket of the
+   * directory itself (plus its spelling aliases) unioned with every registered
+   * workspace whose dir set (root + additionalDirs) contains the directory —
+   * whether the directory is the workspace's primary or a member root.
+   */
   private async workspaceIdsFor(workDir: string): Promise<readonly string[]> {
-    return this.engineAccessor.get(IWorkspaceAliases).resolveAliasIds(encodeWorkDirKey(workDir));
+    const hashIds = await this.engineAccessor
+      .get(IWorkspaceAliases)
+      .resolveAliasIds(encodeWorkDirKey(workDir));
+    const rootKey = workspaceRootKey(workDir);
+    const memberIds = (await this.klient.global.workspaces.list())
+      .filter((workspace) =>
+        [workspace.root, ...workspace.additionalDirs].some(
+          (dir) => workspaceRootKey(dir) === rootKey,
+        ),
+      )
+      .map((workspace) => workspace.id);
+    return [...new Set([...hashIds, ...memberIds])];
   }
 
   override async listSessions(input: ListSessionsOptions = {}): Promise<readonly SessionSummary[]> {
