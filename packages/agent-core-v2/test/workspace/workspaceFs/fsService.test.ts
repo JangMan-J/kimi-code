@@ -1397,6 +1397,40 @@ describe('WorkspaceFsService.list', () => {
     });
     expect(result.items.map((i) => i.path).toSorted()).toEqual(['notes.md', 'sub']);
     expect(result.children_by_path?.['sub']?.map((i) => i.path)).toEqual(['sub/more.ts']);
+
+    const sub = await fs.list({
+      path: '/extra/sub',
+      depth: 1,
+      limit: 200,
+      show_hidden: false,
+      follow_gitignore: false,
+      sort: 'name_asc',
+      include_git_status: false,
+    });
+    expect(sub.items.map((i) => i.path)).toEqual(['sub/more.ts']);
+  });
+
+  it('anchors at an additional root whose path length ties with the workdir', async () => {
+    const fs = makeSession(
+      { '/repa/notes.md': '', 'src/a.ts': '' },
+      emptyHandler,
+      [],
+      defaultGitStub(),
+      [],
+      undefined,
+      {},
+      ['/repa'],
+    );
+    const result = await fs.list({
+      path: '/repa',
+      depth: 1,
+      limit: 200,
+      show_hidden: false,
+      follow_gitignore: false,
+      sort: 'name_asc',
+      include_git_status: false,
+    });
+    expect(result.items.map((i) => i.path)).toEqual(['notes.md']);
   });
 
   it('rejects absolute paths outside the workspace dir set', async () => {

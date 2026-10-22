@@ -141,8 +141,8 @@ export class WorkspaceFsService implements IWorkspaceFsService {
   async list(req: FsListRequest): Promise<FsListResponse> {
     const abs = await this.resolveWithin(req.path);
     const anchored = this.path.isAbsolute(req.path);
-    const rel = anchored ? '.' : this.toRel(abs);
-    const base = anchored ? abs : this.workDir;
+    const base = anchored ? this.anchorRoot(abs) : this.workDir;
+    const rel = anchored ? this.toRelFrom(base, abs) : this.toRel(abs);
     const absOf = (relPath: string): string =>
       relPath === '' || relPath === '.' ? base : this.path.join(base, relPath);
 
@@ -1215,6 +1215,23 @@ export class WorkspaceFsService implements IWorkspaceFsService {
     const cwd = this.workDir;
     if (abs === cwd) return '.';
     const rel = this.path.relative(cwd, abs);
+    if (rel === '') return '.';
+    return rel.split(this.path.separator).join('/');
+  }
+
+  private anchorRoot(abs: string): string {
+    const dirs = [this.workDir, ...this.workspaceDirs.additionalDirs.map((d) => this.path.resolve(d))];
+    let best: string | undefined;
+    for (const dir of dirs) {
+      if (!isInsideOrEqual(this.path, abs, dir)) continue;
+      if (best === undefined || dir.length > best.length) best = dir;
+    }
+    return best ?? this.workDir;
+  }
+
+  private toRelFrom(base: string, abs: string): string {
+    if (abs === base) return '.';
+    const rel = this.path.relative(base, abs);
     if (rel === '') return '.';
     return rel.split(this.path.separator).join('/');
   }
