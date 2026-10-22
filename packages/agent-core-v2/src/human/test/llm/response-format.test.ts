@@ -300,10 +300,9 @@ describe('requester toolMessageConversion', () => {
 
     const openAIClient = stubOpenAIClient(chatCompletionChunks);
     await createOpenAIRequester({
-      trait: { toolMessageConversion: 'extract_text' },
       clientFactory: openAIClient.clientFactory,
     }).generate(
-      { model },
+      { model, toolMessageConversion: 'extract_text' },
       { messages: toolMessages },
       { signal: new AbortController().signal },
     );
@@ -316,10 +315,9 @@ describe('requester toolMessageConversion', () => {
 
     const responsesClient = stubResponsesClient(responsesStreamEvents);
     await createOpenAIResponsesRequester({
-      trait: { toolMessageConversion: 'extract_text' },
       clientFactory: responsesClient.clientFactory,
     }).generate(
-      { model },
+      { model, toolMessageConversion: 'extract_text' },
       { messages: toolMessages },
       { signal: new AbortController().signal },
     );
