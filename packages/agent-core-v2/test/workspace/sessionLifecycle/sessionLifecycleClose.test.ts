@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { IEnvironmentService } from '#/app/environment/environment';
 import type { ISessionScopeHandle } from '#/_base/di/scope';
 import { EnvironmentRegistry } from '#/environment/environmentRegistry';
+import { InMemorySessionLockService } from '#/persistence/backends/memory/sessionLockService';
 import { SessionLifecycleService } from '#/workspace/sessionLifecycle/sessionLifecycleService';
 
 import { fakeEnvironment } from '../../environment/stubs';
@@ -16,6 +17,7 @@ function closeHarness(environments: EnvironmentRegistry): SessionLifecycleServic
     undefined as never,
     { drain: async () => {} } as never,
     { drainRetirements: async () => {} } as never,
+    new InMemorySessionLockService(),
     undefined as never,
     undefined as never,
     undefined as never,

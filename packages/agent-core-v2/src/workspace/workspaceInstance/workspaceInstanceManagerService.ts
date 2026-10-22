@@ -25,6 +25,7 @@ import { IWorkspaceService, type Workspace } from '#/app/workspace/workspace';
 import { IModelService } from '#/llm-adapter/model/model';
 import { IProviderService } from '#/llm-adapter/provider/provider';
 import { IAppendLogStore } from '#/persistence/interface/appendLogStore';
+import { ISessionLockService } from '#/persistence/interface/sessionLock';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
 import { IFileSystemStorageService } from '#/persistence/interface/storage';
 import { Error2, ErrorCodes } from '#/errors';
@@ -73,6 +74,7 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
     @ITelemetryService private readonly telemetry: ITelemetryService,
     @IFlagService private readonly flags: IFlagService,
     @IAppendLogStore private readonly appendLogStore: IAppendLogStore,
+    @ISessionLockService private readonly sessionLocks: ISessionLockService,
     @IAtomicDocumentStore private readonly docs: IAtomicDocumentStore,
     @IFileSystemStorageService private readonly storage: IFileSystemStorageService,
     @IEnvironmentService private readonly environments: IEnvironmentService,
@@ -198,6 +200,7 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
           this.index,
           this.indexMirror,
           this.appendLogStore,
+          this.sessionLocks,
           this.docs,
           this.storage,
           this.log,

@@ -20,6 +20,8 @@ import {
 } from '#/app/sessionIndex/sessionIndex';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IAtomicDocumentStore } from '#/persistence/interface/atomicDocumentStore';
+import { InMemorySessionLockService } from '#/persistence/backends/memory/sessionLockService';
+import { ISessionLockService } from '#/persistence/interface/sessionLock';
 import type { SessionMeta } from '#/session/sessionMetadata/sessionMetadata';
 import {
   setSessionArchived,
@@ -96,6 +98,7 @@ function coldPathAccessor(options: ColdPathOptions): ServicesAccessor {
       { record: (recorded: SessionSummary) => options.onMirrorRecord?.(recorded) },
     ],
     [IEventService, { publish: () => {} }],
+    [ISessionLockService, new InMemorySessionLockService()],
   ]);
 }
 
@@ -258,6 +261,7 @@ function sessionManagerResuming(sessionId: string): SessionManager {
     } as unknown as IHostFileSystem,
     { _serviceBrand: undefined, get: async () => undefined } as unknown as IAtomicDocumentStore,
     { _serviceBrand: undefined, scope: (name: string) => name } as unknown as IBootstrapService,
+    new InMemorySessionLockService(),
   );
 }
 

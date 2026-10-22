@@ -20,8 +20,8 @@ import {
   ITelemetryService,
   IWorkspaceService,
   InMemorySkillCatalog,
-  isError2,
   isUserActivatableSkillType,
+  reloadOnStale,
   resumeSessionById,
   MERGE_ALL_AVAILABLE_SKILLS_SECTION,
   SKILL_SOURCE_PRIORITY,
@@ -64,6 +64,10 @@ import { workspaceIdParamSchema } from '../protocol/rest-workspace';
 import type { SkillDescriptor } from '../protocol/skill';
 import { parseActionSuffix } from './action-suffix';
 import { sendEnvironmentError } from './environment';
+import {
+  sendMappedError as sendSessionMappedError,
+  sessionConflictErrors,
+} from './sessionErrors';
 
 interface SkillsRouteHost {
   get(
@@ -197,6 +201,7 @@ export function registerSkillsRoutes(app: SkillsRouteHost, core: Scope): void {
         [ErrorCode.FILE_NOT_FOUND]: {},
         [ErrorCode.ENVIRONMENT_NOT_FOUND]: {},
         [ErrorCode.ENVIRONMENT_UNAVAILABLE]: {},
+        ...sessionConflictErrors,
       },
       description: 'Activate a skill in a session (REST analogue of the /<skill> slash command)',
       tags: ['skills'],
@@ -220,93 +225,100 @@ export function registerSkillsRoutes(app: SkillsRouteHost, core: Scope): void {
         return;
       }
 
-      const resolved = await resolveActivatedSession(core, session_id, req.id);
-      if ('envelope' in resolved) {
-        reply.send(resolved.envelope);
-        return;
-      }
+      const activateOnce = async (): Promise<void> => {
+        const resolved = await resolveActivatedSession(core, session_id, req.id);
+        if ('envelope' in resolved) {
+          reply.send(resolved.envelope);
+          return;
+        }
 
-      let preparedMedia: PromptMediaPreparation | undefined;
-      try {
-        const attachments = req.body.attachments ?? [];
-        const attachmentParts: ContentPart[] = [];
-        if (attachments.length > 0) {
-          if (contentHasPathRefs(attachments)) {
-            const mainAgent = await ensureMainAgentHandle(resolved.handle);
-            if (mainAgent.accessor.get(IAgentEnvironmentBindingService).current.environmentId !== 'local') {
+        let preparedMedia: PromptMediaPreparation | undefined;
+        try {
+          const attachments = req.body.attachments ?? [];
+          const attachmentParts: ContentPart[] = [];
+          if (attachments.length > 0) {
+            if (contentHasPathRefs(attachments)) {
+              const mainAgent = await ensureMainAgentHandle(resolved.handle);
+              if (mainAgent.accessor.get(IAgentEnvironmentBindingService).current.environmentId !== 'local') {
+                throw new Error2(
+                  ErrorCodes.REQUEST_INVALID,
+                  'file attachments by server-local path require the local environment',
+                );
+              }
+            }
+            const catalog = resolved.handle.accessor.get(ISessionSkillCatalog);
+            await catalog.ready;
+            const skill = catalog.catalog.getSkill(parsed.id);
+            if (skill === undefined) {
+              throw new Error2(ErrorCodes.SKILL_NOT_FOUND, `Skill "${parsed.id}" was not found`);
+            }
+            if (!isUserActivatableSkillType(skill.metadata.type)) {
               throw new Error2(
-                ErrorCodes.REQUEST_INVALID,
-                'file attachments by server-local path require the local environment',
+                ErrorCodes.SKILL_TYPE_UNSUPPORTED,
+                `Skill "${skill.name}" cannot be activated by the user`,
               );
             }
-          }
-          const catalog = resolved.handle.accessor.get(ISessionSkillCatalog);
-          await catalog.ready;
-          const skill = catalog.catalog.getSkill(parsed.id);
-          if (skill === undefined) {
-            throw new Error2(ErrorCodes.SKILL_NOT_FOUND, `Skill "${parsed.id}" was not found`);
-          }
-          if (!isUserActivatableSkillType(skill.metadata.type)) {
-            throw new Error2(
-              ErrorCodes.SKILL_TYPE_UNSUPPORTED,
-              `Skill "${skill.name}" cannot be activated by the user`,
+            await assertPromptFileRefs(attachments, core.accessor.get(IFileService));
+            await assertPromptPathRefs(attachments);
+            const resolvedSessionMedia = await resolvePromptSessionMediaRefs(
+              attachments,
+              resolved.handle.accessor.get(ISessionMediaStore),
             );
+            const telemetry = core.accessor.get(ITelemetryService).withContext({ session_id });
+            const sessionDir = resolved.handle.accessor.get(ISessionContext).sessionDir;
+            const mainAgent = await ensureMainAgentHandle(resolved.handle);
+            const environmentMedia = environmentMediaTargets(
+              mainAgent.accessor.get(IAgentEnvironmentBindingService).current,
+              mainAgent.accessor.get(IAgentEnvironmentService),
+            );
+            try {
+              preparedMedia = await resolvePromptMediaFiles(
+                resolvedSessionMedia,
+                core.accessor.get(IFileService),
+                core.accessor.get(IBootstrapService).cacheDir,
+                {
+                  telemetry,
+                  providerType: mainAgent.accessor
+                    .get(IAgentProfileService)
+                    .getModelProviderType(),
+                  resolveOriginalsTarget: environmentMedia.resolveOriginalsTarget ?? (async () => ({
+                    dir: sessionMediaOriginalsDir(sessionDir),
+                  })),
+                  resolveAttachmentsTarget: environmentMedia.resolveAttachmentsTarget ?? (async () => ({
+                    dir: join(sessionDir, 'attachments'),
+                  })),
+                },
+              );
+            } finally {
+              environmentMedia.dispose();
+            }
+            attachmentParts.push(...contentToCoreParts(preparedMedia.content));
           }
-          await assertPromptFileRefs(attachments, core.accessor.get(IFileService));
-          await assertPromptPathRefs(attachments);
-          const resolvedSessionMedia = await resolvePromptSessionMediaRefs(
-            attachments,
-            resolved.handle.accessor.get(ISessionMediaStore),
-          );
-          const telemetry = core.accessor.get(ITelemetryService).withContext({ session_id });
-          const sessionDir = resolved.handle.accessor.get(ISessionContext).sessionDir;
           const mainAgent = await ensureMainAgentHandle(resolved.handle);
-          const environmentMedia = environmentMediaTargets(
-            mainAgent.accessor.get(IAgentEnvironmentBindingService).current,
-            mainAgent.accessor.get(IAgentEnvironmentService),
-          );
-          try {
-            preparedMedia = await resolvePromptMediaFiles(
-              resolvedSessionMedia,
-              core.accessor.get(IFileService),
-              core.accessor.get(IBootstrapService).cacheDir,
-              {
-                telemetry,
-                providerType: mainAgent.accessor
-                  .get(IAgentProfileService)
-                  .getModelProviderType(),
-                resolveOriginalsTarget: environmentMedia.resolveOriginalsTarget ?? (async () => ({
-                  dir: sessionMediaOriginalsDir(sessionDir),
-                })),
-                resolveAttachmentsTarget: environmentMedia.resolveAttachmentsTarget ?? (async () => ({
-                  dir: join(sessionDir, 'attachments'),
-                })),
-              },
-            );
-          } finally {
-            environmentMedia.dispose();
-          }
-          attachmentParts.push(...contentToCoreParts(preparedMedia.content));
+          const promptAttachments =
+            preparedMedia !== undefined && preparedMedia.attachments.length > 0
+              ? preparedMedia.attachments
+              : undefined;
+          await mainAgent.accessor.get(IAgentSkillService).activate({
+            name: parsed.id,
+            args: req.body.args,
+            clientMetadata: req.body.metadata === undefined ? undefined : [structuredClone(req.body.metadata)],
+            content: attachmentParts,
+            attachments: promptAttachments,
+          });
+          await preparedMedia?.discard();
+          preparedMedia = undefined;
+          requestLog(req)?.info({ session_id, skill_name: parsed.id }, 'skill activated');
+          reply.send(okEnvelope({ activated: true, skill_name: parsed.id }, req.id));
+        } catch (error) {
+          await preparedMedia?.discardStaged();
+          throw error;
         }
-        const mainAgent = await ensureMainAgentHandle(resolved.handle);
-        const promptAttachments =
-          preparedMedia !== undefined && preparedMedia.attachments.length > 0
-            ? preparedMedia.attachments
-            : undefined;
-        await mainAgent.accessor.get(IAgentSkillService).activate({
-          name: parsed.id,
-          args: req.body.args,
-          clientMetadata: req.body.metadata === undefined ? undefined : [structuredClone(req.body.metadata)],
-          content: attachmentParts,
-          attachments: promptAttachments,
-        });
-        await preparedMedia?.discard();
-        preparedMedia = undefined;
-        requestLog(req)?.info({ session_id, skill_name: parsed.id }, 'skill activated');
-        reply.send(okEnvelope({ activated: true, skill_name: parsed.id }, req.id));
+      };
+      try {
+        await reloadOnStale(core.accessor, session_id, activateOnce);
       } catch (error) {
-        await preparedMedia?.discardStaged();
-        sendMappedError(reply, req.id, error);
+        sendMappedError(reply, req, error);
       }
     },
   );
@@ -392,27 +404,9 @@ function toProtocolSkill(skill: SkillElement): SkillDescriptor {
 
 function sendMappedError(
   reply: { send(payload: unknown): unknown },
-  requestId: string,
-  err: unknown,
+  req: { id: string },
+  error: unknown,
 ): void {
-  if (sendEnvironmentError(reply, requestId, err)) return;
-  if (isError2(err)) {
-    switch (err.code) {
-      case ErrorCodes.SKILL_NOT_FOUND:
-      case ErrorCodes.SKILL_NAME_EMPTY:
-        reply.send(errEnvelope(ErrorCode.SKILL_NOT_FOUND, err.message, requestId, err.stack));
-        return;
-      case ErrorCodes.SKILL_TYPE_UNSUPPORTED:
-        reply.send(errEnvelope(ErrorCode.SKILL_NOT_ACTIVATABLE, err.message, requestId, err.stack));
-        return;
-      case ErrorCodes.FILE_NOT_FOUND:
-        reply.send(errEnvelope(ErrorCode.FILE_NOT_FOUND, err.message, requestId, err.stack));
-        return;
-      case ErrorCodes.REQUEST_INVALID:
-      case ErrorCodes.VALIDATION_FAILED:
-        reply.send(errEnvelope(ErrorCode.VALIDATION_FAILED, err.message, requestId, err.stack));
-        return;
-    }
-  }
-  throw err;
+  if (sendEnvironmentError(reply, req.id, error)) return;
+  sendSessionMappedError(reply, req, error);
 }

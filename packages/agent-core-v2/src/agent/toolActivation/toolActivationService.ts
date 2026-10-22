@@ -15,6 +15,7 @@ import { ISessionToolPolicyGate } from '#/session/sessionToolPolicyGate/sessionT
 import { IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
 
 import { IAgentToolActivationService } from './toolActivation';
+import { isToolAvailable } from './toolAvailability';
 
 export class AgentToolActivationService extends Service implements IAgentToolActivationService {
   declare readonly _serviceBrand: undefined;
@@ -62,18 +63,14 @@ export class AgentToolActivationService extends Service implements IAgentToolAct
       for (const record of records) {
         const { id, options } = record;
         const source = options.source ?? 'builtin';
-        if (this.toolRegistry.resolve(options.name) !== undefined) {
-          if (options.when !== undefined && !options.when(accessor)) this.deactivateRecord(record);
-          continue;
-        }
-        if (!this.environmentAllows(record)) continue;
+        if (this.toolRegistry.resolve(options.name) !== undefined) continue;
         if (!isToolActive(workspaceVeto, options.name, source)) continue;
         const activeByProfile =
           options.name === SELECT_TOOLS_TOOL_NAME
             ? isToolActive(disclosurePolicy, options.name, source)
             : isToolActive(policy, options.name, source);
         if (!activeByProfile) continue;
-        if (options.when !== undefined && !options.when(accessor)) continue;
+        if (!isToolAvailable(options, accessor, this.environment)) continue;
         const tool = accessor.get(id);
         const registration = this.toolRegistry.register(tool, {
           source: options.source,

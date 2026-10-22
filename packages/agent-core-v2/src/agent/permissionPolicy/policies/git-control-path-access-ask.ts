@@ -1,6 +1,8 @@
 import type { ResolvedToolExecutionHookContext } from '#/agent/toolExecutor/toolHooks';
+import { IConfigService } from '#/app/config/config';
 import { findGitWorkTree } from '#/app/git/workTree';
 import { IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
+import { isDangerousCommandGuardEnabled } from '#/agent/permissionRules/configSection';
 import { ISessionWorkspaceContext } from '#/session/workspaceContext/workspaceContext';
 import type { ISessionWorkspaceContext as WorkspaceContext } from '#/session/workspaceContext/workspaceContext';
 import type {
@@ -20,11 +22,13 @@ export class GitControlPathAccessAskPermissionPolicyService implements Permissio
   constructor(
     @IAgentEnvironmentService private readonly environment: IAgentEnvironmentService,
     @ISessionWorkspaceContext private readonly workspace: WorkspaceContext,
+    @IConfigService private readonly config: IConfigService,
   ) {}
 
   async evaluate(
     context: ResolvedToolExecutionHookContext,
   ): Promise<PermissionPolicyResult | undefined> {
+    if (!isDangerousCommandGuardEnabled(this.config)) return undefined;
     const cwd = this.workspace.workDir;
     if (cwd.length === 0) return undefined;
     const lease = acquireEnvironmentLease(this.environment);

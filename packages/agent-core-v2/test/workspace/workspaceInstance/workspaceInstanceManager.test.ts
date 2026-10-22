@@ -1,4 +1,5 @@
 import { EnvironmentService } from '#/app/environment/environmentService';
+import { InMemorySessionLockService } from '#/persistence/backends/memory/sessionLockService';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { Workspace, IWorkspaceService } from '#/app/workspace/workspace';
@@ -58,11 +59,11 @@ function manager(
     { scope: () => 'sessions' },
     workspaces,
     { ready },
-    ...Array.from({ length: 24 }, () => undefined),
+    ...Array.from({ length: 26 }, () => undefined),
   ];
   args[19] = { entries: () => [] };
-  args[28] = environments;
-  args[29] = { assertAllowed: () => {} };
+  args[29] = environments;
+  args[30] = { assertAllowed: () => {} };
   customize?.(args);
   return Reflect.construct(WorkspaceInstanceManager, args) as WorkspaceInstanceManager;
 }
@@ -114,7 +115,8 @@ describe('WorkspaceInstanceManager', () => {
       args[11] = { drain: async () => {} };
       args[23] = { withContext: () => ({ track2: () => {} }) };
       args[25] = { append: () => {}, flush: async () => {}, drainRetirements: async () => {} };
-      args[26] = { get: async () => undefined };
+      args[26] = new InMemorySessionLockService();
+      args[27] = { get: async () => undefined };
     }, environments);
     const one = await value.getOrCreate({ workspaceId: 'one' });
     await environments.addProvider({

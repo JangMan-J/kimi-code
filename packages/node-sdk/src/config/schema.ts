@@ -318,6 +318,7 @@ export const KimiConfigSchema = z.object({
   experimental: ExperimentalConfigSchema.optional(),
   environments: EnvironmentsConfigSchema.optional(),
   telemetry: z.boolean().optional(),
+  disableFeedbackSurvey: z.boolean().optional(),
   raw: z.record(z.string(), z.unknown()).optional(),
 });
 
@@ -369,6 +370,7 @@ export const KimiConfigPatchSchema = z
     experimental: ExperimentalConfigPatchSchema.optional(),
     environments: EnvironmentsConfigSchema.optional(),
     telemetry: z.boolean().optional(),
+    disableFeedbackSurvey: z.boolean().optional(),
   })
   .strict();
 
