@@ -59,11 +59,12 @@ export class WorkspaceDirsService extends Disposable implements IWorkspaceDirs {
     this.states.contributeState(workspaceDirsRegistryDirsKey);
     this.projectRoot = workspace.cwd;
     this.configPath = '';
+    const legacyProjectConfig = workspace.meta.kind !== 'managed';
     this.ready = this.enqueue(async () => {
-      await this.reloadFromDisk();
+      if (legacyProjectConfig) await this.reloadFromDisk();
       await this.reloadFromRegistry();
     });
-    void this.ready.then(() => this.watchLocalToml());
+    if (legacyProjectConfig) void this.ready.then(() => this.watchLocalToml());
     this._register(
       this.workspaceStore.onDidChange(() => {
         void this.enqueue(() => this.reloadFromRegistry()).catch((error) => {

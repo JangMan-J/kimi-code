@@ -22,6 +22,7 @@ interface WorkspaceWire {
   id: string;
   root: string;
   name: string;
+  kind: 'managed' | 'implicit';
   additional_dirs: string[];
   created_at: string;
   last_opened_at: string;
@@ -385,6 +386,7 @@ describe('server-v2 /api/v1/workspaces', () => {
     const created = await postJson<WorkspaceWire>('/api/v1/workspaces', { root });
     expect(created.body.code).toBe(0);
     expect(created.body.data.additional_dirs).toEqual([]);
+    expect(created.body.data.kind).toBe('managed');
     const text = await readFile(join(root, '.kimi-code', 'local.toml'), 'utf8');
     expect(text).toContain('toml-extra');
   });

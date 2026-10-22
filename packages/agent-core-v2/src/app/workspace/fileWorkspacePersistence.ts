@@ -71,6 +71,7 @@ export class FileWorkspacePersistence extends Disposable implements IWorkspacePe
         id,
         root: entry.root,
         name: entry.name,
+        kind: entry.kind === 'managed' ? 'managed' : 'implicit',
         additionalDirs: entry.additional_dirs ?? [],
         createdAt: parseTime(entry.created_at, now),
         lastOpenedAt: parseTime(entry.last_opened_at, now),
@@ -113,6 +114,7 @@ export class FileWorkspacePersistence extends Disposable implements IWorkspacePe
       }
       merged['root'] = ws.root;
       merged['name'] = ws.name;
+      merged['kind'] = ws.kind;
       merged['created_at'] = new Date(ws.createdAt).toISOString();
       merged['last_opened_at'] = new Date(ws.lastOpenedAt).toISOString();
       record[ws.id] = merged as unknown as PersistedWorkspaceEntry;
@@ -147,6 +149,7 @@ function sanitizeEntry(value: unknown): PersistedWorkspaceEntry | null {
   return {
     root: v.root,
     name: v.name,
+    kind: typeof v.kind === 'string' ? v.kind : undefined,
     additional_dirs: additionalDirs,
     created_at: v.created_at,
     last_opened_at: v.last_opened_at,

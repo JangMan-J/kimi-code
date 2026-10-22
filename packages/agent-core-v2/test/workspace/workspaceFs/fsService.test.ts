@@ -31,7 +31,7 @@ function stubWorkspaceContext(): IWorkspaceContext {
     workspaceId: 'w',
     cwd: WORK_DIR,
     source: 'local',
-    meta: { id: 'w', root: WORK_DIR, name: 'proj', createdAt: 1, lastOpenedAt: 1 },
+    meta: { id: 'w', root: WORK_DIR, name: 'proj', kind: 'implicit', createdAt: 1, lastOpenedAt: 1 },
     persistenceScope: 'sessions/w',
   };
 }

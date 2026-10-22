@@ -496,6 +496,7 @@ export async function toWireWorkspace(core: Scope, ws: Workspace): Promise<Works
     id: ws.id,
     root: ws.root,
     name: ws.name,
+    kind: ws.kind,
     additional_dirs: [...ws.additionalDirs],
     created_at: new Date(ws.createdAt).toISOString(),
     last_opened_at: new Date(ws.lastOpenedAt).toISOString(),

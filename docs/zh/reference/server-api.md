@@ -1657,6 +1657,7 @@ PTY 终端接口；仅在 loopback 绑定时挂载（非 loopback 绑定会跳�
 | `id` | string | 工作区 id：隐式渠道（CLI/VS Code 按目录进入）为 `wd_<slug>_<hash12>`，经 `POST /api/v1/workspaces` 显式创建为 `wm_<uuid>` |
 | `root` | string | 主目录的绝对路径 |
 | `name` | string | 显示名，1–100 个字符；默认取主目录的基名 |
+| `kind` | string | 工作区类别：`managed`（经显式创建，`wm_` id；会话不合并项目 `local.toml`）或 `implicit`（按目录隐式注册，`wd_` id；会话合并项目 `local.toml` 以兼容旧配置） |
 | `additional_dirs` | string[] | 注册表管理的额外源文件夹绝对路径（不含项目 `local.toml` 与临时来源） |
 | `created_at` | string | 注册时间，ISO 8601 |
 | `last_opened_at` | string | 最近一次打开或重新注册工作区的时间，ISO 8601 |

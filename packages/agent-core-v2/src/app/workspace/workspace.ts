@@ -1,9 +1,12 @@
 import { createDecorator, type ServiceIdentifier } from '#/_base/di/instantiation';
 
+export type WorkspaceKind = 'managed' | 'implicit';
+
 export interface Workspace {
   readonly id: string;
   readonly root: string;
   readonly name: string;
+  readonly kind: WorkspaceKind;
   readonly additionalDirs: readonly string[];
   readonly createdAt: number;
   readonly lastOpenedAt: number;

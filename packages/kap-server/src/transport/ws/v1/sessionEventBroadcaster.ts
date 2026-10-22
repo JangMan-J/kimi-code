@@ -1605,6 +1605,7 @@ function workspaceLifecyclePayload(payload: unknown): Workspace | undefined {
     id: ws.id,
     root: ws.root,
     name: ws.name,
+    kind: ws.kind === 'managed' ? 'managed' : 'implicit',
     additionalDirs,
     createdAt: ws.createdAt,
     lastOpenedAt: ws.lastOpenedAt,

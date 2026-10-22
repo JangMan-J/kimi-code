@@ -74,7 +74,11 @@ describe('WorkspaceDirsService (registry source)', () => {
     );
   });
 
-  function createDirs(cwd: string, workspaceId: string): WorkspaceDirsService {
+  function createDirs(
+    cwd: string,
+    workspaceId: string,
+    kind: 'managed' | 'implicit' = 'implicit',
+  ): WorkspaceDirsService {
     const bootstrap = stubBootstrap(homeDir);
     const hostFs = new HostFileSystem();
     return disposables.add(
@@ -85,6 +89,7 @@ describe('WorkspaceDirsService (registry source)', () => {
           cwd,
           root: cwd,
           source: 'local',
+          meta: { id: workspaceId, root: cwd, name: 'test', kind, createdAt: 0, lastOpenedAt: 0 },
           persistenceScope: `sessions/${workspaceId}`,
         } as unknown as IWorkspaceContext,
         new FileProjectLocalConfigService(bootstrap, hostFs),
@@ -99,7 +104,7 @@ describe('WorkspaceDirsService (registry source)', () => {
   it('injects the registry dir set minus cwd for both primary and member scopes', async () => {
     const project = await workspaces.create({ root: dirA, additionalDirs: [dirB], name: 'proj' });
 
-    const primary = createDirs(dirA, project.id);
+    const primary = createDirs(dirA, project.id, 'managed');
     await primary.ready;
     expect(primary.additionalDirs).toEqual([dirB]);
 
@@ -112,7 +117,24 @@ describe('WorkspaceDirsService (registry source)', () => {
     expect(outsider.additionalDirs).toEqual([]);
   });
 
-  it('merges registry dirs with local.toml dirs and ephemeral dirs', async () => {
+  it('merges registry dirs with local.toml dirs for implicit scopes', async () => {
+    await workspaces.create({ root: dirA, additionalDirs: [dirB], name: 'proj' });
+    await mkdir(join(dirA, '.kimi-code'), { recursive: true });
+    await writeFile(
+      join(dirA, '.kimi-code', 'local.toml'),
+      `[workspace]\nadditional_dir = ["${dirC.replaceAll('\\', '\\\\')}"]\n`,
+      'utf8',
+    );
+
+    const dirs = createDirs(dirA, encodeWorkDirKey(dirA), 'implicit');
+    await dirs.ready;
+    expect(dirs.additionalDirs).toEqual([dirC, dirB]);
+
+    await dirs.addDir({ path: dirB, persist: false });
+    expect(dirs.additionalDirs).toEqual([dirC, dirB]);
+  });
+
+  it('ignores local.toml entirely for managed workspaces', async () => {
     const project = await workspaces.create({ root: dirA, additionalDirs: [dirB], name: 'proj' });
     await mkdir(join(dirA, '.kimi-code'), { recursive: true });
     await writeFile(
@@ -121,17 +143,30 @@ describe('WorkspaceDirsService (registry source)', () => {
       'utf8',
     );
 
-    const dirs = createDirs(dirA, project.id);
+    const dirs = createDirs(dirA, project.id, 'managed');
     await dirs.ready;
-    expect(dirs.additionalDirs).toEqual([dirC, dirB]);
+    expect(dirs.additionalDirs).toEqual([dirB]);
 
-    await dirs.addDir({ path: dirB, persist: false });
-    expect(dirs.additionalDirs).toEqual([dirC, dirB]);
+    let fired = 0;
+    dirs.onDidChange(() => {
+      fired += 1;
+    });
+    await writeFile(
+      join(dirA, '.kimi-code', 'local.toml'),
+      `[workspace]\nadditional_dir = ["${dirA.replaceAll('\\', '\\\\')}", "${dirC.replaceAll('\\', '\\\\')}"]\n`,
+      'utf8',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(dirs.additionalDirs).toEqual([dirB]);
+    expect(fired).toBe(0);
+
+    await dirs.addDir({ path: dirC, persist: false });
+    expect(dirs.additionalDirs).toEqual([dirB, dirC]);
   });
 
   it('pushes registry updates live through the persistence change event', async () => {
     const project = await workspaces.create({ root: dirA, name: 'proj' });
-    const dirs = createDirs(dirA, project.id);
+    const dirs = createDirs(dirA, project.id, 'managed');
     await dirs.ready;
     expect(dirs.additionalDirs).toEqual([]);
 
@@ -148,7 +183,7 @@ describe('WorkspaceDirsService (registry source)', () => {
 
   it('persists added dirs to the workspace registry instead of local.toml', async () => {
     const project = await workspaces.create({ root: dirA, name: 'proj' });
-    const dirs = createDirs(dirA, project.id);
+    const dirs = createDirs(dirA, project.id, 'managed');
     await dirs.ready;
 
     const result = await dirs.addDir({ path: dirB, persist: true });
@@ -176,7 +211,7 @@ describe('WorkspaceDirsService (registry source)', () => {
 
   it('keeps persist:false dirs in memory only', async () => {
     const project = await workspaces.create({ root: dirA, name: 'proj' });
-    const dirs = createDirs(dirA, project.id);
+    const dirs = createDirs(dirA, project.id, 'managed');
     await dirs.ready;
 
     const result = await dirs.addDir({ path: dirB, persist: false });

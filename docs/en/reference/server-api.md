@@ -1657,6 +1657,7 @@ Every endpoint that returns a workspace uses this wire shape. Registration and u
 | `id` | string | Workspace id: `wd_<slug>_<hash12>` for implicit registration (CLI/VS Code entering a directory), `wm_<uuid>` when created via `POST /api/v1/workspaces` |
 | `root` | string | Absolute path of the primary directory |
 | `name` | string | Display name, 1–100 characters; defaults to the primary directory's base name |
+| `kind` | string | Workspace kind: `managed` (explicitly created, `wm_` id; sessions do not merge the project `local.toml`) or `implicit` (registered by directory, `wd_` id; sessions merge the project `local.toml` for legacy compatibility) |
 | `additional_dirs` | string[] | Registry-managed extra source folders as absolute paths (excludes project `local.toml` and ephemeral sources) |
 | `created_at` | string | Registration time, ISO 8601 |
 | `last_opened_at` | string | Last time the workspace was opened or re-registered, ISO 8601 |

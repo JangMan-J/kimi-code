@@ -674,6 +674,27 @@ describe('WorkspaceService (file-backed)', () => {
     expect(text).toContain('extra-b');
   });
 
+  it('persists kind per channel and defaults legacy entries to implicit', async () => {
+    const registry = build();
+    const managed = await registry.create({ root: homeDir, name: 'proj' });
+    expect(managed.kind).toBe('managed');
+    const implicit = await registry.createOrTouch(homeDir);
+    expect(implicit.kind).toBe('implicit');
+
+    const saved = await readWorkspacesJson();
+    expect(saved.workspaces[managed.id]?.kind).toBe('managed');
+    expect(saved.workspaces[implicit.id]?.kind).toBe('implicit');
+
+    const raw = JSON.parse(await fsp.readFile(join(homeDir, 'workspaces.json'), 'utf8')) as {
+      workspaces: Record<string, Record<string, unknown>>;
+    };
+    delete raw.workspaces[implicit.id]?.['kind'];
+    await fsp.writeFile(join(homeDir, 'workspaces.json'), JSON.stringify(raw), 'utf8');
+
+    expect((await registry.get(implicit.id))?.kind).toBe('implicit');
+    expect((await registry.get(managed.id))?.kind).toBe('managed');
+  });
+
   it('readProjectConfigDirs returns resolved local.toml dirs without mutating anything', async () => {
     const extra = join(homeDir, 'extra');
     await fsp.mkdir(extra, { recursive: true });

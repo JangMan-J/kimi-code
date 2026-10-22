@@ -14,6 +14,7 @@ export const workspaceSchema = z.object({
   id: workspaceIdSchema,
   root: z.string().min(1),
   name: z.string().min(1).max(100),
+  kind: z.enum(['managed', 'implicit']),
   additional_dirs: z.array(z.string()),
   created_at: isoDateTimeSchema,
   last_opened_at: isoDateTimeSchema,

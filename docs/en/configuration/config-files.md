@@ -612,7 +612,7 @@ Changes apply on the next start, or immediately with `/reload-tui` (which reload
 
 In addition to the user-level files under `~/.kimi-code`, Kimi Code reads a project-local configuration file at `<project-root>/.kimi-code/local.toml`. It holds settings that are specific to one project checkout and typically should not be shared with teammates.
 
-Earlier versions of [`/add-dir`](../reference/slash-commands.md) wrote remembered directories to this file; current versions write them to the workspace registry in `~/.kimi-code/workspaces.json` instead. An existing `additional_dir` here is still read and honored, and is imported into the registry once when the workspace is created or first edited, then cleared from this file.
+Earlier versions of [`/add-dir`](../reference/slash-commands.md) wrote remembered directories to this file; current versions write them to the workspace registry in `~/.kimi-code/workspaces.json` instead, and `local.toml` is now a read-only legacy field that nothing writes to. Sessions of implicit workspaces (entered by directory in the terminal) still merge its `additional_dir` into the additional directories; sessions of explicitly created (managed) workspaces no longer read it. To move legacy entries into the registry, use the import action in the client's create/edit workspace dialog (backed by [`GET /api/v1/workspaces/project-config-dirs`](../reference/server-api.md#get-apiv1workspacesproject-config-dirs)); imported entries are registry-managed and removals take effect immediately.
 
 ### `[workspace]`
 
@@ -620,7 +620,7 @@ The `[workspace]` table groups project-level workspace settings:
 
 | Field | Type | Required | Description |
 | --- | --- | --- | --- |
-| `additional_dir` | `array<string>` | No | Additional workspace directories (absolute paths, legacy compatibility field); written by older versions of `/add-dir`, no longer written by current versions, and cleared once imported into the registry |
+| `additional_dir` | `array<string>` | No | Additional workspace directories (absolute paths, legacy compatibility field); written by older versions of `/add-dir` and never written by current versions; still merged for implicit-workspace sessions and ignored by managed workspaces |
 
 ```toml
 [workspace]

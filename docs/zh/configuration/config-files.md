@@ -611,7 +611,7 @@ auto_install = true
 
 除了 `~/.kimi-code` 下的用户级文件，Kimi Code 还会读取位于 `<项目根目录>/.kimi-code/local.toml` 的项目级本地配置文件。它保存的是与某一个项目检出相关、通常不应与队友共享的设置。
 
-早期版本的 [`/add-dir`](../reference/slash-commands.md) 会把「记住此目录」写入这个文件；现版本改为记入 `~/.kimi-code/workspaces.json` 中的工作区注册表。`local.toml` 中已存在的 `additional_dir` 仍会被读取生效，并在工作区被创建或首次编辑时一次性导入注册表、随后从该文件清空。
+早期版本的 [`/add-dir`](../reference/slash-commands.md) 会把「记住此目录」写入这个文件；现版本改为记入 `~/.kimi-code/workspaces.json` 中的工作区注册表，`local.toml` 随之成为只读的存量兼容字段，任何组件都不会再写入它。隐式工作区（终端按目录进入）的会话仍把其中的 `additional_dir` 并入额外目录；显式创建（managed）工作区的会话不再读取它。要把旧配置搬进注册表，可在客户端的新建/编辑工作区弹窗中使用导入功能（底层为 [`GET /api/v1/workspaces/project-config-dirs`](../reference/server-api.md#get-apiv1workspacesproject-config-dirs)），导入后即由注册表管理，删除即时生效。
 
 ### `[workspace]`
 
@@ -619,7 +619,7 @@ auto_install = true
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `additional_dir` | `array<string>` | 否 | 额外工作目录列表（绝对路径，存量兼容字段）；由旧版本 `/add-dir` 写入，现版本不再新增写入，首次导入注册表后清空 |
+| `additional_dir` | `array<string>` | 否 | 额外工作目录列表（绝对路径，存量兼容字段）；由旧版本 `/add-dir` 写入，现版本任何组件均不写入；隐式工作区的会话仍并入生效，显式（managed）工作区不读取 |
 
 ```toml
 [workspace]
