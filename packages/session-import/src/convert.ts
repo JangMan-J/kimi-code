@@ -13,7 +13,7 @@ function fallbackTitle(turns: readonly HistoryTurn[]): string | undefined {
   for (const turn of turns) {
     let text = turn.user;
     for (let wrapper = CONTROL_WRAPPER.exec(text); wrapper; wrapper = CONTROL_WRAPPER.exec(text)) text = text.slice(wrapper[0].length);
-    const line = text.split('\n').map(part => part.trim()).find(Boolean);
+    const line = text.split('\n').map(part => part.trim()).find(part => /[\p{L}\p{N}]/u.test(part));
     if (!line) continue;
     const graphemes = Array.from(GRAPHEMES.segment(line), ({ segment }) => segment);
     return graphemes.length > 120 ? `${graphemes.slice(0, 117).join('')}...` : line;

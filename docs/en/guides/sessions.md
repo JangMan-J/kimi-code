@@ -118,6 +118,20 @@ In the web UI, `/export` downloads the current session as a diagnostic ZIP. It i
 Exported files may contain code, command output, and file paths that are sensitive. Review the content before sharing.
 :::
 
+## Importing sessions from Claude Code and Codex
+
+To continue work you started in Claude Code or Codex, import those sessions as regular Kimi Code sessions:
+
+```sh
+kimi import-sessions
+```
+
+Inside the TUI, `/import-sessions` opens the same page. Choose the last 15 days (the default) or the last 30 days. Each run imports at most the newest 100 sessions, and sessions imported before are skipped.
+
+Imported sessions return to the workspace of their original project folder and keep their title and last activity time: run `kimi` in that folder and use `/sessions` to find them, marked `[Claude Code]` or `[Codex]`. An imported session shows the conversation as regular messages, with tool calls and results as short text notes. It includes the most recent turns that fit 80% of the model's context window, and the complete history is saved with the session as a file the agent can read when it needs earlier details.
+
+Conversion runs locally: the original session files are not changed and no model is called.
+
 ## Next steps
 
 - [Data locations](../configuration/data-locations.md) — full directory layout for session files

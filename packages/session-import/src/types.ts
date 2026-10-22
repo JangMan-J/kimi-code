@@ -1,5 +1,19 @@
 export type SessionSource = 'claude-code' | 'codex';
 
+export interface SessionCandidate {
+  source: SessionSource;
+  path: string;
+  sourceId: string;
+  cwd: string;
+  modifiedAt: number;
+}
+
+export interface FindSessionsOptions {
+  claudeHome: string;
+  codexHome: string;
+  since: number;
+}
+
 export type StepKind = 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'event' | 'error' | 'source_context';
 
 export interface HistoryStep {

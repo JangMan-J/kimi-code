@@ -221,8 +221,8 @@ describe('session conversion', () => {
     expect(body(result.messages)).toContain('A source compaction checkpoint has no available plaintext. (UNAVAILABLE_COMPACTION_SUMMARY, 1)');
   });
 
-  it('titles an untitled session with the first prompt line after control wrappers', async () => {
-    const paths = await fixture([user('<system-reminder>Context\n</system-reminder>\n\n  Fix the login flow  \nwith details'), assistant('Done')]);
+  it('titles an untitled session with the first worded prompt line after control wrappers', async () => {
+    const paths = await fixture([user('<system-reminder>Context\n</system-reminder>\n\n-\n```\n  Fix the login flow  \nwith details'), assistant('Done')]);
     const result = await convertSession({ ...paths, source: 'claude-code', contextWindow: 32768 });
     expect(result).toMatchObject({ status: 'complete', title: 'Fix the login flow' });
     if (result.status === 'unreliable') throw new Error(result.error.message);

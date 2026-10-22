@@ -17,7 +17,16 @@ if (result.status !== 'unreliable') {
 }
 ```
 
-`source` accepts `claude-code` and `codex`. The latter supports JSONL and JSONL.zst. An optional `stateDatabasePath` enables read-only title lookup for that source. A recorded user title wins over a generated one; without either, the title is the first prompt line after control wrappers, up to 120 characters. Source files are never modified. `attachmentDirectory` must be an absolute path owned by the target session. The host appends returned messages as ordinary visible messages through its existing context API and owns session creation, persistence, and user-visible status handling.
+`source` accepts `claude-code` and `codex`. The latter supports JSONL and JSONL.zst. An optional `stateDatabasePath` enables read-only title lookup for that source. A recorded user title wins over a generated one; without either, the title is the first prompt line with a letter or digit after control wrappers, up to 120 characters. Source files are never modified. `attachmentDirectory` must be an absolute path owned by the target session. The host appends returned messages as ordinary visible messages through its existing context API and owns session creation, persistence, and user-visible status handling.
+
+## Finding sessions
+
+`findSessions({ claudeHome, codexHome, since })` lists sessions modified at or after `since`, newest first, with their source, path, source id, and working directory:
+
+- Claude Code: top-level `projects/*/*.jsonl` files whose first records include a working directory and a user prompt. Print-mode and SDK sessions (`sdk-*` entrypoints) and subagent transcripts are excluded. The source id is the file name.
+- Codex: `sessions/**/rollout-*.jsonl` and `.jsonl.zst` files whose session metadata comes from the CLI or an IDE (`cli` or `vscode`). Other sources such as `exec` and subagent threads are excluded, and only the newest rollout of each thread is kept.
+
+Discovery reads only the beginning of each recent file and never modifies it.
 
 ## Messages
 
