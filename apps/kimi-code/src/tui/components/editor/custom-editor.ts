@@ -340,27 +340,21 @@ export class CustomEditor extends Editor {
     }
     // While another component holds the keyboard or the terminal window is
     // inactive, the editor looks inactive: no block cursor (pi-tui draws it
-    // focused or not), plain text and the border fade, highlighted tokens
-    // keep their colors.
+    // focused or not), and the whole box fades.
     const inactive = !this.focused || !this.terminalFocused;
-    if (inactive) {
-      for (let i = firstContentIdx; i < lines.length - 1; i++) {
-        const line = lines[i]?.replace(BLOCK_CURSOR, '$1');
-        if (line === undefined || line.length < 2 || !line.startsWith(' ') || !line.endsWith(' ')) continue;
-        lines[i] = ` ${currentTheme.fg('textDim', line.slice(1, -1))} `;
-      }
-    }
     // `this.borderColor` is pi-tui's per-render paint function. The host may
     // overwrite it (e.g. plan-mode / slash-context highlight via
     // `editor.borderColor = chalk.hex(primary)`), so we route corners and
     // side bars through the same hook to stay in sync.
-    const paintBorder = inactive
-      ? (s: string) => currentTheme.dim(this.borderColor(s))
-      : (s: string) => this.borderColor(s);
-    return wrapWithSideBorders(lines, paintBorder, {
-      connectedAbove: this.connectedAbove && !this.borderHighlighted,
-      label: isBash ? ` ${currentTheme.boldFg('shellMode', '! shell mode')} ` : undefined,
-    });
+    const framed = wrapWithSideBorders(
+      inactive ? lines.map((line) => line.replace(BLOCK_CURSOR, '$1')) : lines,
+      (s: string) => this.borderColor(s),
+      {
+        connectedAbove: this.connectedAbove && !this.borderHighlighted,
+        label: isBash ? ` ${currentTheme.boldFg('shellMode', '! shell mode')} ` : undefined,
+      },
+    );
+    return inactive ? framed.map((line) => currentTheme.fade(line)) : framed;
   }
 
   private computeArgumentHint(): string | undefined {

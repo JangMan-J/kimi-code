@@ -1,8 +1,9 @@
-import type {
-  AutocompleteItem,
-  AutocompleteProvider,
-  AutocompleteSuggestions,
-  TUI,
+import {
+  CURSOR_MARKER,
+  type AutocompleteItem,
+  type AutocompleteProvider,
+  type AutocompleteSuggestions,
+  type TUI,
 } from '@moonshot-ai/pi-tui';
 import chalk from 'chalk';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
@@ -673,38 +674,33 @@ describe('CustomEditor shortcut telemetry hooks', () => {
     },
   );
 
-  it('fades plain text and the border when keyboard or terminal focus is lost, keeping highlighted tokens', () => {
+  it('fades the whole box, keeping token hues, when keyboard or terminal focus is lost', () => {
     const previousLevel = chalk.level;
     chalk.level = 3;
     onTestFinished(() => {
       chalk.level = previousLevel;
     });
-    const openCode = (token: 'textDim' | 'primary'): string => currentTheme.fg(token, 'x').split('x')[0]!;
+    const primary = currentTheme.fg('primary', 'x').split('x')[0]!;
+    const faint = '\u001B[2m';
     const editor = makeEditor();
     editor.setText('/help me');
 
     editor.focused = true;
     const focused = editor.render(40);
-    expect(focused[1]).not.toContain(openCode('textDim'));
-    expect(focused[0]).not.toContain('\u001B[2m');
+    expect(focused.join('\n')).not.toContain(faint);
+    expect(focused[1]).toContain('\u001B[7m');
 
     editor.focused = false;
     const unfocused = editor.render(40);
-    const token = (line: string): string =>
-      line.slice(line.indexOf(openCode('primary')), line.indexOf('/help') + '/help'.length);
-    expect(token(unfocused[1]!)).toBe(token(focused[1]!));
-    expect(unfocused[1]).toContain(`${openCode('textDim')} me`);
+    expect(unfocused.every((line) => line.startsWith(faint))).toBe(true);
+    expect(unfocused[1]).toContain(`${primary}\u001B[1m/help\u001B[22m${faint}`);
     expect(unfocused[1]).not.toContain('\u001B[7m');
-    expect(unfocused[0]).toContain('\u001B[2m');
 
     editor.focused = true;
     editor.terminalFocused = false;
     const terminalUnfocused = editor.render(40);
     expect(editor.focused).toBe(true);
-    expect(token(terminalUnfocused[1]!)).toBe(token(focused[1]!));
-    expect(terminalUnfocused[1]).toContain(`${openCode('textDim')} me`);
-    expect(terminalUnfocused[1]).not.toContain('\u001B[7m');
-    expect(terminalUnfocused[0]).toContain('\u001B[2m');
+    expect(terminalUnfocused.map((line) => line.replace(CURSOR_MARKER, ''))).toEqual(unfocused);
   });
 
   it('keeps the original editor bindings when Updates paging is unavailable', () => {
