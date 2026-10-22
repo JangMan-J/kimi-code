@@ -1253,17 +1253,8 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
     };
   }
 
-  /**
-   * Every v2 workspace-id bucket addressing `workDir` (already normalized):
-   * the registered workspace's alias set when the catalog knows the root, or
-   * the freshly minted bucket key for index-only sessions (mirrors how v1's
-   * store lists a bucket that never touched the workspace registry).
-   */
   private async workspaceIdsFor(workDir: string): Promise<readonly string[]> {
-    const workspaces = await this.klient.global.workspaces.list();
-    const match = workspaces.find((workspace) => normalizeWorkDir(workspace.root) === workDir);
-    if (match === undefined) return [encodeWorkDirKey(workDir)];
-    return this.engineAccessor.get(IWorkspaceAliases).resolveAliasIds(match.id);
+    return this.engineAccessor.get(IWorkspaceAliases).resolveAliasIds(encodeWorkDirKey(workDir));
   }
 
   override async listSessions(input: ListSessionsOptions = {}): Promise<readonly SessionSummary[]> {

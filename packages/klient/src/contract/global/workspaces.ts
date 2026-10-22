@@ -12,6 +12,7 @@ export const workspaceSchema = z.object({
   id: z.string(),
   root: z.string(),
   name: z.string(),
+  additionalDirs: z.array(z.string()),
   createdAt: z.number(),
   lastOpenedAt: z.number(),
 });
