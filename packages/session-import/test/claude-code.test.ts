@@ -606,6 +606,20 @@ test('unknown unlinked metadata is retained and marked without replacing the act
   expect(steps(session).filter((step) => step.text.includes('retained metadata'))).toHaveLength(1);
 });
 
+test('the source API request log is skipped instead of repeating the conversation', async () => {
+  const session = await read([
+    user('u', null, 'task'), assistant('a', 'u', [call('c')]), user('r', 'a', [result('c', 'output')]),
+    { type: 'api-request-shape', sessionId: 'example-session', shapeHash: 'shape', shape: { system: [txt('source system prompt')], tools: [] } },
+    { type: 'api-request', sessionId: 'example-session', id: 'request', shapeHash: 'shape', params: { model: 'example-model' }, tail: ['one', 'two'] },
+    { type: 'api-request-blob', sessionId: 'example-session', hash: 'one', message: { role: 'assistant', content: [call('c')] } },
+    { type: 'api-request-blob', sessionId: 'example-session', hash: 'two', message: { role: 'user', content: [result('c', 'output')] } },
+    assistant('b', 'r', [txt('done')]),
+  ]);
+  expect(steps(session).map((step) => step.kind)).toEqual(['tool_call', 'tool_result', 'assistant']);
+  expect(session.stats['unknownRecords']).toBe(0);
+  expect(session.stats['sourceRecordTypes']).toMatchObject({ 'api-request': 1, 'api-request-blob': 2, 'api-request-shape': 1 });
+});
+
 test('compaction without an available summary explicitly reports the missing history', async () => {
   const session = await read([
     user('old', null, 'old context'), boundary('b', 'old'), user('u', 'b', 'current context'),

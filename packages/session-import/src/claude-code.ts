@@ -128,6 +128,7 @@ interface ReaderStats extends Record<string, unknown> {
 
 const CHAIN_TYPES = new Set(['user', 'assistant', 'system', 'attachment', 'progress']);
 const METADATA_TYPES = new Set(['summary', 'mode', 'permission-mode', 'atis-latch', 'file-history-snapshot', 'last-prompt', 'ai-title', 'queue-operation', 'cost-state', 'file-history-delta', 'pr-link', 'frame-link', 'custom-title', 'agent-name', 'continued-in']);
+const REQUEST_LOG_TYPES = new Set(['api-request', 'api-request-blob', 'api-request-shape']);
 const isChainRecord = (row: SourceRecord) => CHAIN_TYPES.has(row.type ?? '') || (!METADATA_TYPES.has(row.type ?? '') && Boolean(row.parentUuid ?? row.logicalParentUuid));
 const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use', 'server_tool_use', 'tool_result', 'image', 'document']);
 const textOf = (value: unknown): string => typeof value === 'string' ? value : value === null || value === undefined ? '' : JSON.stringify(value);
@@ -497,6 +498,7 @@ export async function readClaudeSession(path: string, options: ReadOptions): Pro
     if (!row || typeof row !== 'object' || Array.isArray(row)) { stats.invalidRecords++; continue; }
     stats.parsedRecords++;
     count(stats.sourceRecordTypes, row.type ?? '<missing>');
+    if (REQUEST_LOG_TYPES.has(row.type ?? '')) continue;
     if (row.isSidechain) stats.sidechainRecords++;
     entries.push({ row: indexRow(row), line: stats.sourceLines, order: stats.sourceLines });
   }

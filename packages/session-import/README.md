@@ -50,7 +50,7 @@ Whole turns are kept from the newest backwards until the next older turn would n
 
 Before selecting model context, the package saves the complete **effective** history as `effective-history-<sha256>.jsonl`. Its first record contains format version 1, source metadata, issues, and image references; subsequent records contain complete turns, including thinking, events, and full tool input and output. Text omitted from the messages remains available here after the source file is removed.
 
-Effective history means the selected branch and source compaction replacement, not every record in the original log. Discarded branches and pre-compaction records not retained by the source are not reconstructed. Encrypted compaction has no fabricated plaintext fallback and is reported as a known limitation.
+Effective history means the selected branch and source compaction replacement, not every record in the original log. Claude Code's API request log (`api-request`, `api-request-blob`, and `api-request-shape` records) repeats the conversation and request parameters and is skipped. Discarded branches and pre-compaction records not retained by the source are not reconstructed. Encrypted compaction has no fabricated plaintext fallback and is reported as a known limitation.
 
 Embedded PNG, JPEG, GIF, and WebP images are saved byte-for-byte under `images/`, deduplicated by SHA-256, and represented as paths at their original positions. Existing local paths are resolved against the source working directory; URLs are retained without downloading. Their existence and continued availability are not guaranteed. The image index includes references in effective history that the context budget later omits. Image paths use the same text budget as other content.
 
