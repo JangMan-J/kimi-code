@@ -167,6 +167,7 @@ import {
   IAgentPluginService,
   IAgentLifecycleService,
   IAgentEnvironmentBindingService,
+  IAgentEnvironmentService,
   IAgentLoopService,
   IAgentPermissionModeService,
   IAgentPermissionRulesService,
@@ -217,6 +218,7 @@ import {
   isError2,
   programForSession,
   environmentEntryInfo,
+  snapshotAgentEnvironmentBinding,
   resumeSessionById,
   sessionDirOf,
   workspacePersistenceScope,
@@ -340,6 +342,7 @@ import type {
   SessionSummary,
   SessionSummaryPage,
   SessionEnvironmentsInfo,
+  SessionEnvironmentState,
   SessionTodoItem,
   SessionUsage,
   SkillSummary,
@@ -2053,6 +2056,25 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
   override async getEnvironment(input: SessionIdRpcInput): Promise<AgentEnvironmentBinding> {
     const agent = await this.agentFacade(input.sessionId);
     return agent.getEnvironment();
+  }
+
+  /**
+   * The engine's binding snapshot (binding + live registry generation) joined
+   * with the resolved declaration (type).
+   */
+  override async getEnvironmentState(input: SessionIdRpcInput): Promise<SessionEnvironmentState> {
+    const agent = await this.agentScope(input.sessionId);
+    const { binding, environment } = snapshotAgentEnvironmentBinding(
+      agent.accessor.get(IAgentEnvironmentBindingService),
+      agent.accessor.get(IAgentEnvironmentService),
+    );
+    if (environment === undefined) {
+      return { ...binding, type: binding.environmentId === 'local' ? 'local' : 'command', status: 'disposed' };
+    }
+    const declarations = await this.engineAccessor.get(IEnvironmentDeclarationService).declarations();
+    const entry = declarations?.entries.find((declaration) => declaration.id === binding.environmentId)?.entry;
+    const info = environmentEntryInfo(environment, entry);
+    return { ...binding, type: info.type, status: info.status, connectError: info.connectError };
   }
 
   /**

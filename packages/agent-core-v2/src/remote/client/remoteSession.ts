@@ -1,18 +1,8 @@
-import { randomUUID } from 'node:crypto';
-
-import { Emitter } from '#/_base/event';
 import type {
   HostEnvironmentInfo,
   PathClass,
   ShellName,
 } from '#/os/interface/hostEnvironment';
-import { POSIX_ENVIRONMENT_PATH, POSIX_ENVIRONMENT_WORKSPACE } from '#/environment/environmentDefaults';
-import type {
-  Environment,
-  EnvironmentCapability,
-  EnvironmentIdentity,
-  EnvironmentStatus,
-} from '#/environment/environment';
 
 import { ExecBridge, type ExecBridgeExit } from './execBridge';
 import { HandshakeError, RemoteExecConnection } from './connection';
@@ -25,7 +15,7 @@ export interface RemoteEnvironmentProbe extends HostEnvironmentInfo {
   readonly tempDir: string;
 }
 
-export interface RemoteEnvironmentOptions {
+export interface RemoteSessionOptions {
   readonly environmentId: string;
   readonly launcher: LauncherSpec;
   readonly clientVersion?: string;
@@ -33,20 +23,14 @@ export interface RemoteEnvironmentOptions {
   readonly initializeTimeoutMs?: number;
 }
 
-export class RemoteEnvironment implements Environment {
-  readonly identity: EnvironmentIdentity;
-  readonly capabilities: ReadonlySet<EnvironmentCapability>;
+export class RemoteSession {
   readonly host: RemoteEnvironmentProbe;
-  readonly path = POSIX_ENVIRONMENT_PATH;
-  readonly workspace = POSIX_ENVIRONMENT_WORKSPACE;
   readonly fs: RemoteFileSystem;
   readonly process: RemoteProcessService;
   readonly executorVersion: string;
-  private currentStatus: EnvironmentStatus = 'ready';
-  private readonly statusEmitter = new Emitter<EnvironmentStatus>();
-  readonly onDidChangeStatus = this.statusEmitter.event;
+  private disposed = false;
 
-  static async connect(options: RemoteEnvironmentOptions): Promise<RemoteEnvironment> {
+  static async connect(options: RemoteSessionOptions): Promise<RemoteSession> {
     const resolved = resolveLauncher(options.launcher);
     const bridge = ExecBridge.spawn({
       program: resolved.program,
@@ -94,19 +78,13 @@ export class RemoteEnvironment implements Environment {
       }
       throw error;
     }
-    return new RemoteEnvironment(options, bridge, connection);
+    return new RemoteSession(bridge, connection);
   }
 
   private constructor(
-    options: RemoteEnvironmentOptions,
     private readonly bridge: ExecBridge,
     readonly connection: RemoteExecConnection,
   ) {
-    this.identity = {
-      environmentId: options.environmentId,
-      generation: `${options.environmentId}-${randomUUID()}`,
-    };
-    this.capabilities = new Set<EnvironmentCapability>(['fs', 'process']);
     const environment = connection.environment;
     this.host = {
       osKind: environment.osKind,
@@ -122,27 +100,13 @@ export class RemoteEnvironment implements Environment {
     this.executorVersion = connection.executorVersion;
     this.fs = new RemoteFileSystem(connection);
     this.process = new RemoteProcessService(connection, environment.cwd, environment.shellPath);
-    connection.onDidClose(() => {
-      this.setStatus('disconnected');
-    });
-  }
-
-  get status(): EnvironmentStatus {
-    return this.currentStatus;
-  }
-
-  private setStatus(status: EnvironmentStatus): void {
-    if (this.currentStatus === status || this.currentStatus === 'disposed') return;
-    this.currentStatus = status;
-    this.statusEmitter.fire(status);
   }
 
   async dispose(): Promise<void> {
-    if (this.currentStatus === 'disposed') return;
-    this.setStatus('disposed');
+    if (this.disposed) return;
+    this.disposed = true;
     this.connection.close();
     this.bridge.close();
     await this.bridge.exited.catch(() => {});
-    this.statusEmitter.dispose();
   }
 }

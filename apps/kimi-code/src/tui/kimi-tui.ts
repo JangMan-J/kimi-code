@@ -3068,22 +3068,13 @@ export class KimiTUI {
    */
   async refreshEnvironmentSlot(session: Session | undefined = this.session): Promise<void> {
     if (session === undefined) return;
-    let binding;
-    let list;
+    let next: EnvironmentSlotState;
     try {
-      [binding, list] = await Promise.all([session.getEnvironment(), session.listEnvironments()]);
+      next = await session.getEnvironmentState();
     } catch {
       return;
     }
     if (this.session !== session) return;
-    const info = list.environments.find((entry) => entry.environmentId === binding.environmentId);
-    const next: EnvironmentSlotState = {
-      environmentId: binding.environmentId,
-      type: info?.type ?? (binding.environmentId === 'local' ? 'local' : 'command'),
-      status: info?.status ?? 'ready',
-      cwd: binding.cwd,
-      connectError: info?.connectError,
-    };
     const previous = this.state.appState.environment;
     if (
       previous !== undefined &&

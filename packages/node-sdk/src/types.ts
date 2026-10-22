@@ -49,6 +49,12 @@ export interface SessionEnvironmentInfo {
   readonly connectError?: string;
 }
 
+export interface SessionEnvironmentState extends AgentEnvironmentBinding {
+  readonly type: SessionEnvironmentType;
+  readonly status: SessionEnvironmentStatus;
+  readonly connectError?: string;
+}
+
 export interface SessionEnvironmentsInfo {
   readonly environments: readonly SessionEnvironmentInfo[];
 }

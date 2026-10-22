@@ -40,6 +40,7 @@ import type {
   SessionStatus,
   SessionSummary,
   SessionEnvironmentsInfo,
+  SessionEnvironmentState,
   SessionTodoItem,
   SessionUsage,
   SkillSummary,
@@ -306,6 +307,16 @@ export class Session {
   async listEnvironments(): Promise<SessionEnvironmentsInfo> {
     this.ensureOpen();
     return this.rpc.listEnvironments({ sessionId: this.id });
+  }
+
+  /**
+   * The main agent's environment binding together with that environment's type
+   * and connection status. An environment that is no longer registered reports
+   * `disposed`.
+   */
+  async getEnvironmentState(): Promise<SessionEnvironmentState> {
+    this.ensureOpen();
+    return this.rpc.getEnvironmentState({ sessionId: this.id });
   }
 
   async setThinking(effort: ThinkingEffort): Promise<void> {

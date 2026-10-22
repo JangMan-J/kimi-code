@@ -4,5 +4,5 @@ export * from './connection';
 export * from './connectGuidance';
 export * from './remoteFileSystem';
 export * from './remoteProcess';
-export * from './remoteEnvironment';
+export * from './remoteSession';
 export * from './remoteEnvironmentProvider';

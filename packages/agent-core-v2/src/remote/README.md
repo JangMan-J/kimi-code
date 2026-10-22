@@ -15,7 +15,7 @@ packages/agent-core-v2/src/remote/
 
 ## Entries
 
-- `@moonshot-ai/agent-core-v2/remote` — client side: protocol + bridge + stubs + `RemoteEnvironment` + `RemoteEnvironmentProviderFactory`.
+- `@moonshot-ai/agent-core-v2/remote` — client side: protocol + bridge + stubs + `RemoteSession` + `RemoteEnvironmentProviderFactory`.
 - `@moonshot-ai/agent-core-v2/remote/server` — the executor side: `runExecServer` (light entry), `StdioHost`.
 
 The CLI consumes only the server entry: argv pre-dispatch
@@ -74,9 +74,11 @@ It does not retain output for replay or expose `process/read`.
 
 Client-surface notes beyond the wire protocol:
 
-- `RemoteEnvironment.environment` is the handshake payload (adds `cwd`/`tempDir`
-  to `HostEnvironmentInfo`).
-- `RemoteEnvironment.connection` is public as the protocol escape hatch for raw
+- `RemoteSession` is one live executor connection (fs/process stubs, the
+  handshake `host` payload that adds `cwd`/`tempDir` to `HostEnvironmentInfo`,
+  and `dispose`). It is not an `Environment`: identity, status and generation
+  live only on the registered `DeclaredRemoteEnvironment`.
+- `RemoteSession.connection` is public as the protocol escape hatch for raw
   calls the `Environment` interface does not model (e.g. starting a process
   without an `IHostProcess` wrapper, as the e2e fault-injection scenarios do).
 - Bounded business calls (fs/*, process/start, …) carry a per-request timeout
@@ -90,11 +92,12 @@ Client-surface notes beyond the wire protocol:
   through `offset`/`maxBytes` range reads.
 - `RemoteEnvironmentProviderFactory` registers one `DeclaredRemoteEnvironment`
   per declaration id in the `EnvironmentRegistry`, and that declaration holds
-  the connection one-to-one: at most one `RemoteEnvironment` (one executor
+  the connection one-to-one: at most one `RemoteSession` (one executor
   process) per id at a time. There is no per-workspace view or refcount —
   registry leases only point at the registered environment. Registration is
   still `pending` — no connection is opened until `connect()`. A temporary
-  `RemoteEnvironment.connect` does not enter the registry.
+  `RemoteSession.connect` does not enter the registry. Unregistering on detach
+  is owned by `IEnvironmentService`, not by the provider.
 - `connect()` while `ready` is a no-op, and concurrent connects share one
   in-flight attempt. A drop is process-wide for that id. The next `connect()`
   opens a new process; explicit reconnect is `disconnect()` then `connect()`,

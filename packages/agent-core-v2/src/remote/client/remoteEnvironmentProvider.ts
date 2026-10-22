@@ -22,15 +22,17 @@ import type {
 } from '#/environment/environmentProvider';
 
 import { EnvironmentError, type EnvironmentRegistrationHandle } from '#/environment/environmentRegistry';
+import { POSIX_ENVIRONMENT_PATH, POSIX_ENVIRONMENT_WORKSPACE } from '#/environment/environmentDefaults';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import type { IHostProcessService } from '#/os/interface/hostProcess';
 import { classifyHandshakeFailure, connectWithGuidance } from './connectGuidance';
 import type { LauncherSpec } from './launchers';
-import { RemoteEnvironment, type RemoteEnvironmentOptions } from './remoteEnvironment';
+import { RemoteSession, type RemoteSessionOptions } from './remoteSession';
 
 export { toLauncherSpec } from '#/environment/environmentDeclarations';
 
 const EMPTY_CAPABILITIES: ReadonlySet<EnvironmentCapability> = new Set();
+const REMOTE_CAPABILITIES: ReadonlySet<EnvironmentCapability> = new Set(['fs', 'process']);
 
 class DeclaredRemoteEnvironment implements Environment {
   private generation: string;
@@ -38,7 +40,7 @@ class DeclaredRemoteEnvironment implements Environment {
   get identity(): EnvironmentIdentity {
     return { environmentId: this.environmentId, generation: this.generation };
   }
-  private session: RemoteEnvironment | undefined;
+  private session: RemoteSession | undefined;
   private launcher: LauncherSpec;
   private fingerprint: string;
   private currentStatus: EnvironmentStatus = 'pending';
@@ -47,7 +49,6 @@ class DeclaredRemoteEnvironment implements Environment {
   private epoch = 0;
   private readonly statusEmitter = new Emitter<EnvironmentStatus>();
   readonly onDidChangeStatus = this.statusEmitter.event;
-  private sessionSubscription: { dispose(): void } | undefined;
   private hasConnected = false;
   private connectedAt = 0;
   readonly fs: IHostFileSystem = {
@@ -76,7 +77,7 @@ class DeclaredRemoteEnvironment implements Environment {
     private readonly environmentId: string,
     launcher: LauncherSpec,
     fingerprint: string,
-    private readonly open: (launcher: LauncherSpec) => Promise<RemoteEnvironment>,
+    private readonly open: (launcher: LauncherSpec) => Promise<RemoteSession>,
     private readonly telemetry: ITelemetryService,
   ) {
     this.launcher = launcher;
@@ -106,7 +107,7 @@ class DeclaredRemoteEnvironment implements Environment {
   }
 
   get capabilities(): ReadonlySet<EnvironmentCapability> {
-    return this.session?.capabilities ?? EMPTY_CAPABILITIES;
+    return this.session === undefined ? EMPTY_CAPABILITIES : REMOTE_CAPABILITIES;
   }
 
   get host(): Environment['host'] {
@@ -114,14 +115,14 @@ class DeclaredRemoteEnvironment implements Environment {
   }
 
   get path(): Environment['path'] {
-    return this.session?.path;
+    return this.session === undefined ? undefined : POSIX_ENVIRONMENT_PATH;
   }
 
   get workspace(): Environment['workspace'] {
-    return this.session?.workspace;
+    return this.session === undefined ? undefined : POSIX_ENVIRONMENT_WORKSPACE;
   }
 
-  private connected(): RemoteEnvironment {
+  private connected(): RemoteSession {
     if (this.session !== undefined && this.currentStatus === 'ready') return this.session;
     throw new EnvironmentError('environment.unavailable', `environment ${this.environmentId} is ${this.currentStatus}`);
   }
@@ -190,23 +191,19 @@ class DeclaredRemoteEnvironment implements Environment {
     this.disconnect();
   }
 
-  private install(session: RemoteEnvironment): void {
+  private install(session: RemoteSession): void {
     const previous = this.session;
     this.generation = `${this.environmentId}-${randomUUID()}`;
     this.session = session;
-    this.sessionSubscription?.dispose();
-    this.sessionSubscription = session.onDidChangeStatus((status) => {
-      if (this.session !== session || status !== 'disconnected') return;
+    session.connection.onDidClose((info) => {
+      if (this.session !== session) return;
       this.telemetry.track2('environment_disconnected', {
         environment_type: this.launcher.type,
         uptime_ms: performance.now() - this.connectedAt,
-        reason: session.connection?.closeReason?.kind ?? 'other',
+        reason: info.kind ?? 'other',
       });
-      const reason = session.connection?.closeReason?.reason;
-      if (reason !== undefined) this.lastConnectError = reason;
+      this.lastConnectError = info.reason;
       this.session = undefined;
-      this.sessionSubscription?.dispose();
-      this.sessionSubscription = undefined;
       this.setStatus('disconnected');
       void session.dispose();
     });
@@ -214,8 +211,6 @@ class DeclaredRemoteEnvironment implements Environment {
   }
 
   private dropSession(): Promise<void> {
-    this.sessionSubscription?.dispose();
-    this.sessionSubscription = undefined;
     const session = this.session;
     this.session = undefined;
     return Promise.resolve(session?.dispose());
@@ -229,7 +224,7 @@ class DeclaredRemoteEnvironment implements Environment {
 }
 export interface RemoteEnvironmentProviderFactoryOptions {
   readonly clientVersion?: string;
-  readonly connect?: (options: RemoteEnvironmentOptions) => Promise<RemoteEnvironment>;
+  readonly connect?: (options: RemoteSessionOptions) => Promise<RemoteSession>;
 }
 
 interface DeclaredEnvironmentRecord {
@@ -310,14 +305,8 @@ export class RemoteEnvironmentProviderFactory implements EnvironmentProviderFact
       dispose: async () => {
         disposed = true;
         configListener.dispose();
-        for (const record of [...records.values()].toReversed()) {
-          try {
-            await record.handle.remove();
-          } finally {
-            records.delete(record.environment.identity.environmentId);
-          }
-        }
         await tail.catch(() => {});
+        records.clear();
       },
     };
   }
@@ -338,8 +327,8 @@ export class RemoteEnvironmentProviderFactory implements EnvironmentProviderFact
     }
   }
 
-  private open(environmentId: string, launcher: LauncherSpec): Promise<RemoteEnvironment> {
-    const connect = this.options.connect ?? ((options: RemoteEnvironmentOptions) => RemoteEnvironment.connect(options));
+  private open(environmentId: string, launcher: LauncherSpec): Promise<RemoteSession> {
+    const connect = this.options.connect ?? ((options: RemoteSessionOptions) => RemoteSession.connect(options));
     return connectWithGuidance(
       (spec) => connect({
         environmentId,

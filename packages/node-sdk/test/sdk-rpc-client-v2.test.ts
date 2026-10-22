@@ -1384,6 +1384,7 @@ key = "${titleOAuthRef.key}"
     const provider = await attachFakeBoxEnvironment(client);
     try {
       const session = await harness.createSession({ workDir, environmentId: 'fake-box' });
+      expect(await session.getEnvironmentState()).toEqual({ environmentId: 'fake-box', cwd: remoteDir, type: 'ssh', status: 'ready' });
       const matched = await harness.suggestFiles(workDir, { query: 'app', sessionId: session.id });
       expect(matched?.items).toContainEqual(
         expect.objectContaining({ kind: 'file', path: 'src/app.ts', name: 'app.ts' }),
@@ -1395,6 +1396,9 @@ key = "${titleOAuthRef.key}"
       expect(local?.items).toContainEqual(
         expect.objectContaining({ kind: 'file', path: 'src/local-only.ts' }),
       );
+
+      await provider.dispose();
+      expect(await session.getEnvironmentState()).toMatchObject({ environmentId: 'fake-box', status: 'disposed' });
     } finally {
       await provider.dispose();
       await harness.close();

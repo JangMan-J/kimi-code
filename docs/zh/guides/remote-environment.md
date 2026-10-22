@@ -57,6 +57,8 @@ defaultCwd = "/home/me/kimi-code"
 
 启用[文件监听](../configuration/config-files.md#watch)后，声明文件的修改无需重启即可生效。删除环境不会把会话静默改绑到 `local`；后续工具调用会以 `environment.not_found` 或 `environment.unavailable` 失败。
 
+修改环境的启动方式（例如 `host`、`container`、`context`、`remoteBin`、`command`、`args` 或 `env`）会断开现有连接，并终止正在运行的远程命令和远程 MCP server。下次使用时按新配置连接；会话中已经加载的项目说明（`AGENTS.md`）和项目级 skills 不会随之刷新。
+
 环境 ID 是进程级的：绑定到同一 ID 的会话共享一条连接，工作目录可以不同。
 
 完整字段参考见 [`environments`](../configuration/config-files.md#environments)。

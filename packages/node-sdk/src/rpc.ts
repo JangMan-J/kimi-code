@@ -71,6 +71,7 @@ import type {
   SessionSummary,
   SessionSummaryPage,
   SessionEnvironmentsInfo,
+  SessionEnvironmentState,
   SkillSummary,
   PluginCommandDef,
   SuggestFilesInput,
@@ -488,6 +489,8 @@ export abstract class SDKRpcClientBase {
   abstract getEnvironment(input: SessionIdRpcInput): Promise<AgentEnvironmentBinding>;
 
   abstract listEnvironments(input: SessionIdRpcInput): Promise<SessionEnvironmentsInfo>;
+
+  abstract getEnvironmentState(input: SessionIdRpcInput): Promise<SessionEnvironmentState>;
 
   onEvent(listener: (event: Event) => void): Unsubscribe {
     this.eventListeners.add(listener);

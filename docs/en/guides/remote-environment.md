@@ -57,6 +57,8 @@ Key rules:
 
 With file watching enabled, declaration edits are applied without a restart. Removing an environment does not silently rebind a session to `local`; subsequent tool calls fail with `environment.not_found` or `environment.unavailable`.
 
+Changing an environment's launcher (for example `host`, `container`, `context`, `remoteBin`, `command`, `args`, or `env`) disconnects it and terminates running remote commands and remote MCP servers. The next use connects with the new launcher; project instructions (`AGENTS.md`) and project skills already loaded in a session are not refreshed.
+
 Environment IDs are process-wide: sessions bound to the same ID share one connection, and their working directories can differ.
 
 For the full field reference, see [`environments`](../configuration/config-files.md#environments).

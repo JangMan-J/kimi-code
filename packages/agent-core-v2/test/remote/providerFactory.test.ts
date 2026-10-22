@@ -17,12 +17,12 @@ import type {
   EnvironmentProviderHost,
 } from '#/environment/environmentProvider';
 
-import { HandshakeError } from '#/remote/client/connection';
+import { HandshakeError, type ConnectionCloseInfo } from '#/remote/client/connection';
 import {
   RemoteEnvironmentProviderFactory,
   type RemoteEnvironmentProviderFactoryOptions,
 } from '#/remote/client/remoteEnvironmentProvider';
-import type { RemoteEnvironment, RemoteEnvironmentOptions } from '#/remote/client/remoteEnvironment';
+import type { RemoteSession, RemoteSessionOptions } from '#/remote/client/remoteSession';
 
 function configService(section: unknown): IConfigService {
   return {
@@ -127,20 +127,21 @@ function fakeHost(services: HostServices, registry: EnvironmentRegistry): Enviro
   } as unknown as EnvironmentProviderHost;
 }
 
-function connectedEnvironment(options: RemoteEnvironmentOptions, generation: string): RemoteEnvironment {
-  const environment = new FakeEnvironment(
-    { environmentId: options.environmentId, generation },
-    { capabilities: ['fs', 'process'] },
-  );
-  return Object.assign(environment, { fs: {}, process: {} }) as unknown as RemoteEnvironment;
-}
+type FakeSession = RemoteSession & { released: boolean; close(info: ConnectionCloseInfo): void };
 
-function closingEnvironment(options: RemoteEnvironmentOptions, generation: string, reason: string): RemoteEnvironment {
-  const environment = connectedEnvironment(options, generation) as unknown as FakeEnvironment & {
-    connection: { closeReason?: { reason: string } };
+function connectedSession(): FakeSession {
+  const listeners = new Set<(info: ConnectionCloseInfo) => void>();
+  const session = {
+    host: { osKind: 'linux', osArch: 'x64', osVersion: '', shellName: 'sh', shellPath: '/bin/sh', pathClass: 'posix', homeDir: '/home/me', cwd: '/home/me', tempDir: '/tmp' },
+    fs: {},
+    process: {},
+    executorVersion: 'test',
+    released: false,
+    connection: { onDidClose: (listener: (info: ConnectionCloseInfo) => void) => { listeners.add(listener); } },
+    close: (info: ConnectionCloseInfo) => { for (const listener of listeners) listener(info); },
+    dispose: async () => { session.released = true; },
   };
-  environment.connection = { closeReason: { reason } };
-  return environment as unknown as RemoteEnvironment;
+  return session as unknown as FakeSession;
 }
 
 function baseServices(registry: EnvironmentRegistry, overrides: Partial<HostServices> = {}): HostServices {
@@ -164,7 +165,7 @@ function factoryOptions(extra: RemoteEnvironmentProviderFactoryOptions = {}): Re
 describe('RemoteEnvironmentProviderFactory', () => {
   it('registers declared environments as pending placeholders without connecting', async () => {
     const registry = new EnvironmentRegistry();
-    const connect = vi.fn(async (options: RemoteEnvironmentOptions) => connectedEnvironment(options, 'connected-1'));
+    const connect = vi.fn(async () => connectedSession());
     const factory = new RemoteEnvironmentProviderFactory(factoryOptions({ connect }));
     const attachment = await factory.attach(fakeHost(baseServices(registry), registry));
 
@@ -187,9 +188,9 @@ describe('RemoteEnvironmentProviderFactory', () => {
     const gate = new Promise<void>((resolve) => {
       releaseConnect = resolve;
     });
-    const connect = vi.fn(async (options: RemoteEnvironmentOptions) => {
+    const connect = vi.fn(async (options: RemoteSessionOptions) => {
       await gate;
-      return connectedEnvironment(options, 'connected-1');
+      return connectedSession();
     });
     const factory = new RemoteEnvironmentProviderFactory(factoryOptions({ connect }));
     const attachment = await factory.attach(fakeHost(baseServices(registry), registry));
@@ -213,6 +214,11 @@ describe('RemoteEnvironmentProviderFactory', () => {
     expect(placeholder.whenReady).toBeUndefined();
     expect(registry.current('dev-box')).toBe(placeholder);
     expect(registry.current('dev-box')!.status).toBe('ready');
+    expect(placeholder.capabilities).toEqual(new Set(['fs', 'process']));
+    expect(placeholder.path?.separator).toBe('/');
+    expect(placeholder.path?.isAbsolute('/tmp/x')).toBe(true);
+    expect(placeholder.path?.join('/a', 'b')).toBe('/a/b');
+    expect(placeholder.workspace?.mapRoots({ workDir: 'rel' }).workDir).toBe(placeholder.path?.resolve('rel'));
     expect(statuses[0]).toBe('connecting');
 
     await attachment.dispose();
@@ -226,7 +232,7 @@ describe('declaration watch', () => {
     const config = watchableConfigService({
       'dev-box': { type: 'ssh', host: 'dev-box', defaultCwd: '/home/me' },
     });
-    const connect = vi.fn(async (options: RemoteEnvironmentOptions) => connectedEnvironment(options, 'connected-1'));
+    const connect = vi.fn(async () => connectedSession());
     const factory = new RemoteEnvironmentProviderFactory(factoryOptions({ connect }));
     const attachment = await factory.attach(fakeHost(baseServices(registry, { config: config.service }), registry));
 
@@ -253,10 +259,10 @@ describe('declaration watch', () => {
     const config = watchableConfigService({
       'dev-box': { type: 'ssh', host: 'dev-box', defaultCwd: '/home/me' },
     });
-    const produced: FakeEnvironment[] = [];
-    const connect = vi.fn(async (options: RemoteEnvironmentOptions) => {
-      const environment = connectedEnvironment(options, 'connected-1');
-      produced.push(environment as unknown as FakeEnvironment);
+    const produced: FakeSession[] = [];
+    const connect = vi.fn(async (options: RemoteSessionOptions) => {
+      const environment = connectedSession();
+      produced.push(environment);
       return environment;
     });
     const factory = new RemoteEnvironmentProviderFactory(factoryOptions({ connect }));
@@ -277,10 +283,10 @@ describe('declaration watch', () => {
     );
 
     expect(lease.environment).toBe(connected);
-    expect((produced[0]! as unknown as { disposed: boolean }).disposed).toBe(false);
+    expect(produced[0]!.released).toBe(false);
     lease.dispose();
     await vi.waitFor(() => {
-      expect((produced[0]! as unknown as { disposed: boolean }).disposed).toBe(true);
+      expect(produced[0]!.released).toBe(true);
     });
 
     await attachment.dispose();
@@ -293,11 +299,11 @@ describe('declaration watch', () => {
       'dev-box': { type: 'ssh', host: 'dev-box', defaultCwd: '/home/me' },
     });
     let releaseConnect!: () => void;
-    const produced: FakeEnvironment[] = [];
-    const connect = vi.fn((options: RemoteEnvironmentOptions) => new Promise<RemoteEnvironment>((resolve) => {
+    const produced: FakeSession[] = [];
+    const connect = vi.fn((options: RemoteSessionOptions) => new Promise<RemoteSession>((resolve) => {
       releaseConnect = () => {
-        const environment = connectedEnvironment(options, 'stale-1');
-        produced.push(environment as unknown as FakeEnvironment);
+        const environment = connectedSession();
+        produced.push(environment);
         resolve(environment);
       };
     }));
@@ -312,7 +318,7 @@ describe('declaration watch', () => {
     releaseConnect();
     await expect(connecting).rejects.toThrow(/cancelled/);
 
-    expect((produced[0]! as unknown as { disposed: boolean }).disposed).toBe(true);
+    expect(produced[0]!.released).toBe(true);
     expect(registry.current('dev-box')!.identity.generation).not.toBe('stale-1');
     expect(registry.current('dev-box')!.status).toBe('disconnected');
 
@@ -327,11 +333,11 @@ describe('connection telemetry', () => {
     const records: TelemetryAppenderRecord[] = [];
     telemetry.addAppender({ track: (record) => records.push(record) });
     let attempt = 0;
-    const produced: FakeEnvironment[] = [];
-    const connect = vi.fn(async (options: RemoteEnvironmentOptions) => {
+    const produced: FakeSession[] = [];
+    const connect = vi.fn(async (options: RemoteSessionOptions) => {
       if (++attempt === 1) throw new HandshakeError('secret-host: /private/path YOUR_API_KEY', { kind: 'timeout' });
-      const environment = closingEnvironment(options, `connected-${attempt}`, 'secret-host: /private/path');
-      produced.push(environment as unknown as FakeEnvironment);
+      const environment = connectedSession();
+      produced.push(environment);
       return environment;
     });
     const registry = new EnvironmentRegistry();
@@ -344,7 +350,8 @@ describe('connection telemetry', () => {
     await Promise.all([target.connect!(), target.connect!()]);
     expect(records).toHaveLength(2);
     expect(records[1]).toMatchObject({ event: 'environment_connected', properties: { outcome: 'ok', is_reconnect: false } });
-    produced[0]!.setStatus('disconnected');
+    produced[0]!.close({ reason: 'secret-host: /private/path' });
+    expect(produced[0]!.released).toBe(true);
     expect(records[2]).toMatchObject({ event: 'environment_disconnected', properties: { reason: 'other', uptime_ms: expect.any(Number) } });
     await target.connect!();
     expect(records[3]).toMatchObject({ event: 'environment_connected', properties: { outcome: 'ok', is_reconnect: true } });

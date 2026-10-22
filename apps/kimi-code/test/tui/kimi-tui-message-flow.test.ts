@@ -231,6 +231,7 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     getGoal: vi.fn(async () => ({ goal: null })),
     getEnvironment: vi.fn(async () => ({ environmentId: 'local' })),
     listEnvironments: vi.fn(async () => ({ environments: [] })),
+    getEnvironmentState: vi.fn(async () => ({ environmentId: 'local', type: 'local', status: 'ready' })),
     setApprovalHandler: vi.fn(),
     setQuestionHandler: vi.fn(),
     setStaleReloadHandler: vi.fn(),
@@ -12403,12 +12404,11 @@ describe('KimiTUI environment slot', () => {
         environmentId: 'dev-box',
         cwd: '/home/me/projects',
       })),
-      listEnvironments: vi.fn(async () => ({
-        workspaceId: 'ws-1',
-        environments: [
-          { environmentId: 'local', type: 'local', status: 'ready', generation: 'g0', capabilities: [] },
-          { environmentId: 'dev-box', type: 'ssh', status: 'ready', generation: 'g1', capabilities: ['fs'] },
-        ],
+      getEnvironmentState: vi.fn(async () => ({
+        environmentId: 'dev-box',
+        cwd: '/home/me/projects',
+        type: 'ssh',
+        status: 'ready',
       })),
       ...overrides,
     });
@@ -12427,19 +12427,12 @@ describe('KimiTUI environment slot', () => {
 
   it('refreshes the slot with the recorded reason on a environment.status.changed hint', async () => {
     const session = environmentSession({
-      listEnvironments: vi.fn(async () => ({
-        workspaceId: 'ws-1',
-        environments: [
-          { environmentId: 'local', type: 'local', status: 'ready', generation: 'g0', capabilities: [] },
-          {
-            environmentId: 'dev-box',
-            type: 'ssh',
-            status: 'disconnected',
-            generation: 'g1',
-            capabilities: ['fs'],
-            connectError: 'initialize timed out after 10000ms; executor stderr: Password:\nsecond line stays out',
-          },
-        ],
+      getEnvironmentState: vi.fn(async () => ({
+        environmentId: 'dev-box',
+        cwd: '/home/me/projects',
+        type: 'ssh',
+        status: 'disconnected',
+        connectError: 'initialize timed out after 10000ms; executor stderr: Password:\nsecond line stays out',
       })),
     });
     const { driver } = await makeDriver(session);
