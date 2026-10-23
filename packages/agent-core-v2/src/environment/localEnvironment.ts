@@ -5,7 +5,6 @@ import { Emitter } from '#/_base/event';
 import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IHostProcessService } from '#/os/interface/hostProcess';
-import { IHostTerminalService } from '#/os/interface/terminal';
 
 import type { Environment, EnvironmentCapability, EnvironmentPath, EnvironmentStatus } from './environment';
 
@@ -19,7 +18,6 @@ export class LocalEnvironment implements Environment {
   readonly workspace: Environment['workspace'];
   readonly fs;
   readonly process;
-  readonly terminal;
   private currentStatus: EnvironmentStatus = 'ready';
   private readonly statusEmitter = new Emitter<EnvironmentStatus>();
   readonly onDidChangeStatus = this.statusEmitter.event;
@@ -28,13 +26,11 @@ export class LocalEnvironment implements Environment {
     environment: IHostEnvironment,
     fs: IHostFileSystem | undefined,
     process: IHostProcessService | undefined,
-    terminal: IHostTerminalService | undefined,
   ) {
     this.identity = { environmentId: 'local', generation: `local-${nextGeneration++}` };
     const capabilities = new Set<EnvironmentCapability>();
     if (fs !== undefined) capabilities.add('fs');
     if (process !== undefined) capabilities.add('process');
-    if (terminal !== undefined) capabilities.add('terminal');
     this.capabilities = capabilities;
     this.host = {
       osKind: environment.osKind,
@@ -64,7 +60,6 @@ export class LocalEnvironment implements Environment {
     };
     this.fs = fs;
     this.process = process;
-    this.terminal = terminal;
   }
 
   get status(): EnvironmentStatus {

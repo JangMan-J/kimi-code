@@ -205,7 +205,7 @@ function createHarness(
       reg.defineInstance(IHostEnvironment, hostEnvironment);
       const environment = {
         identity: { environmentId: 'local', generation: 'test' },
-        capabilities: new Set(['fs', 'process', 'terminal']),
+        capabilities: new Set(['fs', 'process']),
         host: hostEnvironment,
         path: {
           separator: options.pathClass === 'win32' ? '\\' : '/',

@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 
 function environmentService(ready: Promise<void> = Promise.resolve()): EnvironmentService {
-  const service = new EnvironmentService({} as never, { ready, pathClass: 'posix', homeDir: '/home/test' } as never, undefined as never, undefined as never, undefined as never);
+  const service = new EnvironmentService({} as never, { ready, pathClass: 'posix', homeDir: '/home/test' } as never, undefined as never, undefined as never);
   environmentServices.push(service);
   return service;
 }

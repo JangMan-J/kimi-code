@@ -34,6 +34,7 @@ import { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import { IEnvironmentService } from '#/app/environment/environment';
 import { canonicalWorkspaceRoot } from '#/_base/utils/paths';
 import { SessionLifecycleService } from '#/workspace/sessionLifecycle/sessionLifecycleService';
+import { IWorkspaceTrustStore } from '#/workspace/workspaceTrust/workspaceTrustStore';
 
 import { WorkspaceInstance } from './workspaceInstance';
 import { IWorkspaceInstanceManager, type WorkspaceInstanceRef } from './workspaceInstanceManager';
@@ -77,6 +78,7 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
     @IAtomicDocumentStore private readonly docs: IAtomicDocumentStore,
     @IFileSystemStorageService private readonly storage: IFileSystemStorageService,
     @IEnvironmentService private readonly environments: IEnvironmentService,
+    @IWorkspaceTrustStore private readonly trustStore: IWorkspaceTrustStore,
   ) {}
 
   get(workspaceId: string): WorkspaceInstance | undefined {
@@ -188,7 +190,7 @@ export class WorkspaceInstanceManager implements IWorkspaceInstanceManager {
         builtinSkills: this.builtinSkills,
         userSkills: this.userSkills,
         telemetry: this.telemetry,
-        docs: this.docs,
+        trustStore: this.trustStore,
         createSessionController: (input) => new SessionLifecycleService(
           this.instantiation,
           input.context,

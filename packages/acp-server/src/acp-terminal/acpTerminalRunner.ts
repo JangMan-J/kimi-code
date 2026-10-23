@@ -165,7 +165,6 @@ class AcpSessionEnvironment implements Environment {
   readonly fs: IHostFileSystem;
   readonly process;
   readonly watch = undefined;
-  readonly terminal = undefined;
   readonly status = 'ready' as const;
   readonly onDidChangeStatus = () => ({ dispose: () => {} });
 

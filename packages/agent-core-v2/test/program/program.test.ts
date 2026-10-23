@@ -26,6 +26,7 @@ import { fakeEnvironment } from '../environment/stubs';
 import { noopLogger } from '../wire/stubs';
 import type { IWorkspaceContext } from '#/workspace/workspaceContext/workspaceContext';
 import { writeWorkspaceTrust } from '#/workspace/workspaceTrust/trustRecord';
+import { WorkspaceTrustStore } from '#/workspace/workspaceTrust/workspaceTrustStore';
 import type { IWorkspaceDirs } from '#/workspace/workspaceDirs/workspaceDirs';
 import type { IWorkspaceFsService } from '#/workspace/workspaceFs/fs';
 import type { IWorkspaceGitService } from '#/workspace/workspaceGit/workspaceGit';
@@ -434,6 +435,7 @@ async function localityFixture(options: { readonly remoteCwd?: string } = {}): P
     get: () => undefined,
     onDidSectionChange: () => ({ dispose: () => {} }),
   };
+  const trustStore = new WorkspaceTrustStore(docs as never, noopTelemetryService, bootstrap as never);
   const userSkills = new UserFileSkillSource(
     new FileSkillDiscovery(noopLogger),
     bootstrap as never,
@@ -479,7 +481,7 @@ async function localityFixture(options: { readonly remoteCwd?: string } = {}): P
       builtinSkills: { _serviceBrand: undefined, id: 'builtin', priority: 0, load: async () => ({ skills: [] }) },
       userSkills,
       telemetry: noopTelemetryService,
-      docs,
+      trustStore,
       createSessionController: (input: ProgramSessionControllerInput) => {
         controllerInputs.push(input);
         return { dispose: input.onDispose } as never;
@@ -544,6 +546,7 @@ async function localityFixture(options: { readonly remoteCwd?: string } = {}): P
       program.dispose();
       userSkills.dispose();
       profileContainer.dispose();
+      trustStore.dispose();
       await registry.dispose();
       await rm(base, { recursive: true, force: true });
     },

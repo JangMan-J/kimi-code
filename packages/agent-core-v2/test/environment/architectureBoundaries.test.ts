@@ -40,14 +40,10 @@ describe('environment architecture boundaries', () => {
     expect(readTool).not.toContain("'acquire' in environment");
   });
 
-  it('routes terminal, MCP, and external FS through explicit environment selection', () => {
-    const terminal = source('session/terminal/terminalService.ts');
+  it('routes MCP and external FS through explicit environment selection', () => {
     const mcp = source('workspace/workspaceMcp/workspaceMcpService.ts');
     const externalFs = kapSource('routes/fs.ts');
 
-    expect(terminal).toContain('this.environmentResolver.acquire(');
-    expect(terminal).toContain('new EnvironmentWorkspaceView(');
-    expect(terminal).not.toMatch(/@IHostTerminalService/);
     expect(mcp).toContain('environmentResolver: this.environmentResolver');
     expect(mcp).not.toMatch(/@IHost(?:FileSystem|FsWatchService|ProcessService|TerminalService)/);
     expect(externalFs).toContain('session.accessor.get(ISessionWorkdir)');

@@ -224,7 +224,7 @@ function createHarness(options: {
         acquire: (): EnvironmentLease => ({
           environment: {
             identity: { environmentId: 'local', generation: 'test' },
-            capabilities: new Set(['fs', 'process', 'terminal']),
+            capabilities: new Set(['fs', 'process']),
             host: hostEnvironment,
             path: {
               separator: '/',

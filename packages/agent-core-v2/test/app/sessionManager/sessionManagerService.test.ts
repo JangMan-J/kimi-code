@@ -22,7 +22,6 @@ import { Program } from '#/program/program';
 import type { ProgramSessionControllerInput } from '#/program/programDependencies';
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { ISessionActivityView } from '#/session/sessionActivity/sessionActivity';
-import { ISessionTerminalService } from '#/session/terminal/terminalService';
 import { fakeEnvironment, connectableEnvironment } from '../../environment/stubs';
 import type {
   SessionArchivedEvent,
@@ -557,7 +556,6 @@ describe('SessionManager closeIfIdle', () => {
   interface Guards {
     readonly busy?: boolean;
     readonly pending?: 'none' | 'approval' | 'question';
-    readonly terminal?: 'running' | 'exited';
     readonly cronTasks?: number;
   }
 
@@ -590,9 +588,6 @@ describe('SessionManager closeIfIdle', () => {
               state: () => ({ busy: state.busy, mainTurnActive: false, pendingInteraction: state.pending }),
               lastActiveAt: () => state.activeAt,
             };
-          }
-          if (token === ISessionTerminalService) {
-            return { list: async () => state.terminal === undefined ? [] : [{ status: state.terminal }] };
           }
           if (token === IAgentLifecycleService) {
             return { list: () => [{ agentId: 'main' }], handleOf: () => agent };
@@ -673,7 +668,6 @@ describe('SessionManager closeIfIdle', () => {
     ['a busy turn', { busy: true }],
     ['a pending approval', { pending: 'approval' }],
     ['a pending question', { pending: 'question' }],
-    ['a running terminal', { terminal: 'running' }],
     ['pending cron tasks', { cronTasks: 1 }],
   ];
 
@@ -682,13 +676,6 @@ describe('SessionManager closeIfIdle', () => {
     await create(fake);
     expect(await fake.manager.closeIfIdle('session-1', 0)).toBe(false);
     expect(fake.manager.get('session-1')).toBeDefined();
-  });
-
-  it('reclaims a session with an exited terminal', async () => {
-    const fake = setup({ terminal: 'exited' });
-    await create(fake);
-    expect(await fake.manager.closeIfIdle('session-1', 0)).toBe(true);
-    expect(fake.manager.get('session-1')).toBeUndefined();
   });
 
   it('releases the lease when the close path fails', async () => {

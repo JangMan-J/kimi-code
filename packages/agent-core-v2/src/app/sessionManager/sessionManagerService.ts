@@ -14,7 +14,6 @@ import { ISessionLockService, type SessionLockLease } from '#/persistence/interf
 import { IAgentLifecycleService } from '#/session/agentLifecycle/agentLifecycle';
 import { ISessionActivityView } from '#/session/sessionActivity/sessionActivity';
 import type { SessionMeta } from '#/session/sessionMetadata/sessionMetadata';
-import { ISessionTerminalService } from '#/session/terminal/terminalService';
 import type {
   CreateChildSessionOptions,
   ForkSessionOptions,
@@ -248,8 +247,6 @@ export class SessionManager implements ISessionManager {
   }
 
   private async retained(handle: ISessionScopeHandle): Promise<boolean> {
-    const terminals = await handle.accessor.get(ISessionTerminalService).list();
-    if (terminals.some((terminal) => terminal.status === 'running')) return true;
     const agents = handle.accessor.get(IAgentLifecycleService);
     const hasCron = agents
       .list()

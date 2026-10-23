@@ -12,7 +12,6 @@ export class FakeEnvironment implements Environment {
   readonly workspace;
   readonly fs = undefined;
   readonly process = undefined;
-  readonly terminal = undefined;
   private currentStatus: EnvironmentStatus;
   private readonly statusEmitter = new Emitter<EnvironmentStatus>();
   readonly onDidChangeStatus = this.statusEmitter.event;

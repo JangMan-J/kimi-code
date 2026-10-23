@@ -28,6 +28,8 @@ import type { ToolCall } from '#human/llm/message';
 import { IAgentEnvironmentService } from '#/agent/environmentBinding/agentEnvironment';
 import { IHostEnvironment } from '#/os/interface/hostEnvironment';
 import { IHostFileSystem } from '#/os/interface/hostFileSystem';
+import { IAgentScopeContext, makeAgentScopeContext } from '#/agent/scopeContext/scopeContext';
+import { MAIN_AGENT_ID } from '#/session/agentLifecycle/agentLifecycle';
 import { ToolAccesses } from '#/tool/toolContract';
 import type { ToolInputDisplay } from '#/tool/toolInputDisplay';
 
@@ -41,7 +43,7 @@ import { stubPlanEnvironment } from './stubs';
 const signal = new AbortController().signal;
 const TEMP_DIR = '/var/folders/x/T';
 const PLAN_ID = 'plan-1';
-const PLAN_PATH = `${TEMP_DIR}/agents/test-agent/plans/${PLAN_ID}.md`;
+const PLAN_PATH = `${TEMP_DIR}/agents/${MAIN_AGENT_ID}/plans/${PLAN_ID}.md`;
 
 const options = [
   { label: 'Approach A', description: 'Small change.' },
@@ -114,8 +116,11 @@ function mapResolution(
   resolution: PermissionPolicyResolution | undefined,
 ): BeforeExecuteDecision | undefined {
   if (resolution === undefined) return undefined;
+  if (resolution.kind === 'deny') {
+    return { veto: { output: resolution.message ?? '', isError: true } };
+  }
   if (resolution.kind !== 'result') {
-    throw new Error('the review stub only resolves synthetic results');
+    throw new Error('the review stub only resolves synthetic results and denials');
   }
   return { veto: resolution.result };
 }
@@ -132,12 +137,14 @@ describe('AgentPlanService plan-guard listener', () => {
   let formatDenyMessage: Mock<(message: string) => string>;
   let mode: PermissionMode;
   let files: Map<string, string>;
+  let nonInteractive: boolean;
 
   beforeEach(() => {
     disposables = new DisposableStore();
     records = [];
     requests = [];
     approvalResponse = { decision: 'approved' };
+    nonInteractive = false;
     formatDenyMessage = vi.fn((message: string) => message);
     mode = 'manual';
     files = new Map();
@@ -181,6 +188,7 @@ describe('AgentPlanService plan-guard listener', () => {
       },
       requestToolApproval: async (_context, ask, origin) => {
         requests.push({ ask, origin });
+        if (nonInteractive) return mapResolution(ask.resolveNonInteractive?.());
         return mapResolution(ask.resolveApproval?.(approvalResponse));
       },
       formatDenyMessage: (message: string) => formatDenyMessage(message),
@@ -190,7 +198,7 @@ describe('AgentPlanService plan-guard listener', () => {
 
     ix = createServices(disposables, {
       additionalServices: (reg) => {
-        registerTestAgentWireServices(reg);
+        registerTestAgentWireServices(reg, 'wire/main', MAIN_AGENT_ID);
         reg.defineInstance(IAgentEnvironmentService, environment);
         reg.definePartialInstance(IHostEnvironment, { pathClass: 'posix' });
         reg.defineInstance(IHostFileSystem, environment.inspect().fs ?? createFakeHostFs());
@@ -238,6 +246,34 @@ describe('AgentPlanService plan-guard listener', () => {
     }
     return executorEvents.fireBeforeExecute(ctx);
   }
+
+  describe('subagents', () => {
+    it('refuses plan mode for a subagent and leaves its tools unguarded', async () => {
+      ix.set(
+        IAgentScopeContext,
+        makeAgentScopeContext({ agentId: 'agent-0', agentScope: 'wire/agent-0' }),
+      );
+      const svc = plan();
+
+      await expect(svc.enter(PLAN_ID)).rejects.toThrow(
+        'Plan mode is only available to the main agent',
+      );
+      expect(await svc.status()).toBeNull();
+
+      const write = await run(
+        hookContext('Write', {
+          args: { path: '/workspace/src/main.ts' },
+          accesses: ToolAccesses.writeFile('/workspace/src/main.ts'),
+        }),
+      );
+      expect(write).toBeUndefined();
+      expect(permissionRan).toBe(true);
+
+      const exit = await run(hookContext('ExitPlanMode', { display: planReviewDisplay() }));
+      expect(exit).toBeUndefined();
+      expect(requests).toEqual([]);
+    });
+  });
 
   describe('guard', () => {
     it.each(['Write', 'Edit'] as const)(
@@ -395,8 +431,8 @@ describe('AgentPlanService plan-guard listener', () => {
     const secondPlan = second.get(IAgentPlanService);
     await Promise.all([firstPlan.enter(PLAN_ID), secondPlan.enter(PLAN_ID)]);
 
-    expect((await firstPlan.status())!.path).toBe(`${TEMP_DIR}/session-a/agents/test-agent/plans/${PLAN_ID}.md`);
-    expect((await secondPlan.status())!.path).toBe(`${TEMP_DIR}/session-b/agents/test-agent/plans/${PLAN_ID}.md`);
+    expect((await firstPlan.status())!.path).toBe(`${TEMP_DIR}/session-a/agents/${MAIN_AGENT_ID}/plans/${PLAN_ID}.md`);
+    expect((await secondPlan.status())!.path).toBe(`${TEMP_DIR}/session-b/agents/${MAIN_AGENT_ID}/plans/${PLAN_ID}.md`);
   });
 
   it('limits saved-plan Read routing to direct plan files owned by this agent', async () => {
@@ -406,9 +442,9 @@ describe('AgentPlanService plan-guard listener', () => {
     expect(await svc.resolveFile(PLAN_PATH, 'write')).toBeUndefined();
     for (const path of [
       `${TEMP_DIR}/agents/another-agent/plans/plan-1.md`,
-      `${TEMP_DIR}/agents/test-agent/plans/nested/plan-1.md`,
-      `${TEMP_DIR}/agents/test-agent/plans/plan-1.txt`,
-      `${TEMP_DIR}/another-session/agents/test-agent/plans/plan-1.md`,
+      `${TEMP_DIR}/agents/${MAIN_AGENT_ID}/plans/nested/plan-1.md`,
+      `${TEMP_DIR}/agents/${MAIN_AGENT_ID}/plans/plan-1.txt`,
+      `${TEMP_DIR}/another-session/agents/${MAIN_AGENT_ID}/plans/plan-1.md`,
     ]) expect(await svc.resolveFile(path, 'read')).toBeUndefined();
   });
 
@@ -561,17 +597,56 @@ describe('AgentPlanService plan-guard listener', () => {
       expect(await svc.status()).not.toBeNull();
     });
 
-    it('skips the review in auto mode', async () => {
+    it('reviews the plan in auto mode as well', async () => {
       mode = 'auto';
-      await enterPlan();
+      const svc = await enterPlan();
       const decision = await run(
         hookContext('ExitPlanMode', { display: planReviewDisplay() }),
       );
 
-      expect(requests).toHaveLength(0);
-      expect(records).toEqual([]);
-      expect(decision).toBeUndefined();
-      expect(permissionRan).toBe(true);
+      expect(requests).toHaveLength(1);
+      expect(decision?.veto?.isError).toBe(false);
+      expect(decision?.veto?.output).toContain('## Approved Plan:\n# Plan');
+      expect(records).toContainEqual({
+        event: 'plan_submitted',
+        properties: { has_options: false, mode: 'plan' },
+      });
+      expect(records).toContainEqual({
+        event: 'plan_resolved',
+        properties: { outcome: 'approved', mode: 'agent' },
+      });
+      expect(await svc.status()).toBeNull();
+    });
+
+    it('keeps plan mode active in auto mode until the user decides', async () => {
+      mode = 'auto';
+      const svc = await enterPlan();
+      approvalResponse = { decision: 'cancelled' };
+      const decision = await run(
+        hookContext('ExitPlanMode', { display: planReviewDisplay() }),
+      );
+
+      expect(requests).toHaveLength(1);
+      expect(decision?.veto?.output).toBe('Plan approval dismissed. Plan mode remains active.');
+      expect(await svc.status()).not.toBeNull();
+    });
+
+    it('keeps plan mode active and says why when nobody can review the plan', async () => {
+      nonInteractive = true;
+      mode = 'auto';
+      const svc = await enterPlan();
+      const decision = await run(
+        hookContext('ExitPlanMode', { display: planReviewDisplay() }),
+      );
+
+      expect(requests).toHaveLength(1);
+      expect(decision?.veto).toEqual({
+        isError: true,
+        output:
+          'Nobody can review this plan in a non-interactive run, so plan mode stays active for the rest of this run and you cannot edit files other than the plan file.',
+      });
+      expect(await svc.status()).not.toBeNull();
+      expect(records.some((record) => record.event === 'plan_resolved')).toBe(false);
     });
 
     it('skips the review when no plan is active', async () => {

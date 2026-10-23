@@ -2,10 +2,9 @@ import type { Event } from '#/_base/event';
 import type { HostEnvironmentInfo } from '#/os/interface/hostEnvironment';
 import type { IHostFileSystem } from '#/os/interface/hostFileSystem';
 import type { IHostProcessService } from '#/os/interface/hostProcess';
-import type { IHostTerminalService } from '#/os/interface/terminal';
 
 export type EnvironmentStatus = 'pending' | 'connecting' | 'ready' | 'disconnected' | 'disposed';
-export type EnvironmentCapability = 'fs' | 'process' | 'terminal';
+export type EnvironmentCapability = 'fs' | 'process';
 
 export const LOCAL_ENVIRONMENT_ID = 'local';
 
@@ -65,7 +64,6 @@ export interface Environment {
   readonly workspace?: EnvironmentWorkspaceMapper;
   readonly fs?: IHostFileSystem;
   readonly process?: IHostProcessService;
-  readonly terminal?: IHostTerminalService;
   readonly status: EnvironmentStatus;
   readonly onDidChangeStatus: Event<EnvironmentStatus>;
   readonly whenReady?: Promise<void>;

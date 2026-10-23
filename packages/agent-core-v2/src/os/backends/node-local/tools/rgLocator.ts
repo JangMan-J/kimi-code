@@ -5,7 +5,7 @@ import { homedir, tmpdir } from 'node:os';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-import { kimiRegionProfile, resolveKimiRegion } from '@moonshot-ai/kimi-code-oauth';
+import { kimiRegionProfile, resolveKimiRegion, type KimiRegion } from '@moonshot-ai/kimi-code-oauth';
 import { extract as extractTar } from 'tar';
 import { type Entry, fromBuffer as yauzlFromBuffer } from 'yauzl';
 import { basename, dirname, join } from 'pathe';
@@ -54,6 +54,7 @@ export interface EnsureRgPathOptions {
   readonly signal?: AbortSignal | undefined;
   readonly allowCachedFallback?: boolean;
   readonly environment?: Environment | undefined;
+  readonly resolveRegion?: () => KimiRegion | undefined;
 }
 
 function rgBinaryName(): string {
@@ -66,8 +67,9 @@ function getShareDir(): string {
   return join(homedir(), '.kimi-code');
 }
 
-function rgBaseUrl(): string {
-  return `${kimiRegionProfile(resolveKimiRegion()).cdnBase}/rg`;
+function rgBaseUrl(resolveRegion: (() => KimiRegion | undefined) | undefined): string {
+  const region = resolveRegion?.() ?? resolveKimiRegion();
+  return `${kimiRegionProfile(region).cdnBase}/rg`;
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
@@ -100,7 +102,7 @@ async function resolveRgPath(
   if (existing) return existing;
   throwIfAborted(options.signal);
   if (options.allowCachedFallback === true) {
-    return downloadRgWithLock(probe, shareDir);
+    return downloadRgWithLock(probe, shareDir, options.resolveRegion);
   }
   throw new Error2(ErrorCodes.OS_FS_UNAVAILABLE, 'ripgrep (rg) is not available on PATH');
 }
@@ -141,7 +143,7 @@ async function resolveRemoteRgPath(
   const cached = await probe.exec([binPath, '--version']).catch(() => ({ exitCode: -1 }));
   if (cached.exitCode === 0) return { path: binPath, source: 'share-bin-cached' };
   throwIfAborted(options.signal);
-  await installRemoteRg(probe, environment, binDir, binPath);
+  await installRemoteRg(probe, environment, binDir, binPath, options.resolveRegion);
   const installed = await probe.exec([binPath, '--version']).catch(() => ({ exitCode: -1 }));
   if (installed.exitCode !== 0) {
     throw new Error2(
@@ -157,6 +159,7 @@ async function installRemoteRg(
   environment: Environment,
   binDir: string,
   binPath: string,
+  resolveRegion: (() => KimiRegion | undefined) | undefined,
 ): Promise<void> {
   const host = environment.host;
   if (host === undefined) {
@@ -180,7 +183,7 @@ async function installRemoteRg(
       'environment does not provide fs for the ripgrep install',
     );
   }
-  const binary = await downloadRgBinary(target);
+  const binary = await downloadRgBinary(target, resolveRegion);
   await fs.mkdir(binDir, { recursive: true });
   const staged = `${binPath}.download-${randomUUID()}`;
   try {
@@ -226,13 +229,17 @@ export async function findExistingRg(
 }
 
 let downloadPromise: Promise<RgResolution> | undefined;
-async function downloadRgWithLock(probe: RgProbe, shareDir: string): Promise<RgResolution> {
+async function downloadRgWithLock(
+  probe: RgProbe,
+  shareDir: string,
+  resolveRegion: (() => KimiRegion | undefined) | undefined,
+): Promise<RgResolution> {
   if (downloadPromise !== undefined) return downloadPromise;
   downloadPromise = (async () => {
     try {
       const existing = await findExistingRg(probe, shareDir, true);
       if (existing) return existing;
-      const binPath = await downloadAndInstallRg(shareDir);
+      const binPath = await downloadAndInstallRg(shareDir, resolveRegion);
       return { path: binPath, source: 'share-bin-downloaded' };
     } finally {
       downloadPromise = undefined;
@@ -297,7 +304,10 @@ interface RgArchive {
   readonly isWindows: boolean;
 }
 
-function rgArchiveForTarget(target: string): RgArchive {
+function rgArchiveForTarget(
+  target: string,
+  resolveRegion: (() => KimiRegion | undefined) | undefined,
+): RgArchive {
   const isWindows = target.includes('windows');
   const archiveExt = isWindows ? 'zip' : 'tar.gz';
   const archiveName = `ripgrep-${RG_VERSION}-${target}.${archiveExt}`;
@@ -309,7 +319,7 @@ function rgArchiveForTarget(target: string): RgArchive {
       { details: { archiveName } },
     );
   }
-  return { archiveName, expectedSha256, url: `${rgBaseUrl()}/${archiveName}`, isWindows };
+  return { archiveName, expectedSha256, url: `${rgBaseUrl(resolveRegion)}/${archiveName}`, isWindows };
 }
 
 async function fetchRgArchive(archive: RgArchive, archivePath: string): Promise<void> {
@@ -362,7 +372,10 @@ async function extractRgArchive(archive: RgArchive, target: string, archivePath:
   return extracted;
 }
 
-async function downloadAndInstallRg(shareDir: string): Promise<string> {
+async function downloadAndInstallRg(
+  shareDir: string,
+  resolveRegion: (() => KimiRegion | undefined) | undefined,
+): Promise<string> {
   const target = detectTarget();
   if (target === undefined) {
     throw new Error2(
@@ -371,7 +384,7 @@ async function downloadAndInstallRg(shareDir: string): Promise<string> {
       { details: { platform: process.platform, arch: process.arch } },
     );
   }
-  const archive = rgArchiveForTarget(target);
+  const archive = rgArchiveForTarget(target, resolveRegion);
 
   const binDir = join(shareDir, 'bin');
   await mkdir(binDir, { recursive: true });
@@ -401,8 +414,11 @@ async function downloadAndInstallRg(shareDir: string): Promise<string> {
   }
 }
 
-async function downloadRgBinary(target: string): Promise<Uint8Array> {
-  const archive = rgArchiveForTarget(target);
+async function downloadRgBinary(
+  target: string,
+  resolveRegion: (() => KimiRegion | undefined) | undefined,
+): Promise<Uint8Array> {
+  const archive = rgArchiveForTarget(target, resolveRegion);
   const tmp = await mkdtemp(join(tmpdir(), 'kimi-rg-'));
   try {
     const archivePath = join(tmp, archive.archiveName);
