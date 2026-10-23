@@ -32,7 +32,6 @@ import { registerPromptsRoutes } from './prompts';
 import { registerQuestionsRoutes } from './questions';
 import { registerRemoteControlRoutes, type RemoteControlRouteOptions } from './remoteControl';
 import { registerEnvironmentRoutes } from './environment';
-import { registerRuntimeRoutes } from './runtime';
 import { registerSearchRoutes } from './search';
 import { registerSessionMediaRoutes } from './sessionMedia';
 import { registerSessionRatingRoutes } from './sessionRating';
@@ -143,7 +142,6 @@ export async function registerApiV1Routes(
         opts.transcriptService,
         core,
       );
-      registerRuntimeRoutes(apiV1 as unknown as Parameters<typeof registerRuntimeRoutes>[0], core);
       registerSessionExportRoute(
         apiV1 as unknown as Parameters<typeof registerSessionExportRoute>[0],
         core,

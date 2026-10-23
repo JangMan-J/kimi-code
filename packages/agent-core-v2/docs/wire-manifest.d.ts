@@ -24,7 +24,7 @@
 // cross-reducers), blobs (the folding states whose blob codec offloads inline
 // media to blob storage), owner (the source file declaring the class).
 
-// Index (66 record types)
+// Index (65 record types)
 //   changeNotifier.snapshot            changeNotifier.snapshot                                                        src/agent/changeNotifier/changeNotifierOps.ts
 //   config.update                      profile                                                                        src/agent/profile/profileOps.ts
 //   context.append_loop_event          contextMemory, turn                                                            src/agent/contextMemory/contextEvents.ts
@@ -62,7 +62,6 @@
 //   prompt.aborted                     (none)                                                                         src/agent/prompt/promptEvents.ts
 //   prompt.completed                   (none)                                                                         src/agent/prompt/promptEvents.ts
 //   prompt.steered                     (none)                                                                         src/agent/prompt/promptEvents.ts
-//   runtime.set_binding                environmentBinding                                                             src/agent/environmentBinding/environmentBindingOps.ts
 //   subagent.cancelled                 (none)                                                                         src/session/subagent/mirrorAgentRun.ts
 //   subagent.completed                 (none)                                                                         src/session/subagent/mirrorAgentRun.ts
 //   subagent.failed                    (none)                                                                         src/session/subagent/mirrorAgentRun.ts
@@ -599,17 +598,6 @@ interface PromptSteeredPayload {
 }
 
 /**
- * states: environmentBinding
- * owner: src/agent/environmentBinding/environmentBindingOps.ts
- */
-interface RuntimeSetBindingPayload {
-  _name: 'runtime.set_binding';
-  agentId: string;
-  workspaceId: string;
-  runtimeId: string;
-}
-
-/**
  * states: (none)
  * owner: src/session/subagent/mirrorAgentRun.ts
  */
@@ -1024,7 +1012,6 @@ interface WirePayloadMap {
   "prompt.aborted": PromptAbortedPayload;
   "prompt.completed": PromptCompletedPayload;
   "prompt.steered": PromptSteeredPayload;
-  "runtime.set_binding": RuntimeSetBindingPayload;
   "subagent.cancelled": SubagentCancelledPayload;
   "subagent.completed": SubagentCompletedPayload;
   "subagent.failed": SubagentFailedPayload;

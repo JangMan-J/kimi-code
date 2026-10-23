@@ -28,11 +28,6 @@ export type {
 
 export type Unsubscribe = () => void;
 
-export interface AgentRuntimeBinding {
-  readonly workspaceId: string;
-  readonly runtimeId: string;
-}
-
 export interface AgentEnvironmentBinding {
   readonly environmentId: string;
   readonly cwd?: string;

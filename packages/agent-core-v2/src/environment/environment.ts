@@ -8,21 +8,6 @@ export type EnvironmentCapability = 'fs' | 'process';
 
 export const LOCAL_ENVIRONMENT_ID = 'local';
 
-export function resolvedEnvironmentId(
-  input: { readonly environment_id?: string; readonly runtime_id?: string },
-  fallback: string,
-): string;
-export function resolvedEnvironmentId(
-  input: { readonly environment_id?: string; readonly runtime_id?: string },
-  fallback?: string,
-): string | undefined;
-export function resolvedEnvironmentId(
-  input: { readonly environment_id?: string; readonly runtime_id?: string },
-  fallback?: string,
-): string | undefined {
-  return input.environment_id ?? input.runtime_id ?? fallback;
-}
-
 export interface EnvironmentBinding {
   readonly environmentId: string;
   readonly cwd?: string;

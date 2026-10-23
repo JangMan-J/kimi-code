@@ -15,7 +15,6 @@ import type {
   AddAdditionalDirResult,
   AgentCommandInfo,
   AgentEnvironmentBinding,
-  AgentRuntimeBinding,
   BackgroundTaskInfo,
   CapabilityStatus,
   CompactOptions,
@@ -273,21 +272,6 @@ export class Session {
       ErrorCodes.SESSION_MODEL_EMPTY,
     );
     await this.rpc.setModel({ sessionId: this.id, model: normalized });
-  }
-
-  async getRuntime(): Promise<AgentRuntimeBinding> {
-    this.ensureOpen();
-    return this.rpc.getRuntime({ sessionId: this.id });
-  }
-
-  async switchRuntime(runtimeId: string): Promise<AgentRuntimeBinding> {
-    this.ensureOpen();
-    const normalized = normalizeRequiredString(
-      runtimeId,
-      'Session runtime cannot be empty',
-      ErrorCodes.REQUEST_INVALID,
-    );
-    return this.rpc.switchRuntime({ sessionId: this.id, runtimeId: normalized });
   }
 
   async attachFile(data: Uint8Array, options: Pick<UploadFileOptions, 'name' | 'mimeType'>): Promise<string> {

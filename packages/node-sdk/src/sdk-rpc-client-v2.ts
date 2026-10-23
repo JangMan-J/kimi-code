@@ -280,7 +280,6 @@ import {
   type ReconnectMcpServerRpcInput,
   type ReloadSessionRpcInput,
   type RunCommandRpcInput,
-  type SwitchSessionRuntimeRpcInput,
   type SessionIdRpcInput,
   type SessionPromptRpcInput,
   type SessionPromptWithSkillsRpcInput,
@@ -298,7 +297,6 @@ import type {
   AddAdditionalDirResult,
   AgentCommandInfo,
   AgentEnvironmentBinding,
-  AgentRuntimeBinding,
   AppMcpServerInspection,
   BackgroundTaskInfo,
   CapabilityStatus,
@@ -2019,28 +2017,6 @@ export class SDKRpcClientV2 extends SDKRpcClientBase {
   override async runCommand(input: RunCommandRpcInput): Promise<void> {
     const agent = await this.agentFacade(input.sessionId);
     return agent.runCommand({ name: input.name, args: input.args });
-  }
-
-  override async getRuntime(input: SessionIdRpcInput): Promise<AgentRuntimeBinding> {
-    const agent = await this.agentScope(input.sessionId);
-    return {
-      workspaceId: agent.accessor.get(ISessionContext).workspaceId,
-      runtimeId: agent.accessor.get(IAgentEnvironmentBindingService).current.environmentId,
-    };
-  }
-
-  override async switchRuntime(input: SwitchSessionRuntimeRpcInput): Promise<AgentRuntimeBinding> {
-    const agent = await this.agentScope(input.sessionId);
-    const lease = await agent.accessor.get(IEnvironmentService).acquireWhenReady({ environmentId: input.runtimeId });
-    try {
-      const binding = agent.accessor.get(IAgentEnvironmentBindingService).bind(input.runtimeId);
-      return {
-        workspaceId: agent.accessor.get(ISessionContext).workspaceId,
-        runtimeId: binding.environmentId,
-      };
-    } finally {
-      lease.dispose();
-    }
   }
 
   override async resolveSessionEnvironment(options: Pick<CreateSessionOptions, 'workDir' | 'environmentId' | 'environmentCwd'>): Promise<AgentEnvironmentBinding> {

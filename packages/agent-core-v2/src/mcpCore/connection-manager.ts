@@ -1,4 +1,3 @@
-import { resolvedEnvironmentId } from '#/environment/environment';
 import { ErrorCodes, Error2 } from '#/errors';
 import type { McpServerConfig } from './config-schema';
 import type { ILogger as Logger } from '#/_base/log/log';
@@ -447,8 +446,8 @@ export class McpConnectionManager implements McpConnectionView {
     const clientName = this.options.resolveClientName?.();
     if (config.transport === 'stdio') {
       const environmentResolver = this.options.environmentResolver;
-      const environmentId = resolvedEnvironmentId(config, this.options.environmentId);
-      if (environmentResolver === undefined || environmentId === undefined || (this.options.requireStdioEnvironmentId === true && config.environment_id === undefined && config.runtime_id === undefined)) {
+      const environmentId = config.environment_id ?? this.options.environmentId;
+      if (environmentResolver === undefined || environmentId === undefined || (this.options.requireStdioEnvironmentId === true && config.environment_id === undefined)) {
         throw new Error('MCP stdio requires environment_id and environment binding');
       }
       return new StdioMcpClient(config, {

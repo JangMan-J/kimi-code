@@ -89,7 +89,7 @@ import type {
 import type { ChangeNotifierSnapshotEvent } from '@moonshot-ai/agent-core-v2/agent/changeNotifier/changeNotifierOps';
 import type { PermissionSetMode } from '@moonshot-ai/agent-core-v2/agent/permissionMode/permissionModeOps';
 import type { PermissionRecordApprovalResult } from '@moonshot-ai/agent-core-v2/agent/permissionRules/permissionRulesOps';
-import type { EnvironmentSetBinding, RuntimeSetBinding } from '@moonshot-ai/agent-core-v2/agent/environmentBinding/environmentBindingOps';
+import type { EnvironmentSetBinding } from '@moonshot-ai/agent-core-v2/agent/environmentBinding/environmentBindingOps';
 import type { SwarmModeEnter, SwarmModeExit } from '@moonshot-ai/agent-core-v2/features/swarm/swarmOps';
 import type { TowerModeEnter, TowerModeExit } from '@moonshot-ai/agent-core-v2/features/tower/towerOps';
 import type { ToolsUpdateStore } from '@moonshot-ai/agent-core-v2/features/todo/todoOps';
@@ -202,7 +202,6 @@ export type AgentRecord =
   | WireRecordOf<'prompt.completed', PromptCompleted>
   | WireRecordOf<'prompt.steered', PromptSteered>
   | WireRecordOf<'environment.set_binding', EnvironmentSetBinding>
-  | WireRecordOf<'runtime.set_binding', RuntimeSetBinding>
   | WireRecordOf<'subagent.cancelled', SubagentCancelled>
   | WireRecordOf<'subagent.completed', SubagentCompleted>
   | WireRecordOf<'subagent.failed', SubagentFailed>
