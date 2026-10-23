@@ -21,7 +21,7 @@ async function fixture(rows: unknown[]): Promise<{ sourcePath: string; attachmen
 
 const user = (text: string) => ({ type: 'user', uuid: 'u', parentUuid: null, sessionId: 'example-session', cwd: '/example/project', message: { role: 'user', content: text } });
 const assistant = (text: string) => ({ type: 'assistant', uuid: 'a', parentUuid: 'u', message: { role: 'assistant', content: [{ type: 'text', text }], model: 'example-model' } });
-const ATTACHMENTS = { historyPath: '/example/history.jsonl', sourceCopy: { directory: '/example/attachments/source', folder: false } };
+const ATTACHMENTS = { historyPath: '/example/history.jsonl', sourceCopy: { directory: '/example/attachments/source', folder: false, subagentRollouts: 0 } };
 const CLIPPED = '...[truncated; the full text is in the full history]';
 const body = (messages: Array<{ content: Array<{ text: string }> }>) => messages.map(message => message.content.map(part => part.text).join('\n')).join('\n');
 const history = (turns: EffectiveHistory['turns'], summary?: string): EffectiveHistory => ({
@@ -56,7 +56,7 @@ describe('session conversion', () => {
       '',
       '<attachments>',
       `Full history: ${result.historyPath}`,
-      'The conversation as the source agent last saw it: the current branch, after any compaction in the source. JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records.',
+      'The conversation as the source agent last saw it: the current branch, after any compaction in the source. JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records. It also keeps what the source tool added for its own agent, such as reminders, instructions, environment details and notifications, which are left out below.',
       `Source copy: ${join(paths.attachmentDirectory, 'source')}`,
       "The source session file as it was when imported, minus Claude Code's API request log. Beyond the full history it holds history from before compaction and abandoned branches.",
       '</attachments>',
@@ -118,6 +118,22 @@ describe('session conversion', () => {
     expect(await readFile(join(result.sourceCopyDirectory, 'rollout-example.jsonl'), 'utf8')).toBe(raw);
     expect(body(result.messages)).toContain('The source rollout as it was when imported, decompressed.');
   });
+
+  it('copies the rollouts of subagent threads passed with a Codex session', async () => {
+    const paths = await fixture([]);
+    const sourcePath = join(dirname(paths.sourcePath), 'rollout-parent.jsonl');
+    await writeFile(sourcePath, [
+      { type: 'session_meta', payload: { id: 'parent', cwd: '/example/project' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Split the work' }] } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n');
+    const child = JSON.stringify({ type: 'session_meta', payload: { id: 'child', cwd: '/example/project', source: { subagent: { thread_spawn: { parent_thread_id: 'parent', depth: 1 } } } } }) + '\n';
+    const childPath = join(dirname(paths.sourcePath), 'rollout-child.jsonl.zst');
+    await writeFile(childPath, zstdCompressSync(Buffer.from(child)));
+    const result = await convertSession({ ...paths, sourcePath, subagentPaths: [childPath], source: 'codex', contextWindow: 32768 });
+    if (result.status === 'unreliable') throw new Error(result.error.message);
+    expect(await readFile(join(result.sourceCopyDirectory, 'subagents', 'rollout-child.jsonl'), 'utf8')).toBe(child);
+    expect(body(result.messages)).toContain('The source rollout and 1 rollout of the subagent threads it spawned (under subagents/)');
+  });
   it('honors an explicit token budget and keeps the uncropped text after the source is deleted', async () => {
     const original = 'BEGINNING\n' + 'large original text 中文 '.repeat(10000) + '\nORIGINAL_END';
     const paths = await fixture([user(original), assistant('Latest source reply')]);
@@ -132,13 +148,14 @@ describe('session conversion', () => {
     expect(rows[1].user).toBe(original);
   });
 
-  it('renders each turn inside one user message without thinking, events or source context', () => {
+  it('renders each turn inside one user message with user events but without thinking, events or source context', () => {
     const source = history([{ id: 'turn', user: 'Fix the build', timestamp: '2026-10-20T10:02:00.000Z', steps: [
       { kind: 'source_context', text: 'CONTEXT_BEFORE_PROMPT', beforeUser: true },
       { kind: 'thinking', text: 'PRIVATE_THINKING' },
       { kind: 'assistant', text: 'Running the build.', timestamp: '2026-10-20T10:03:00.000Z' },
       { kind: 'tool_call', name: 'Bash', text: JSON.stringify({ command: 'npm run build', description: 'Build the project' }) },
       { kind: 'tool_result', text: 'Build passed' },
+      { kind: 'user_event', text: 'also run the tests' },
       { kind: 'event', text: 'SOURCE_EVENT' },
       { kind: 'error', text: 'SOURCE_ERROR' },
       { kind: 'source_context', text: 'SOURCE_CONTEXT' },
@@ -160,6 +177,8 @@ describe('session conversion', () => {
       '',
       '[external_agent_tool_result]\nBuild passed\n[/external_agent_tool_result]',
       '',
+      '[user_event]\nalso run the tests\n[/user_event]',
+      '',
       'The build passes.',
       '</assistant>',
       '</turn>',
@@ -176,8 +195,10 @@ describe('session conversion', () => {
       { kind: 'tool_call', name: 'apply_patch', text: '*** Begin Patch\n*** End Patch' },
       { kind: 'tool_result', text: 'r'.repeat(5000), metadata: { isError: true } },
       { kind: 'tool_result', text: '' },
+      { kind: 'user_event', text: 'u'.repeat(5000) },
     ] }]);
     const text = body(renderHistory(source, ATTACHMENTS, 20000, []).messages);
+    expect(text).toContain(`[user_event]\n${'u'.repeat(2000 - CLIPPED.length)}${CLIPPED}\n[/user_event]`);
     expect(text).toContain(`[external_agent_tool_call: Grep]\ninput: ${search.slice(0, 2000 - CLIPPED.length)}${CLIPPED}\n[/external_agent_tool_call]`);
     expect(text).toContain(`[external_agent_tool_call: Edit]\ninput: ${edit}\n[/external_agent_tool_call]`);
     expect(text).toContain('[external_agent_tool_call: apply_patch]\ninput: *** Begin Patch\n*** End Patch\n[/external_agent_tool_call]');
@@ -207,6 +228,23 @@ describe('session conversion', () => {
     expect(text).not.toContain('LEADING_ANSWER');
     expect(result.stats).toMatchObject({ sourceTurns: 4, includedTurns: 4, omittedTurns: 0 });
   });
+  it('shows the work after a source compaction and before the next prompt with the source summary', () => {
+    const source = history([{ id: 'one', user: 'Next request', steps: [
+      { kind: 'source_context', text: 'CONTEXT_BEFORE_PROMPT', beforeUser: true },
+      { kind: 'assistant', text: 'Continuing the task.', beforeUser: true },
+      { kind: 'tool_call', name: 'Bash', text: '{"command":"npm test"}', beforeUser: true },
+      { kind: 'user_event', text: '[Request interrupted by user]', beforeUser: true },
+      { kind: 'assistant', text: 'Next answer' },
+    ] }], 'Summary of earlier work');
+    const text = body(renderHistory(source, ATTACHMENTS, 8000, []).messages);
+    expect(text).toContain([
+      '<source_summary>', 'Summary of earlier work', '</source_summary>',
+      '<assistant>', 'Continuing the task.', '', '[external_agent_tool_call: Bash]\ninput: {"command":"npm test"}\n[/external_agent_tool_call]', '', '[user_event]\n[Request interrupted by user]\n[/user_event]', '</assistant>',
+      '', '<turn index="1">', '<user>', 'Next request', '</user>', '<assistant>', 'Next answer', '</assistant>', '</turn>',
+    ].join('\n'));
+    expect(text).not.toContain('CONTEXT_BEFORE_PROMPT');
+  });
+
   it('keeps recent whole turns and reports omission of the earlier ones', () => {
     const source = history(Array.from({ length: 12 }, (_, index) => ({ id: `turn-${index}`, user: `user-${index}`, steps: [
       { kind: 'assistant' as const, text: `reply-${index} ` + 'x'.repeat(3000) },

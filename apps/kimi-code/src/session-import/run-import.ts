@@ -171,6 +171,8 @@ async function importOne(candidate: ImportCandidate, options: ImportOptions): Pr
       attachmentDirectory,
       contextWindow: options.contextWindow,
       tokenBudget: options.tokenBudget,
+      subagentPaths: candidate.subagentPaths,
+      stateDatabasePath: candidate.stateDatabasePath,
     });
     if (result.status === 'unreliable') {
       await discard(sessionDir);

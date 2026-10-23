@@ -88,12 +88,16 @@ function toolResult(step: HistoryStep): string {
   return [`[external_agent_tool_result${error ? ': error' : ''}]`, ...step.text ? [clip(step.text, TOOL_RESULT_LIMIT)] : [], '[/external_agent_tool_result]'].join('\n');
 }
 
+function userEvent(step: HistoryStep): string {
+  return ['[user_event]', clip(step.text, TOOL_INPUT_LIMIT), '[/user_event]'].join('\n');
+}
+
 function answer(steps: readonly HistoryStep[]): string {
   return steps.flatMap((step) => {
-    if (step.beforeUser) return [];
     if (step.kind === 'assistant') return [step.text];
     if (step.kind === 'tool_call') return [toolCall(step)];
     if (step.kind === 'tool_result') return [toolResult(step)];
+    if (step.kind === 'user_event') return [userEvent(step)];
     return [];
   }).filter(text => text.trim()).join('\n\n');
 }
@@ -102,8 +106,10 @@ function units(history: EffectiveHistory): Unit[] {
   const result: Unit[] = history.summary?.trim() ? [{ index: 0, user: history.summary, assistant: '', turns: 0 }] : [];
   let unattached = 0;
   for (const [position, turn] of history.turns.entries()) {
-    const reply = answer(turn.steps);
+    const before = answer(turn.steps.filter(step => step.beforeUser));
+    const reply = answer(turn.steps.filter(step => !step.beforeUser));
     const previous = result.at(-1);
+    if (previous && before) previous.assistant = [previous.assistant, before].filter(Boolean).join('\n\n');
     if (turn.user.trim()) {
       result.push({ index: position + 1, time: turn.timestamp, user: turn.user, assistant: reply, turns: unattached + 1 });
       unattached = 0;
@@ -159,7 +165,10 @@ interface Attachments {
 
 function sourceCopyLines(history: EffectiveHistory, copy: SourceCopy): string[] {
   if (history.source === 'codex') {
-    return [`Source copy: ${copy.directory}`, 'The source rollout as it was when imported, decompressed. Beyond the full history it holds history from before compaction and rolled-back turns.'];
+    const count = copy.subagentRollouts;
+    return [`Source copy: ${copy.directory}`, count > 0
+      ? `The source rollout and ${String(count)} rollout${count === 1 ? '' : 's'} of the subagent threads it spawned (under subagents/) as they were when imported, decompressed. Beyond the full history they hold history from before compaction, rolled-back turns and the subagents' own steps.`
+      : 'The source rollout as it was when imported, decompressed. Beyond the full history it holds history from before compaction and rolled-back turns.'];
   }
   const session = basename(history.sourcePath, '.jsonl');
   return [
@@ -188,7 +197,7 @@ function frame(history: EffectiveHistory, files: Attachments, issues: readonly C
   ];
   const attachments = [
     `Full history: ${files.historyPath}`,
-    'The conversation as the source agent last saw it: the current branch, after any compaction in the source. JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records.',
+    'The conversation as the source agent last saw it: the current branch, after any compaction in the source. JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records. It also keeps what the source tool added for its own agent, such as reminders, instructions, environment details and notifications, which are left out below.',
     ...sourceCopyLines(history, files.sourceCopy),
     ...history.imageReferenceIndexPath ? [`Image index: ${history.imageReferenceIndexPath} (${String(history.imageReferences.length)} images)`] : [],
   ];
@@ -238,7 +247,7 @@ export function renderHistory(
     }
     break;
   }
-  if (selected.length === 0) throw Object.assign(new Error('The token budget cannot fit any source history. The complete history attachment is available.'), { code: 'INSUFFICIENT_TOKEN_BUDGET' });
+  if (selected.length === 0) throw Object.assign(new Error('The token budget cannot fit any source history.'), { code: 'INSUFFICIENT_TOKEN_BUDGET' });
   const turns = selected.filter(item => item.unit.index > 0);
   const { head, tail } = frame(history, attachments, issues, {
     first: turns[0]?.unit.index ?? 0,

@@ -59,14 +59,34 @@ async function claudeSession(path: string, since: number): Promise<SessionCandid
   return { source: 'claude-code', path, sourceId: basename(path, '.jsonl'), cwd: message['cwd'] as string, modifiedAt };
 }
 
-async function codexSession(path: string, since: number): Promise<SessionCandidate | undefined> {
-  const modifiedAt = await modifiedSince(path, since);
-  if (modifiedAt === undefined) return undefined;
+async function codexMeta(path: string): Promise<Row | undefined> {
   const [first] = await head(path, 1);
   const meta = first?.['type'] === 'session_meta' ? first['payload'] : undefined;
-  if (!isRow(meta) || typeof meta['id'] !== 'string' || typeof meta['cwd'] !== 'string' || meta['cwd'] === '') return undefined;
+  return isRow(meta) && typeof meta['id'] === 'string' ? meta : undefined;
+}
+
+function parentThread(meta: Row): string | undefined {
+  const source = meta['source'];
+  const subagent = isRow(source) ? source['subagent'] : undefined;
+  const spawn = isRow(subagent) ? subagent['thread_spawn'] : undefined;
+  const parent = meta['parent_thread_id'] ?? (isRow(spawn) ? spawn['parent_thread_id'] : undefined);
+  return typeof parent === 'string' ? parent : undefined;
+}
+
+async function codexSession(path: string, meta: Row, since: number): Promise<SessionCandidate | undefined> {
+  if (typeof meta['cwd'] !== 'string' || meta['cwd'] === '') return undefined;
   if (meta['source'] !== undefined && !INTERACTIVE_CODEX_SOURCES.has(meta['source'] as string)) return undefined;
-  return { source: 'codex', path, sourceId: meta['id'], cwd: meta['cwd'], modifiedAt };
+  const modifiedAt = await modifiedSince(path, since);
+  if (modifiedAt === undefined) return undefined;
+  return { source: 'codex', path, sourceId: meta['id'] as string, cwd: meta['cwd'], modifiedAt };
+}
+
+async function stateDatabase(codexHome: string): Promise<string | undefined> {
+  const databases = (await entries(codexHome)).flatMap((entry) => {
+    const version = /^state(?:_(\d+))?\.sqlite$/.exec(entry.name);
+    return entry.isFile() && version ? [{ path: join(codexHome, entry.name), version: Number(version[1] ?? 0) }] : [];
+  });
+  return databases.toSorted((a, b) => b.version - a.version)[0]?.path;
 }
 
 async function rolloutPaths(directory: string, found: string[] = []): Promise<string[]> {
@@ -90,10 +110,26 @@ export async function findSessions(options: FindSessionsOptions): Promise<Sessio
     }
   }
   const threads = new Map<string, SessionCandidate>();
+  const spawned = new Map<string, Array<{ id: string; path: string }>>();
   for (const path of await rolloutPaths(join(options.codexHome, 'sessions'))) {
-    const session = await codexSession(path, options.since);
+    const meta = await codexMeta(path);
+    if (!meta) continue;
+    const parent = parentThread(meta);
+    if (parent) spawned.set(parent, [...spawned.get(parent) ?? [], { id: meta['id'] as string, path }]);
+    const session = await codexSession(path, meta, options.since);
     const known = session && threads.get(session.sourceId);
     if (session && (!known || known.modifiedAt < session.modifiedAt)) threads.set(session.sourceId, session);
+  }
+  const subagentPaths = (id: string, seen: Set<string>): string[] => (spawned.get(id) ?? []).flatMap((child) => {
+    if (seen.has(child.id)) return [child.path];
+    seen.add(child.id);
+    return [child.path, ...subagentPaths(child.id, seen)];
+  });
+  const stateDatabasePath = await stateDatabase(options.codexHome);
+  for (const session of threads.values()) {
+    const paths = subagentPaths(session.sourceId, new Set([session.sourceId]));
+    if (paths.length > 0) session.subagentPaths = paths.toSorted();
+    session.stateDatabasePath = stateDatabasePath;
   }
   return [...sessions, ...threads.values()].toSorted((a, b) => b.modifiedAt - a.modifiedAt);
 }

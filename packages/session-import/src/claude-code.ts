@@ -59,7 +59,7 @@ interface SourceRecord extends Record<string, unknown> {
   timestamp?: string;
   isApiErrorMessage?: boolean;
   error?: unknown;
-  attachment?: { text?: string; content?: unknown };
+  attachment?: { type?: string; text?: string; content?: unknown; prompt?: unknown; origin?: { kind?: unknown } };
   cwd?: string;
   isMeta?: boolean;
   customTitle?: string;
@@ -495,6 +495,11 @@ function makeSteps(entry: Entry, stats: ReaderStats): HistoryStep[] {
   return result;
 }
 
+function queuedUserPrompt(row: SourceRecord): string | undefined {
+  const attachment = row.type === 'attachment' ? row.attachment : undefined;
+  return attachment?.type === 'queued_command' && attachment.origin?.kind === 'human' && typeof attachment.prompt === 'string' ? attachment.prompt : undefined;
+}
+
 export async function readClaudeSession(path: string, options: ReadOptions): Promise<EffectiveHistory> {
   const sourcePath = resolve(path);
   const before = await stat(sourcePath, { bigint: true });
@@ -580,7 +585,9 @@ export async function readClaudeSession(path: string, options: ReadOptions): Pro
       turns.push({ id: row.uuid ?? `line-${entry.line}`, user: text, steps: [...pending.map((step) => ({ ...step, beforeUser: true })), ...extras], timestamp: row.timestamp, metadata: recordMetadata(entry) });
       pending = [];
     } else {
-      const steps = makeSteps(entry, stats);
+      const queued = queuedUserPrompt(row);
+      const steps: HistoryStep[] = queued === undefined ? makeSteps(entry, stats) : [{ kind: 'user_event', text: queued, timestamp: row.timestamp, metadata: recordMetadata(entry) }];
+      if (row.type === 'user' && !row.isMeta && (command || interruption)) for (const step of steps) if (step.kind === 'event') step.kind = 'user_event';
       if (turns.length > 0) turns.at(-1)!.steps.push(...steps); else pending.push(...steps);
     }
   }

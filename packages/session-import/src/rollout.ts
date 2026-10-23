@@ -192,6 +192,8 @@ function isSourceSummary(item: SourceItem) {
   return item.type === 'message' && item.role === 'user' && item.content?.some((part) => typeof part.text === 'string' && part.text.startsWith(`${SUMMARY_PREFIX}\n`));
 }
 
+const USER_SHELL_COMMAND = /^\s*<user_shell_command>/;
+
 function contextualText(text: string) {
   return /^\s*(?:# AGENTS\.md instructions for |<environment_context>|<user_instructions>|<permissions instructions>|<turn_aborted>|<subagent_notification>|<skill>|<external_[^>]+>|<user_shell_command>|<recommended_plugins>|<agent_message_board_notification>|<internal_model_context>|<hook_prompt>)/.test(text);
 }
@@ -291,6 +293,21 @@ function imageKeys(value: unknown, cwd?: string, result = new Set<string>()) {
   if (key) result.add(key);
   else for (const child of Object.values(value)) imageKeys(child, cwd, result);
   return result;
+}
+
+async function threadName(databasePath: string, id: string): Promise<string | undefined> {
+  try {
+    const { DatabaseSync } = await import('node:sqlite');
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const value = database.prepare('SELECT name FROM threads WHERE id = ?').get(id)?.['name'];
+      return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
+    } finally {
+      database.close();
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 export async function readRolloutSession(sourcePath: string, options: ReadOptions): Promise<EffectiveHistory> {
@@ -542,7 +559,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
         const text = textBlocks(content, stats);
         if (candidate.sourceSummary) sourceSummary = sourceSummary ? `${sourceSummary}\n\n${text}` : text;
         else if (candidate.user) start(candidate, text);
-        else add({ kind: item.role === 'assistant' ? 'assistant' : 'source_context', text, timestamp, metadata });
+        else add({ kind: item.role === 'assistant' ? 'assistant' : item.role === 'user' && USER_SHELL_COMMAND.test(text) ? 'user_event' : 'source_context', text, timestamp, metadata });
       } else if (item.type === 'reasoning') {
         const summaryText = textBlocks(summary ?? [], stats);
         const visibleContent = textBlocks(content ?? [], stats);
@@ -612,13 +629,14 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
         continue;
       }
       if (projected?.id && callIds.has(projected.id)) { stats.mirroredEventsOmitted++; continue; }
-      if (['turn_aborted', 'task_aborted'].includes(item.type ?? '')) stats.abortedTurns++;
+      const aborted = ['turn_aborted', 'task_aborted'].includes(item.type ?? '');
+      if (aborted) stats.abortedTurns++;
       if (['task_complete', 'turn_complete'].includes(item.type ?? '')) {
         const { last_agent_message: _lastAgentMessage, ...completion } = item;
         add({ kind: 'event', text: JSON.stringify(completion), timestamp, metadata });
       } else {
         if (!(projected ? RETAINED_PROJECTIONS : RETAINED_EVENTS).has((projected ?? item).type ?? '')) stats.unknownRecords++;
-        add({ kind: 'event', text: JSON.stringify(item), timestamp, metadata });
+        add({ kind: aborted ? 'user_event' : 'event', text: JSON.stringify(item), timestamp, metadata });
       }
     } else {
       if (!['turn_context', 'world_state', 'inter_agent_communication_metadata'].includes(candidate.type ?? '')) stats.unknownRecords++;
@@ -629,16 +647,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
     current = { id: `${canonicalMeta.id ?? 'source'}:context-only`, user: '', steps: pending };
     turns.push(current);
   }
-  let title: string | undefined;
-  if (options.stateDatabasePath) {
-    const { DatabaseSync } = await import('node:sqlite');
-    const database = new DatabaseSync(options.stateDatabasePath, { readOnly: true });
-    try {
-      const value = database.prepare('SELECT title FROM threads WHERE id = ?').get(canonicalMeta.id ?? '')?.['title'];
-      title = typeof value === 'string' ? value : undefined;
-    }
-    finally { database.close(); }
-  }
+  const title = options.stateDatabasePath ? await threadName(options.stateDatabasePath, canonicalMeta.id ?? '') : undefined;
   const metadata = object(sanitize((await imageStore.rewrite({ metadata: canonicalMeta }, { cwd: canonicalMeta.cwd })).metadata, stats));
   const finalStats = { ...stats, selectedRecords: selected.length, selectedTurns: turns.length, sourceFingerprint: first.digest, imageReferences: imageStore.report() };
   const imageReferenceIndexPath = await imageStore.saveManifest();

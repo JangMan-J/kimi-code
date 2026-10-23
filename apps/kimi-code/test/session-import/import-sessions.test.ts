@@ -70,6 +70,12 @@ describe('importing sessions', () => {
     const { project, kimiHome, claudeHome, codexHome } = await setup();
     const claudeTime = await write(join(claudeHome, 'projects', '-project', 'claude-one.jsonl'), claudeSession(project, 'Fix the login flow'), 2);
     await write(join(codexHome, 'sessions', '2026', '10', '01', 'rollout-2026-10-01T10-00-00-thread-one.jsonl'), codexSession('thread-one', project), 20);
+    await write(join(codexHome, 'sessions', '2026', '10', '01', 'rollout-2026-10-01T10-05-00-helper.jsonl'), codexSession('helper', project, { source: { subagent: { thread_spawn: { parent_thread_id: 'thread-one', depth: 1 } } } }), 20);
+    const { DatabaseSync } = await import('node:sqlite');
+    const database = new DatabaseSync(join(codexHome, 'state_5.sqlite'));
+    database.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT)');
+    database.prepare('INSERT INTO threads VALUES (?, ?)').run('thread-one', 'Renamed in Codex');
+    database.close();
 
     const scan = await scanImportableSessions({ kimiHome, claudeHome, codexHome, now: NOW });
     expect(scan.candidates.map((candidate) => [candidate.source, candidate.sessionId])).toEqual([
@@ -103,6 +109,8 @@ describe('importing sessions', () => {
     expect(wire).toContain('<imported_conversation>');
     expect((await readdir(join(sessionDir, 'attachments'))).some((name) => name.startsWith('effective-history-'))).toBe(true);
     expect(await readdir(join(sessionDir, 'attachments', 'source'))).toEqual(['claude-one.jsonl']);
+    expect(await readdir(join(importedSessionDir(kimiHome, project, 'ses_thread-one'), 'attachments', 'source', 'subagents'))).toEqual(['rollout-2026-10-01T10-05-00-helper.jsonl']);
+    expect(JSON.parse(await readFile(join(importedSessionDir(kimiHome, project, 'ses_thread-one'), 'state.json'), 'utf8'))).toMatchObject({ title: 'Renamed in Codex', lastPrompt: 'Add tests' });
 
     expect(await scanImportableSessions({ kimiHome, claudeHome, codexHome, now: NOW })).toEqual({ candidates: [], alreadyImported: 2, missingFolder: 0 });
   });

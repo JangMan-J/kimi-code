@@ -38,9 +38,9 @@ export function sourceIssues(history: EffectiveHistory): ConversionIssue[] {
     ['chainCycles', 'INCOMPLETE_SOURCE_CHAIN', 'The source history contains a cycle.'],
     ['missingCompactionSummaries', 'UNAVAILABLE_COMPACTION_SUMMARY', 'A source compaction summary is missing.'],
     ['opaqueCompactionSteps', 'UNAVAILABLE_COMPACTION_SUMMARY', 'A source compaction checkpoint has no available plaintext.'],
-    ['documentBlocks', 'OMITTED_NON_IMAGE_MEDIA', 'Source document payloads were omitted.'],
-    ['binaryPayloadsOmitted', 'OMITTED_NON_IMAGE_MEDIA', 'Non-image binary payloads were omitted.'],
-    ['metadataBinaryPayloads', 'OMITTED_NON_IMAGE_MEDIA', 'Non-image binary payloads in source metadata were omitted.'],
+    ['documentBlocks', 'OMITTED_NON_IMAGE_MEDIA', 'Source document payloads were omitted; the originals are in the source copy.'],
+    ['binaryPayloadsOmitted', 'OMITTED_NON_IMAGE_MEDIA', 'Non-image binary payloads were omitted; the originals are in the source copy.'],
+    ['metadataBinaryPayloads', 'OMITTED_NON_IMAGE_MEDIA', 'Non-image binary payloads in source metadata were omitted; the originals are in the source copy.'],
     ['unknownBlocks', 'UNRECOGNIZED_SOURCE_CONTENT', 'Unrecognized source content was retained where possible; its meaning was not interpreted.'],
     ['unknownContentBlocks', 'UNRECOGNIZED_SOURCE_CONTENT', 'Unrecognized source content was retained where possible; its meaning was not interpreted.'],
     ['unknownRecords', 'UNRECOGNIZED_SOURCE_CONTENT', 'Unrecognized source records were retained where possible; their meaning was not interpreted.'],
@@ -82,7 +82,7 @@ export async function convertSession(options: ConversionOptions): Promise<Conver
     const issues = sourceIssues(history);
     stage = 'attachment';
     const historyPath = await saveEffectiveHistory(history, options.attachmentDirectory, issues);
-    const sourceCopy = await saveSourceCopy(history.source, options.sourcePath, options.attachmentDirectory);
+    const sourceCopy = await saveSourceCopy(history.source, options.sourcePath, options.attachmentDirectory, options.subagentPaths);
     const after = await stat(options.sourcePath, { bigint: true });
     if (after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ino !== before.ino) {
       stage = 'source';

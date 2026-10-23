@@ -6,6 +6,8 @@ export interface SessionCandidate {
   sourceId: string;
   cwd: string;
   modifiedAt: number;
+  subagentPaths?: string[];
+  stateDatabasePath?: string;
 }
 
 export interface FindSessionsOptions {
@@ -14,7 +16,7 @@ export interface FindSessionsOptions {
   since: number;
 }
 
-export type StepKind = 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'event' | 'error' | 'source_context';
+export type StepKind = 'assistant' | 'thinking' | 'tool_call' | 'tool_result' | 'user_event' | 'event' | 'error' | 'source_context';
 
 export interface HistoryStep {
   kind: StepKind;
@@ -66,6 +68,7 @@ export interface EffectiveHistory {
 export interface SourceCopy {
   directory: string;
   folder: boolean;
+  subagentRollouts: number;
 }
 
 export interface ReadOptions {
@@ -92,6 +95,7 @@ export interface ConversionOptions {
   contextWindow: number;
   tokenBudget?: number;
   stateDatabasePath?: string;
+  subagentPaths?: string[];
 }
 
 export interface ConversionStats {

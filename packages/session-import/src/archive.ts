@@ -65,11 +65,12 @@ async function copyFolder(source: string, destination: string, keep: (line: Buff
   return copied;
 }
 
-export async function saveSourceCopy(source: SessionSource, sourcePath: string, attachmentDirectory: string): Promise<SourceCopy> {
+export async function saveSourceCopy(source: SessionSource, sourcePath: string, attachmentDirectory: string, subagentPaths: readonly string[] = []): Promise<SourceCopy> {
   const directory = join(attachmentDirectory, 'source');
   const keep = source === 'claude-code' ? (line: Buffer) => !isRequestLogLine(line) : () => true;
   await writeAttachmentFile(directory, basename(sourcePath).replace(/\.zst$/, ''), keptLines(sourcePath, keep));
   const session = basename(sourcePath, '.jsonl');
   const folder = source === 'claude-code' && await copyFolder(join(dirname(sourcePath), session), join(directory, session), keep) > 0;
-  return { directory, folder };
+  for (const path of subagentPaths) await writeAttachmentFile(join(directory, 'subagents'), basename(path).replace(/\.zst$/, ''), keptLines(path, keep));
+  return { directory, folder, subagentRollouts: subagentPaths.length };
 }

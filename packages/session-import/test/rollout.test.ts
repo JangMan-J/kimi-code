@@ -251,18 +251,39 @@ test('duplicate response ids deduplicate exact replay but preserve repeated new 
   expect(actual.turns[0]!.steps.length).toBe(1);
 });
 
-test('SQLite title lookup is read-only and scoped to the selected thread', async (t) => {
+test('SQLite thread name lookup is read-only, scoped to the selected thread and optional', async (t) => {
   const path = await fixture(t, [meta(), response(message('user', 'Request'))]);
-  const databasePath = join(path, '..', 'state.sqlite');
   const { DatabaseSync } = await import('node:sqlite');
+  const databasePath = join(path, '..', 'state_5.sqlite');
   const database = new DatabaseSync(databasePath);
-  database.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)');
-  database.prepare('INSERT INTO threads VALUES (?, ?)').run('example-session', 'Example title');
+  database.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT)');
+  database.prepare('INSERT INTO threads VALUES (?, ?, ?)').run('example-session', 'Request', 'Renamed thread');
+  database.prepare('INSERT INTO threads VALUES (?, ?, ?)').run('other-session', 'Other request', 'Other name');
   database.close();
   const before = await readFile(databasePath);
-  const actual = await readSession(path, { stateDatabasePath: databasePath });
-  expect(actual.title).toBe('Example title');
+  expect((await readSession(path, { stateDatabasePath: databasePath })).title).toBe('Renamed thread');
   expect(await readFile(databasePath)).toEqual(before);
+  const legacyPath = join(path, '..', 'state.sqlite');
+  const legacy = new DatabaseSync(legacyPath);
+  legacy.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)');
+  legacy.prepare('INSERT INTO threads VALUES (?, ?)').run('example-session', 'Request');
+  legacy.close();
+  expect((await readSession(path, { stateDatabasePath: legacyPath })).title).toBeUndefined();
+  expect((await readSession(path, { stateDatabasePath: join(path, '..', 'missing.sqlite') })).title).toBeUndefined();
+});
+
+test('interrupts and shell commands the user ran become user events', async (t) => {
+  const shell = '<user_shell_command>\n<command>\nls\n</command>\n<result>\nExit code: 0\nOutput:\nREADME.md\n</result>\n</user_shell_command>';
+  const actual = await readSession(await fixture(t, [meta(), response(message('user', 'Inspect')), response(message('assistant', 'Looking.')),
+    event('turn_aborted', { reason: 'interrupted' }), response(message('user', shell)), response(message('user', '<turn_aborted>The user interrupted.</turn_aborted>')),
+  ]));
+  expect(actual.turns.map((turn) => turn.user)).toEqual(['Inspect']);
+  expect(actual.turns[0]!.steps.map((step) => [step.kind, step.text])).toEqual([
+    ['assistant', 'Looking.'],
+    ['user_event', '{"type":"turn_aborted","reason":"interrupted"}'],
+    ['user_event', shell],
+    ['source_context', '<turn_aborted>The user interrupted.</turn_aborted>'],
+  ]);
 });
 
 test('embedded images become byte-exact files in their original message and tool-output positions', async (t) => {

@@ -53,6 +53,8 @@ test('finds recent interactive Claude Code sessions with a prompt and skips the 
 test('finds interactive Codex rollouts, keeps the newest rollout of a thread, and orders by recency', async () => {
   const { claudeHome, codexHome } = await homes();
   const day = join(codexHome, 'sessions', '2026', '10', '20');
+  await mkdir(join(codexHome, 'state_99.sqlite'), { recursive: true });
+  for (const name of ['state.sqlite', 'state_5.sqlite', 'state_12.sqlite', 'state_12.sqlite-wal']) await writeFile(join(codexHome, name), '');
   await write(join(day, 'rollout-2026-10-20T10-00-00-thread-a.jsonl'), codexRows('thread-a'), 5);
   await write(join(day, 'rollout-2026-10-20T11-00-00-thread-a-replacement.jsonl'), codexRows('thread-a'), 3);
   await write(join(day, 'rollout-2026-10-20T12-00-00-thread-b.jsonl.zst'), codexRows('thread-b', 'vscode'), 2, true);
@@ -68,6 +70,26 @@ test('finds interactive Codex rollouts, keeps the newest rollout of a thread, an
   ]);
   expect(found[1]!.path).toBe(join(day, 'rollout-2026-10-20T11-00-00-thread-a-replacement.jsonl'));
   expect(found[1]!.cwd).toBe('/example/codex-project');
+  expect(found.map(session => session.stateDatabasePath)).toEqual([join(codexHome, 'state_12.sqlite'), join(codexHome, 'state_12.sqlite'), undefined]);
+});
+
+test('links the rollouts of subagent threads a Codex session spawned, including older, nested and review threads', async () => {
+  const { claudeHome, codexHome } = await homes();
+  const day = join(codexHome, 'sessions', '2026', '10', '20');
+  const spawn = (parent: string) => ({ subagent: { thread_spawn: { parent_thread_id: parent, depth: 1 } } });
+  await write(join(day, 'rollout-2026-10-20T10-00-00-parent.jsonl'), codexRows('parent'), 1);
+  await write(join(day, 'rollout-2026-10-20T10-01-00-child.jsonl'), codexRows('child', spawn('parent')), 45);
+  await write(join(day, 'rollout-2026-10-20T10-02-00-grandchild.jsonl.zst'), codexRows('grandchild', spawn('child')), 1, true);
+  const review = codexRows('review', { subagent: 'review' });
+  await write(join(day, 'rollout-2026-10-20T10-03-00-review.jsonl'), [{ ...review[0], payload: { ...(review[0] as { payload: object }).payload, parent_thread_id: 'parent' } }, ...review.slice(1)], 1);
+  await write(join(day, 'rollout-2026-10-20T10-04-00-unlinked.jsonl'), codexRows('unlinked', { subagent: 'compact' }), 1);
+  const sessions = await findSessions({ claudeHome, codexHome, since: NOW - 30 * DAY });
+  expect(sessions.map(session => session.sourceId)).toEqual(['parent']);
+  expect(sessions[0]!.subagentPaths).toEqual([
+    join(day, 'rollout-2026-10-20T10-01-00-child.jsonl'),
+    join(day, 'rollout-2026-10-20T10-02-00-grandchild.jsonl.zst'),
+    join(day, 'rollout-2026-10-20T10-03-00-review.jsonl'),
+  ]);
 });
 
 test('returns nothing when neither source directory exists', async () => {
