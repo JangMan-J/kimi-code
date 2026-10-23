@@ -77,6 +77,18 @@ interface AttemptClock {
   timing(): LlmTiming | undefined;
 }
 
+interface EluSnapshot {
+  readonly active: number;
+}
+
+function eventLoopUtilization(previous?: EluSnapshot): EluSnapshot | undefined {
+  return (
+    performance as {
+      eventLoopUtilization?: (previous?: EluSnapshot) => EluSnapshot,
+    }
+  ).eventLoopUtilization?.(previous);
+}
+
 function createAttemptClock(): AttemptClock {
   const startedAt = performance.now();
   let sentAt: number | undefined;
@@ -84,7 +96,7 @@ function createAttemptClock(): AttemptClock {
   let lastResumeAt = 0;
   let serverDecodeMs = 0;
   let clientConsumeMs = 0;
-  let eluStart: ReturnType<typeof performance.eventLoopUtilization> | undefined;
+  let eluStart: EluSnapshot | undefined;
   return {
     sent: () => {
       sentAt = performance.now();
@@ -93,7 +105,7 @@ function createAttemptClock(): AttemptClock {
       const now = performance.now();
       if (firstPartAt === undefined) {
         firstPartAt = now;
-        eluStart = performance.eventLoopUtilization?.();
+        eluStart = eventLoopUtilization();
       } else {
         serverDecodeMs += now - lastResumeAt;
       }
@@ -108,7 +120,7 @@ function createAttemptClock(): AttemptClock {
       const endedAt = performance.now();
       const sent = sentAt === undefined ? undefined : Math.min(Math.max(sentAt, startedAt), firstPartAt);
       const consumed = Math.round(clientConsumeMs);
-      const active = eluStart === undefined ? undefined : performance.eventLoopUtilization(eluStart).active;
+      const active = eluStart === undefined ? undefined : eventLoopUtilization(eluStart)?.active;
       return {
         firstTokenLatencyMs: Math.round(firstPartAt - startedAt),
         streamDurationMs: Math.round(endedAt - firstPartAt),
