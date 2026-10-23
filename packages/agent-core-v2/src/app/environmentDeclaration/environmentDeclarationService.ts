@@ -16,7 +16,6 @@ const NO_ABORT = new AbortController().signal;
 export class EnvironmentDeclarationService implements IEnvironmentDeclarationService {
   declare readonly _serviceBrand: undefined;
   private current: EnvironmentDeclarationSet = { entries: [] };
-  private failed = false;
   private loading?: Promise<void>;
   private catalogKey?: string;
   private readonly registrationErrors = new Map<string, Error>();
@@ -37,9 +36,9 @@ export class EnvironmentDeclarationService implements IEnvironmentDeclarationSer
     }
   }
 
-  async declarations(): Promise<EnvironmentDeclarationSet | undefined> {
-    await (this.loading ?? this.reload());
-    return this.failed ? undefined : this.current;
+  async declarations(): Promise<EnvironmentDeclarationSet> {
+    await this.reload();
+    return this.current;
   }
 
   registrationError(environmentId: string): Error | undefined {
@@ -58,14 +57,7 @@ export class EnvironmentDeclarationService implements IEnvironmentDeclarationSer
   private reload(): Promise<void> {
     const run = (this.loading ?? Promise.resolve()).catch(() => undefined).then(async () => {
       if (this.disposed) return;
-      try {
-        this.current = await resolveWorkspaceEnvironmentDeclarations(this.config);
-        this.failed = false;
-      } catch (error) {
-        this.failed = true;
-        this.log.warn('remote environment declaration resolution failed', { error });
-        return;
-      }
+      this.current = await resolveWorkspaceEnvironmentDeclarations(this.config);
       for (const id of this.registrationErrors.keys()) {
         if (!this.current.entries.some((entry) => entry.id === id)) this.registrationErrors.delete(id);
       }

@@ -293,6 +293,45 @@ describe('SDKRpcClientV2 (agent-core-v2 wiring)', () => {
     });
   }
 
+  it.each([
+    {
+      name: 'a valid default next to an invalid entry',
+      config: '[environments]\ndefault = "good"\n\n[environments.good]\ntype = "ssh"\nhost = "example.com"\ndefault_cwd = "/remote/work"\n\n[environments.bad]\ntype = "ssh"\n',
+    },
+    {
+      name: 'an invalid default reference',
+      config: '[environments]\ndefault = "missing"\n',
+    },
+    {
+      name: 'malformed TOML',
+      config: '[environments\n',
+    },
+  ])('rejects implicit local creation with $name and allows explicit local', async ({ config }) => {
+    vi.stubEnv('KIMI_CODE_EXPERIMENTAL_FLAG', 'false');
+    const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-invalid-env-work-'));
+    const homeDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-invalid-env-home-'));
+    tempDirs.push(workDir, homeDir);
+    await writeFile(join(homeDir, 'config.toml'), config, 'utf-8');
+    const client = new SDKRpcClientV2({ homeDir, identity: TEST_IDENTITY });
+    const harness = new KimiHarness(client, {
+      identity: client.identity,
+      homeDir: client.homeDir,
+      configPath: client.configPath,
+      auth: client.auth,
+      telemetry: client.telemetry,
+      ensureConfigFile: () => client.ensureConfigFile(),
+      onClose: () => client.close(),
+    });
+    try {
+      await expect(harness.createSession({ workDir })).rejects.toMatchObject({ code: 'config.invalid' });
+      const local = await client.engineAccessor.get(ISessionManager).create({ workDir, environmentId: 'local' });
+      expect(local.id).not.toBe('');
+    } finally {
+      await harness.close();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('resolves creation defaults without creating a session', async () => {
     const workDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-default-work-'));
     const remoteDir = await mkdtemp(join(tmpdir(), 'kimi-sdk-default-target-'));

@@ -16,6 +16,7 @@ function fakeConfig(initial: EnvironmentsSection | undefined) {
       if (failure !== undefined) throw failure;
       return domain === 'environments' ? section : undefined;
     },
+    assertValid: () => {},
     onDidSectionChange: changes.event,
   } as unknown as IConfigService;
   return {
@@ -29,6 +30,13 @@ function fakeConfig(initial: EnvironmentsSection | undefined) {
       failure = error;
       changes.fire({ domain: 'environments' });
     },
+    failSilently: (error: Error) => {
+      failure = error;
+    },
+    setSilently: (next: EnvironmentsSection | undefined) => {
+      section = next;
+      failure = undefined;
+    },
   };
 }
 
@@ -40,7 +48,7 @@ describe('environment declarations', () => {
     const service = new EnvironmentDeclarationService(config, { warn: vi.fn() } as never);
     expect(await service.declarations()).toEqual({
       entries: [{ id: 'dev', entry: DEV }],
-      default: { environmentId: 'dev', cwd: '/remote/project' },
+      defaultId: 'dev',
     });
     service.dispose();
   });
@@ -62,16 +70,27 @@ describe('environment declarations', () => {
     service.dispose();
   });
 
-  it('reports resolution failures as unresolved until the config resolves again', async () => {
+  it('rejects resolution failures until the config resolves again', async () => {
     const warn = vi.fn();
     const source = fakeConfig({ dev: DEV } as unknown as EnvironmentsSection);
     const service = new EnvironmentDeclarationService(source.config, { warn } as never);
     await service.declarations();
     source.fail(new Error('broken config'));
-    expect(await service.declarations()).toBeUndefined();
+    await expect(service.declarations()).rejects.toThrow('broken config');
     source.set({ dev: DEV } as unknown as EnvironmentsSection);
-    expect((await service.declarations())?.entries).toEqual([{ id: 'dev', entry: DEV }]);
-    expect(warn).toHaveBeenCalledWith('remote environment declaration resolution failed', expect.anything());
+    expect((await service.declarations()).entries).toEqual([{ id: 'dev', entry: DEV }]);
+    expect(warn).toHaveBeenCalledWith('remote environment declaration reload failed', expect.anything());
+    service.dispose();
+  });
+
+  it('revalidates after silent config failures and recovery', async () => {
+    const source = fakeConfig(undefined);
+    const service = new EnvironmentDeclarationService(source.config, { warn: vi.fn() } as never);
+    expect(await service.declarations()).toEqual({ entries: [] });
+    source.failSilently(new Error('broken config'));
+    await expect(service.declarations()).rejects.toThrow('broken config');
+    source.setSilently(undefined);
+    expect(await service.declarations()).toEqual({ entries: [] });
     service.dispose();
   });
 

@@ -93,14 +93,9 @@ export interface RemoteEnvironmentDeclaration {
   readonly entry: RemoteEnvironmentEntry;
 }
 
-export interface EnvironmentDeclarationDefault {
-  readonly environmentId: string;
-  readonly cwd: string;
-}
-
 export interface EnvironmentDeclarationSet {
   readonly entries: readonly RemoteEnvironmentDeclaration[];
-  readonly default?: EnvironmentDeclarationDefault;
+  readonly defaultId?: string;
 }
 
 export function sectionEntries(

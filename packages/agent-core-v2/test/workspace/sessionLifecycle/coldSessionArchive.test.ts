@@ -248,7 +248,7 @@ function sessionManagerResuming(sessionId: string): SessionManager {
     workspaces,
     { get: async () => summary } as unknown as ISessionIndex,
     new EnvironmentDeclarationService(
-      { _serviceBrand: undefined, ready: Promise.resolve(), get: () => undefined } as unknown as IConfigService,
+      { _serviceBrand: undefined, ready: Promise.resolve(), assertValid: () => {}, get: () => undefined } as unknown as IConfigService,
       { _serviceBrand: undefined, warn: () => {}, info: () => {}, error: () => {} } as unknown as ILogService,
     ),
     environments,

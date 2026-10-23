@@ -28,6 +28,7 @@ function configService(section: unknown): IConfigService {
   return {
     _serviceBrand: undefined,
     ready: Promise.resolve(),
+    assertValid: () => {},
     get: (domain: string) => (domain === 'environments' ? section : undefined),
     onDidSectionChange: () => ({ dispose: () => {} }),
   } as unknown as IConfigService;
@@ -45,6 +46,7 @@ function watchableConfigService(initial: unknown): WatchableConfigService {
     service: {
       _serviceBrand: undefined,
       ready: Promise.resolve(),
+      assertValid: () => {},
       get: (domain: string) => (domain === 'environments' ? section : undefined),
       onDidSectionChange: emitter.event,
     } as unknown as IConfigService,

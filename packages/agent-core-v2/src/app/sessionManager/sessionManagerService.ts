@@ -77,9 +77,10 @@ export class SessionManager implements ISessionManager {
 
   async resolveCreationEnvironment(options: CreateManagedSessionOptions) {
     await this.environments.ready;
-    const declarations = await this.environmentDeclarations.declarations();
-    const fallback = options.environmentId === undefined ? declarations?.default : undefined;
-    const environmentId = options.environmentId ?? fallback?.environmentId;
+    const declarations = options.environmentId === LOCAL_ENVIRONMENT_ID
+      ? undefined
+      : await this.environmentDeclarations.declarations();
+    const environmentId = options.environmentId ?? declarations?.defaultId;
     const remote = environmentId !== undefined && environmentId !== LOCAL_ENVIRONMENT_ID;
     if (options.workDir !== undefined && !remote) await this.assertUsableWorkDir(options.workDir);
     const workspace = await this.workspaces.getOrCreate(
@@ -94,12 +95,10 @@ export class SessionManager implements ISessionManager {
     if (declared === undefined && this.environments.current(environmentId) === undefined) {
       throw new Error2(
         ErrorCodes.CONFIG_INVALID,
-        declarations === undefined
-          ? `environment declarations failed to resolve; cannot validate environment "${environmentId}"`
-          : `environment "${environmentId}" is not declared in [environments]`,
+        `environment "${environmentId}" is not declared in [environments]`,
       );
     }
-    const cwd = options.environmentCwd ?? fallback?.cwd ?? declared?.entry.defaultCwd;
+    const cwd = options.environmentCwd ?? declared?.entry.defaultCwd;
     if (cwd === undefined) {
       throw new Error2(
         ErrorCodes.CONFIG_INVALID,

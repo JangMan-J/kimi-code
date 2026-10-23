@@ -53,6 +53,7 @@ defaultCwd = "/home/me/kimi-code"
 - `type` 与 `command` 在同一条目内互斥：`type = "ssh"` 和 `type = "docker"` 是内置启动器，`command` + `args` 是通用形式（与 `.mcp.json` 的 stdio 条目形态一致）。`env` 设置的是本机启动器进程的环境，**不会**传播到 Agent 在目标环境执行的命令里。
 - `defaultCwd` 是在该环境上创建会话时使用的工作目录，可被 `--environment-cwd` 覆盖。它必须是目标环境上的 POSIX 绝对路径；相对路径和 `~` 不会按本机目录或目标机器的 home 展开。系统先规范化重复分隔符、`.` 和 `..`，再在目标环境上校验目录，并保存同一个规范化路径。符号链接名称会保留，不会用 realpath 改写；因此 `symlink/..` 使用路径拼写中的父目录，而不是符号链接目标的物理父目录。
 - 可选的顶层 `default` 指定创建会话时未显式给出绑定时使用的环境——冷启动、print 模式，或 API 创建。它指向的条目必须设置 `defaultCwd`。未设置 `default` 时，这些会话从 `local` 开始。TUI 里的 `/new` 不属于这种情况：它保留当前会话的环境和工作目录。还没有会话时，`/new` 使用进程启动时的 `--environment`；没有该参数时才用解析后的 default。
+- 配置文件无法读取或 `[environments]` 节无效时，创建会话会以 `config.invalid` 失败，不会将其视为未设置 default。显式选择 `local` 仍可创建本地会话。
 - 环境 id 即条目的键名：不超过 64 个字符，首尾不能有空白；`local` 和 `default` 是保留字。
 
 启用[文件监听](../configuration/config-files.md#watch)后，声明文件的修改无需重启即可生效。删除环境不会把会话静默改绑到 `local`；后续工具调用会以 `environment.not_found` 或 `environment.unavailable` 失败。

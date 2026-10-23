@@ -56,7 +56,7 @@ function makeSessionManager(
     index,
     new EnvironmentDeclarationService(
       overrides.config ??
-        ({ _serviceBrand: undefined, ready: Promise.resolve(), get: () => undefined } as unknown as IConfigService),
+        ({ _serviceBrand: undefined, ready: Promise.resolve(), assertValid: () => {}, get: () => undefined } as unknown as IConfigService),
       log,
     ),
     environments,
@@ -909,6 +909,7 @@ describe('SessionManager controller retirement', () => {
     const manager = managerFor(program, registry, {
       _serviceBrand: undefined,
       ready: Promise.resolve(),
+      assertValid: () => {},
       get: (domain: string) =>
         domain === 'environments' ? { remote: { command: 'remote', defaultCwd: '/remote/work' } } : undefined,
     } as unknown as IConfigService);
@@ -939,6 +940,7 @@ describe('SessionManager creation environment', () => {
     return {
       _serviceBrand: undefined,
       ready: Promise.resolve(),
+      assertValid: () => {},
       get: (domain: string) => (domain === 'environments' ? section : undefined),
     } as unknown as IConfigService;
   }
@@ -1014,22 +1016,22 @@ describe('SessionManager creation environment', () => {
     expect((options[0] as { environmentId?: string }).environmentId).toBeUndefined();
   });
 
-  it('rejects an explicit environment id when declaration resolution fails', async () => {
+  it('rejects creation when declaration resolution fails and allows explicit local', async () => {
     const { options } = setup({
       _serviceBrand: undefined,
       ready: Promise.resolve(),
+      assertValid: () => {},
       get: () => {
         throw new Error('config store corrupted');
       },
     } as unknown as IConfigService);
 
-    await expect(manager.create({ workDir: '/workspace', environmentId: 'sandbox' })).rejects.toMatchObject({
-      code: 'config.invalid',
-    });
+    await expect(manager.create({ workDir: '/workspace', environmentId: 'sandbox' })).rejects.toThrow('config store corrupted');
+    await expect(manager.create({ workDir: '/workspace' })).rejects.toThrow('config store corrupted');
     expect(options).toHaveLength(0);
 
-    await manager.create({ workDir: '/workspace' });
-    expect(options[0]).toMatchObject({ workDir: '/workspace' });
+    await manager.create({ workDir: '/workspace', environmentId: 'local' });
+    expect(options[0]).toMatchObject({ workDir: '/workspace', environmentId: 'local' });
   });
 
   it('normalizes a declared remote cwd before handing it to the controller', async () => {

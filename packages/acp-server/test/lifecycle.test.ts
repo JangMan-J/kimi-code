@@ -77,8 +77,9 @@ describe('acp-server session lifecycle', () => {
     }
   });
 
-  async function boot(): Promise<TestClient> {
+  async function boot(configToml?: string): Promise<TestClient> {
     homeDir = await mkdtemp(join(tmpdir(), 'acp-lifecycle-'));
+    if (configToml !== undefined) await writeFile(join(homeDir, 'config.toml'), configToml, 'utf-8');
     client = await createTestClient({ homeDir });
     await client.send('initialize', { protocolVersion: 1, clientCapabilities: {} });
     return client;
@@ -116,6 +117,18 @@ describe('acp-server session lifecycle', () => {
         sessions: { sessionId: string }[];
       };
       expect(listed.sessions.some((s) => s.sessionId === created.sessionId)).toBe(true);
+    },
+    30_000,
+  );
+
+  it(
+    'session/new bypasses an invalid configured environment default',
+    async () => {
+      const c = await boot('[environments]\ndefault = "missing"\n');
+      const created = (await c.send('session/new', { cwd: homeDir, mcpServers: [] })) as {
+        sessionId: string;
+      };
+      expect(created.sessionId).toMatch(/^session_/);
     },
     30_000,
   );

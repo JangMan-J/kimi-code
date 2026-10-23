@@ -242,8 +242,10 @@ export class RemoteEnvironmentProviderFactory implements EnvironmentProviderFact
   async attach(host: EnvironmentProviderHost): Promise<EnvironmentProviderAttachment> {
     const log = host.get(ILogService);
     const declarations = host.get(IEnvironmentDeclarationService);
-    const initial = await declarations.declarations();
-    if (initial === undefined) log.warn('remote environment declarations failed to load');
+    const initial = await declarations.declarations().catch((error: unknown) => {
+      log.warn('remote environment declarations failed to load', { error });
+      return undefined;
+    });
     const records = new Map<string, DeclaredEnvironmentRecord>();
     for (const declaration of initial?.entries ?? []) {
       try {
