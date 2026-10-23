@@ -194,6 +194,25 @@ test('rollback without source turn ids keeps the preceding answer', async (t) =>
   expect(text(actual)).not.toContain('Drop');
 });
 
+test('a turn start claims only the records that open it, so a rollback keeps earlier turns', async (t) => {
+  const mixed = await readSession(await fixture(t, [meta(),
+    response(message('user', 'First')), response(message('assistant', 'First answer')),
+    response(message('user', 'Second')), response({ type: 'function_call', name: 'shell', call_id: 'b', arguments: '{}' }), response({ type: 'function_call_output', call_id: 'b', output: 'OUTPUT_B' }), response(message('assistant', 'Second answer')),
+    event('task_started', { turn_id: 'new-turn' }), response(message('user', 'Drop')), response(message('assistant', 'Drop answer')), event('thread_rolled_back', { num_turns: 1 }),
+  ]));
+  expect(mixed.turns.map((turn) => turn.user)).toEqual(['First', 'Second']);
+  expect(text(mixed)).toContain('OUTPUT_B');
+  expect(text(mixed)).toContain('Second answer');
+  expect(text(mixed)).not.toContain('Drop');
+  const legacy = await readSession(await fixture(t, [meta(),
+    response(message('user', 'Keep')), event('task_started', { turn_id: 'one' }), response(message('assistant', 'Keep answer')), event('task_complete', { turn_id: 'one' }),
+    response(message('user', 'Drop')), event('task_started', { turn_id: 'two' }), response(message('assistant', 'Drop answer')), event('thread_rolled_back', { num_turns: 1 }),
+  ]));
+  expect(legacy.turns.map((turn) => turn.user)).toEqual(['Keep']);
+  expect(text(legacy)).toContain('Keep answer');
+  expect(text(legacy)).not.toContain('Drop');
+});
+
 test('unsupported ancestor history and ambiguous compaction rollback fail explicitly', async (t) => {
   await expect(readSession(await fixture(t, [meta({ history_base: { thread_id: 'example-parent', end_ordinal_exclusive: 20 } })]))).rejects.toMatchObject({ code: 'UNSUPPORTED_HISTORY_BASE' });
   await expect(readSession(await fixture(t, [meta(), { type: 'compacted', payload: { message: 'Legacy summary' } }]))).rejects.toMatchObject({ code: 'UNSUPPORTED_LEGACY_COMPACTION' });

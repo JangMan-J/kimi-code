@@ -264,6 +264,9 @@ async function scan(path: string, onRecord: (row: SourceItem | undefined, line: 
   return { digest: digest.digest('hex'), lineNumber };
 }
 
+const opensTurn = (entry: Descriptor) => entry.user === true || entry.mirroredUserLine !== undefined || entry.kind === 'context'
+  || entry.kind === 'response' && entry.type === 'message' && entry.role !== 'assistant';
+
 function responseDescriptor(item: SourceItem, line: number, turnId?: string, replacementIndex?: number, replacementMetadata?: unknown): Descriptor {
   return { line, kind: 'response', responseIdentity: item.id ? `${item.type ?? 'unknown'}:${item.id}` : undefined, responseDigest: item.id ? hash(JSON.stringify(item)) : undefined, type: item.type, role: item.role, turnId: itemTurn(item, turnId), explicitTurn: Boolean(item.internal_chat_message_metadata_passthrough?.turn_id ?? item.turn_id), user: isRealUser(item), userHash: item.role === 'user' ? hash(contentText(item.content)) : undefined, userBlockHashes: item.role === 'user' ? item.content?.flatMap((part) => typeof part.text === 'string' ? [hash(part.text)] : []) : undefined, sourceSummary: isSourceSummary(item), replacementIndex, replacementMetadata };
 }
@@ -354,7 +357,7 @@ export async function readRolloutSession(sourcePath: string, options: ReadOption
         activeTurn = payload.turn_id ?? activeTurn;
         for (let i = selected.length - 1; i >= 0; i--) {
           const entry = selected[i];
-          if (!entry || entry.turnId) break;
+          if (!entry || entry.turnId || !opensTurn(entry)) break;
           entry.turnId = activeTurn;
         }
       }
