@@ -63,6 +63,11 @@ export interface EffectiveHistory {
   imageReferenceIndexPath?: string;
 }
 
+export interface SourceCopy {
+  directory: string;
+  folder: boolean;
+}
+
 export interface ReadOptions {
   imageDirectory: string;
   stateDatabasePath?: string;
@@ -107,6 +112,7 @@ export type ConversionResult = {
   lastPrompt?: string;
   messages: ImportMessage[];
   historyPath: string;
+  sourceCopyDirectory: string;
   imageReferenceIndexPath?: string;
   imageReferences: ImageReference[];
   stats: ConversionStats;

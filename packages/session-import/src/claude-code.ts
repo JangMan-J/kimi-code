@@ -129,6 +129,16 @@ interface ReaderStats extends Record<string, unknown> {
 const CHAIN_TYPES = new Set(['user', 'assistant', 'system', 'attachment', 'progress']);
 const METADATA_TYPES = new Set(['summary', 'mode', 'permission-mode', 'atis-latch', 'file-history-snapshot', 'last-prompt', 'ai-title', 'queue-operation', 'cost-state', 'file-history-delta', 'pr-link', 'frame-link', 'custom-title', 'agent-name', 'continued-in', 'agent-setting', 'artifact-comment-monitor', 'artifact-autoreact-ledger']);
 const REQUEST_LOG_TYPES = new Set(['api-request', 'api-request-blob', 'api-request-shape']);
+
+export function isRequestLogLine(line: Buffer): boolean {
+  if (!line.includes('"type":"api-request')) return false;
+  try {
+    const type = (JSON.parse(line.toString('utf8')) as { type?: unknown } | null)?.type;
+    return typeof type === 'string' && REQUEST_LOG_TYPES.has(type);
+  } catch {
+    return false;
+  }
+}
 const isChainRecord = (row: SourceRecord) => CHAIN_TYPES.has(row.type ?? '') || (!METADATA_TYPES.has(row.type ?? '') && Boolean(row.parentUuid ?? row.logicalParentUuid));
 const KNOWN_BLOCKS = new Set(['text', 'thinking', 'redacted_thinking', 'tool_use', 'server_tool_use', 'tool_result', 'image', 'document']);
 const textOf = (value: unknown): string => typeof value === 'string' ? value : value === null || value === undefined ? '' : JSON.stringify(value);

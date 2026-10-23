@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { zstdCompressSync } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { convertSession, DEFAULT_IMPORT_RATIO, estimateMessages, estimateTokens } from '#/index';
 import { renderHistory } from '#/render';
@@ -20,6 +21,8 @@ async function fixture(rows: unknown[]): Promise<{ sourcePath: string; attachmen
 
 const user = (text: string) => ({ type: 'user', uuid: 'u', parentUuid: null, sessionId: 'example-session', cwd: '/example/project', message: { role: 'user', content: text } });
 const assistant = (text: string) => ({ type: 'assistant', uuid: 'a', parentUuid: 'u', message: { role: 'assistant', content: [{ type: 'text', text }], model: 'example-model' } });
+const ATTACHMENTS = { historyPath: '/example/history.jsonl', sourceCopy: { directory: '/example/attachments/source', folder: false } };
+const CLIPPED = '...[truncated; the full text is in the full history]';
 const body = (messages: Array<{ content: Array<{ text: string }> }>) => messages.map(message => message.content.map(part => part.text).join('\n')).join('\n');
 const history = (turns: EffectiveHistory['turns'], summary?: string): EffectiveHistory => ({
   source: 'claude-code', sourcePath: '/example/source.jsonl', sourceId: 'example', metadata: {}, turns, summary, stats: {}, imageReferences: [],
@@ -53,7 +56,9 @@ describe('session conversion', () => {
       '',
       '<attachments>',
       `Full history: ${result.historyPath}`,
-      'JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records.',
+      'The conversation as the source agent last saw it: the current branch, after any compaction in the source. JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records.',
+      `Source copy: ${join(paths.attachmentDirectory, 'source')}`,
+      "The source session file as it was when imported, minus Claude Code's API request log. Beyond the full history it holds history from before compaction and abandoned branches.",
       '</attachments>',
       '',
       '<turn index="1">',
@@ -68,7 +73,7 @@ describe('session conversion', () => {
       '</imported_conversation>',
       '',
       '<system>',
-      'End of the imported conversation. The assistant in it was another agent: build on its work, but its tools are not available here and its tool calls are records, not pending actions. Files may have changed since; re-read them before editing. Earlier details are in the full history file. Continue from where it left off when the user asks.',
+      'End of the imported conversation. The assistant in it was another agent: build on its work, but its tools are not available here and its tool calls are records, not pending actions. Files may have changed since; re-read them before editing. Earlier details are in the full history and the source copy. Continue from where it left off when the user asks.',
       '</system>',
     ].join('\n') }] }]);
     expect(body(result.messages)).not.toContain('metadata-only-sentinel');
@@ -77,6 +82,41 @@ describe('session conversion', () => {
     expect(lines[1]).toMatchObject({ type: 'turn', user: 'Original request 中文🙂' });
     expect(JSON.stringify(lines)).toContain('metadata-only-sentinel');
     expect(await readFile(paths.sourcePath)).toEqual(originalBytes);
+    expect(result.sourceCopyDirectory).toBe(join(paths.attachmentDirectory, 'source'));
+    expect(await readFile(join(result.sourceCopyDirectory, 'source.jsonl'))).toEqual(originalBytes);
+  });
+
+  it('keeps a copy of the source session and its folder without the API request log', async () => {
+    const paths = await fixture([]);
+    const request = JSON.stringify({ type: 'api-request-blob', sessionId: 'example-session', hash: 'one', message: { role: 'user', content: [] } });
+    const [prompt, answer] = [JSON.stringify(user('Original request')), JSON.stringify(assistant('Original answer'))];
+    await writeFile(paths.sourcePath, `${prompt}\r\n${request}\n${answer}\n`);
+    const folder = join(dirname(paths.sourcePath), 'source');
+    await mkdir(join(folder, 'subagents'), { recursive: true });
+    await mkdir(join(folder, 'tool-results'), { recursive: true });
+    await writeFile(join(folder, 'subagents', 'agent-one.jsonl'), `${request}\n${answer}\n`);
+    await writeFile(join(folder, 'tool-results', 'saved.bin'), Buffer.from([0, 1, 2, 255]));
+    const result = await convertSession({ ...paths, source: 'claude-code', contextWindow: 32768 });
+    if (result.status === 'unreliable') throw new Error(result.error.message);
+    const copy = result.sourceCopyDirectory;
+    expect(await readFile(join(copy, 'source.jsonl'), 'utf8')).toBe(`${prompt}\r\n${answer}\n`);
+    expect(await readFile(join(copy, 'source', 'subagents', 'agent-one.jsonl'), 'utf8')).toBe(`${answer}\n`);
+    expect(await readFile(join(copy, 'source', 'tool-results', 'saved.bin'))).toEqual(Buffer.from([0, 1, 2, 255]));
+    expect(body(result.messages)).toContain(`a path under ${folder} maps to ${join(copy, 'source')}.`);
+  });
+
+  it('keeps a decompressed copy of a compressed Codex rollout', async () => {
+    const paths = await fixture([]);
+    const raw = [
+      { type: 'session_meta', payload: { id: 'example', cwd: '/example/project' } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Add tests' }] } },
+    ].map(row => JSON.stringify(row)).join('\n') + '\n';
+    const sourcePath = join(dirname(paths.sourcePath), 'rollout-example.jsonl.zst');
+    await writeFile(sourcePath, zstdCompressSync(Buffer.from(raw)));
+    const result = await convertSession({ ...paths, sourcePath, source: 'codex', contextWindow: 32768 });
+    if (result.status === 'unreliable') throw new Error(result.error.message);
+    expect(await readFile(join(result.sourceCopyDirectory, 'rollout-example.jsonl'), 'utf8')).toBe(raw);
+    expect(body(result.messages)).toContain('The source rollout as it was when imported, decompressed.');
   });
   it('honors an explicit token budget and keeps the uncropped text after the source is deleted', async () => {
     const original = 'BEGINNING\n' + 'large original text 中文 '.repeat(10000) + '\nORIGINAL_END';
@@ -104,7 +144,7 @@ describe('session conversion', () => {
       { kind: 'source_context', text: 'SOURCE_CONTEXT' },
       { kind: 'assistant', text: 'The build passes.' },
     ] }]);
-    const result = renderHistory(source, '/example/history.jsonl', 8000, []);
+    const result = renderHistory(source, ATTACHMENTS, 8000, []);
     expect(result.messages).toHaveLength(1);
     const text = body(result.messages);
     expect(text).toContain('Activity: 2026-10-20T10:02:00.000Z to 2026-10-20T10:03:00.000Z');
@@ -137,19 +177,20 @@ describe('session conversion', () => {
       { kind: 'tool_result', text: 'r'.repeat(5000), metadata: { isError: true } },
       { kind: 'tool_result', text: '' },
     ] }]);
-    const text = body(renderHistory(source, '/example/history.jsonl', 20000, []).messages);
-    expect(text).toContain(`[external_agent_tool_call: Grep]\ninput: ${search.slice(0, 1997)}...\n[/external_agent_tool_call]`);
+    const text = body(renderHistory(source, ATTACHMENTS, 20000, []).messages);
+    expect(text).toContain(`[external_agent_tool_call: Grep]\ninput: ${search.slice(0, 2000 - CLIPPED.length)}${CLIPPED}\n[/external_agent_tool_call]`);
     expect(text).toContain(`[external_agent_tool_call: Edit]\ninput: ${edit}\n[/external_agent_tool_call]`);
     expect(text).toContain('[external_agent_tool_call: apply_patch]\ninput: *** Begin Patch\n*** End Patch\n[/external_agent_tool_call]');
-    expect(text).toContain(`[external_agent_tool_result: error]\n${'r'.repeat(3997)}...\n[/external_agent_tool_result]`);
+    expect(text).toContain(`[external_agent_tool_result: error]\n${'r'.repeat(4000 - CLIPPED.length)}${CLIPPED}\n[/external_agent_tool_result]`);
     expect(text).toContain('[external_agent_tool_result]\n[/external_agent_tool_result]');
   });
 
   it('never clips a tool result inside an image reference', () => {
     const image = '[Imported image reference: "/example/image.png"; read this file to view the image]';
-    const source = history([{ id: 'turn', user: 'Show it', steps: [{ kind: 'tool_result', text: 'x'.repeat(3980) + image }] }]);
-    const text = body(renderHistory(source, '/example/history.jsonl', 20000, []).messages);
-    expect(text).toContain(`${'x'.repeat(3980)}...\n[/external_agent_tool_result]`);
+    const prefix = 4000 - CLIPPED.length - 10;
+    const source = history([{ id: 'turn', user: 'Show it', steps: [{ kind: 'tool_result', text: 'x'.repeat(prefix) + image }] }]);
+    const text = body(renderHistory(source, ATTACHMENTS, 20000, []).messages);
+    expect(text).toContain(`${'x'.repeat(prefix)}${CLIPPED}\n[/external_agent_tool_result]`);
     expect(text).not.toContain('[Imported image reference:');
   });
 
@@ -160,7 +201,7 @@ describe('session conversion', () => {
       { id: 'two', user: '', steps: [{ kind: 'assistant', text: 'Continued answer' }] },
       { id: 'three', user: 'Second request', steps: [] },
     ]);
-    const result = renderHistory(source, '/example/history.jsonl', 8000, []);
+    const result = renderHistory(source, ATTACHMENTS, 8000, []);
     const text = body(result.messages);
     expect(text).toContain('<turn index="2">\n<user>\nFirst request\n</user>\n<assistant>\nFirst answer\n\nContinued answer\n</assistant>\n</turn>\n\n<turn index="4">\n<user>\nSecond request\n</user>\n</turn>');
     expect(text).not.toContain('LEADING_ANSWER');
@@ -170,7 +211,7 @@ describe('session conversion', () => {
     const source = history(Array.from({ length: 12 }, (_, index) => ({ id: `turn-${index}`, user: `user-${index}`, steps: [
       { kind: 'assistant' as const, text: `reply-${index} ` + 'x'.repeat(3000) },
     ] })));
-    const result = renderHistory(source, '/example/history.jsonl', 3000, []);
+    const result = renderHistory(source, ATTACHMENTS, 3000, []);
     const text = body(result.messages);
     expect(text).toContain('reply-11');
     expect(text).not.toContain('reply-0 ');
@@ -185,7 +226,7 @@ describe('session conversion', () => {
       { id: 'old', user: 'OLD_PROMPT', steps: [{ kind: 'assistant', text: 'OLD_ANSWER' }] },
       { id: 'new', user: 'NEW_PROMPT', steps: [{ kind: 'assistant', text: 'EARLY_PROGRESS ' + 'step '.repeat(5000) + 'FINAL_ANSWER' }] },
     ]);
-    const result = renderHistory(source, '/example/history.jsonl', 2000, []);
+    const result = renderHistory(source, ATTACHMENTS, 2000, []);
     const text = body(result.messages);
     expect(text).toMatch(/<turn index="2">\n<user>\nNEW_PROMPT\n<\/user>\n<assistant>\n\[Earlier source text omitted: \d+ characters\. See the full history attachment\.\]\n/);
     expect(text).toContain('FINAL_ANSWER');
@@ -202,7 +243,7 @@ describe('session conversion', () => {
     const image = '[Imported image reference: "/example/' + 'image/'.repeat(200) + 'image.png"; read this file to view the image]';
     const source = history([{ id: 'turn', user: 'x'.repeat(3000) + image + 'END', steps: [] }]);
     source.imageReferenceIndexPath = '/example/attachments/images/index.json';
-    const result = renderHistory(source, '/example/history.jsonl', 1200, []);
+    const result = renderHistory(source, ATTACHMENTS, 1200, []);
     const text = body(result.messages);
     expect(text.replaceAll(image, '')).not.toContain('[Imported image reference:');
     expect(text.replaceAll(image, '')).not.toContain('read this file to view the image]');
@@ -212,9 +253,9 @@ describe('session conversion', () => {
 
   it('preserves a source summary first when all history fits, without inventing an overview', () => {
     const source = history([{ id: 'turn', user: 'Current task', steps: [{ kind: 'assistant', text: 'Current answer' }] }], 'Original source summary');
-    const result = renderHistory(source, '/example/history.jsonl', 8000, []);
+    const result = renderHistory(source, ATTACHMENTS, 8000, []);
     const text = body(result.messages);
-    expect(text).toContain('The source compacted earlier history; its summary comes first below.');
+    expect(text).toContain('The source compacted earlier history; its summary comes first below, and the records from before compaction are in the source copy.');
     expect(text).toContain('<source_summary>\nOriginal source summary\n</source_summary>\n\n<turn index="1">\n<user>\nCurrent task\n</user>');
     expect(text).not.toContain('Files changed:');
     expect(result.stats.omittedTurns).toBe(0);
@@ -332,7 +373,7 @@ describe('session conversion', () => {
     const source = history([{ id: 'turn', user: 'Original task', metadata: { veryLarge: 'm'.repeat(100000) }, steps: [
       { kind: 'tool_result', text: 'Original evidence', metadata: { veryLarge: 'n'.repeat(100000) } },
     ] }]);
-    const result = renderHistory(source, '/example/history.jsonl', 2000, []);
+    const result = renderHistory(source, ATTACHMENTS, 2000, []);
     expect(body(result.messages)).toContain('Original task');
     expect(body(result.messages)).toContain('Original evidence');
     expect(body(result.messages)).not.toContain('veryLarge');
@@ -341,7 +382,7 @@ describe('session conversion', () => {
 
   it('keeps Unicode characters intact and token accounting exact after clipping', () => {
     const source = history([{ id: 'turn', user: '中文🙂'.repeat(10000), steps: [] }]);
-    const result = renderHistory(source, '/example/history.jsonl', 2000, []);
+    const result = renderHistory(source, ATTACHMENTS, 2000, []);
     expect(result.stats.estimatedTokens).toBe(estimateMessages(result.messages));
     expect(result.stats.estimatedTokens).toBeLessThanOrEqual(2000);
     expect(Buffer.from(body(result.messages), 'utf8').toString('utf8')).toBe(body(result.messages));

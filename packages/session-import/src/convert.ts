@@ -1,8 +1,8 @@
 import { isAbsolute, join } from 'node:path';
-import { lstat } from 'node:fs/promises';
+import { lstat, stat } from 'node:fs/promises';
 import { readClaudeSession } from '#/claude-code';
 import { readRolloutSession } from '#/rollout';
-import { saveEffectiveHistory } from '#/archive';
+import { saveEffectiveHistory, saveSourceCopy } from '#/archive';
 import { DEFAULT_IMPORT_RATIO, renderHistory } from '#/render';
 import type { ConversionIssue, ConversionOptions, ConversionResult, EffectiveHistory, HistoryTurn } from '#/types';
 
@@ -73,6 +73,7 @@ export async function convertSession(options: ConversionOptions): Promise<Conver
     }
     const readOptions = { imageDirectory: join(options.attachmentDirectory, 'images'), stateDatabasePath: options.stateDatabasePath };
     stage = 'source';
+    const before = await stat(options.sourcePath, { bigint: true });
     const parsed = options.source === 'claude-code'
       ? await readClaudeSession(options.sourcePath, readOptions)
       : await readRolloutSession(options.sourcePath, readOptions);
@@ -81,8 +82,14 @@ export async function convertSession(options: ConversionOptions): Promise<Conver
     const issues = sourceIssues(history);
     stage = 'attachment';
     const historyPath = await saveEffectiveHistory(history, options.attachmentDirectory, issues);
+    const sourceCopy = await saveSourceCopy(history.source, options.sourcePath, options.attachmentDirectory);
+    const after = await stat(options.sourcePath, { bigint: true });
+    if (after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ino !== before.ino) {
+      stage = 'source';
+      throw Object.assign(new Error('The source session changed while it was being imported.'), { code: 'SOURCE_CHANGED' });
+    }
     stage = 'context';
-    const { messages, stats, truncated } = renderHistory(history, historyPath, tokenBudget, issues);
+    const { messages, stats, truncated } = renderHistory(history, { historyPath, sourceCopy }, tokenBudget, issues);
     if (truncated) issues.push({
       code: 'CONTEXT_TRUNCATED', stage: 'context',
       message: 'The model context contains only the most recent history that fits the budget. The full effective history is saved in the attachment.',
@@ -90,7 +97,7 @@ export async function convertSession(options: ConversionOptions): Promise<Conver
     });
     return { status: issues.length > 0 ? 'partial' : 'complete', source: history.source, sourceId: history.sourceId,
       title: history.title, cwd: history.cwd, lastPrompt: history.turns.map(turn => promptText(turn.user)).findLast(Boolean), messages, historyPath,
-      imageReferenceIndexPath: history.imageReferenceIndexPath, imageReferences: history.imageReferences, stats, issues };
+      sourceCopyDirectory: sourceCopy.directory, imageReferenceIndexPath: history.imageReferenceIndexPath, imageReferences: history.imageReferences, stats, issues };
   } catch (error) {
     const code = error instanceof Error && 'code' in error && typeof error.code === 'string' ? error.code : 'CONVERSION_FAILED';
     const message = error instanceof Error ? error.message : 'Session conversion failed.';

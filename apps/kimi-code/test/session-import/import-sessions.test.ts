@@ -102,6 +102,7 @@ describe('importing sessions', () => {
     expect(wire).toContain('Fix the login flow');
     expect(wire).toContain('<imported_conversation>');
     expect((await readdir(join(sessionDir, 'attachments'))).some((name) => name.startsWith('effective-history-'))).toBe(true);
+    expect(await readdir(join(sessionDir, 'attachments', 'source'))).toEqual(['claude-one.jsonl']);
 
     expect(await scanImportableSessions({ kimiHome, claudeHome, codexHome, now: NOW })).toEqual({ candidates: [], alreadyImported: 2, missingFolder: 0 });
   });

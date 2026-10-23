@@ -1,10 +1,12 @@
-import type { ConversionIssue, ConversionStats, EffectiveHistory, HistoryStep, ImportMessage } from '#/types';
+import { basename, dirname, join } from 'node:path';
+import type { ConversionIssue, ConversionStats, EffectiveHistory, HistoryStep, ImportMessage, SourceCopy } from '#/types';
 
 export const DEFAULT_IMPORT_RATIO = 0.8;
 
 const TOOL_INPUT_LIMIT = 2000;
 const TOOL_RESULT_LIMIT = 4000;
 const EXCERPT_RESERVE = 64;
+const CLIPPED = '...[truncated; the full text is in the full history]';
 const SOURCE_NAMES = { 'claude-code': 'Claude Code', codex: 'Codex' } as const;
 
 export function estimateTokens(text: string): number {
@@ -42,10 +44,10 @@ function imageReferences(text: string): Array<{ start: number; end: number }> {
 
 function clip(text: string, limit: number): string {
   if (text.length <= limit) return text;
-  let end = limit - 3;
+  let end = limit - CLIPPED.length;
   if (/[\uDC00-\uDFFF]/.test(text[end] ?? '')) end--;
   for (const reference of imageReferences(text)) if (end > reference.start && end < reference.end) end = reference.start;
-  return `${text.slice(0, end)}...`;
+  return `${text.slice(0, end)}${CLIPPED}`;
 }
 
 function suffixWithinBudget(text: string, budget: number): Excerpt | undefined {
@@ -150,7 +152,25 @@ function activity(history: EffectiveHistory): string | undefined {
   return times.length > 0 ? `${times[0]} to ${times.at(-1)}` : undefined;
 }
 
-function frame(history: EffectiveHistory, historyPath: string, issues: readonly ConversionIssue[], scope: Scope): { head: string; tail: string } {
+interface Attachments {
+  historyPath: string;
+  sourceCopy: SourceCopy;
+}
+
+function sourceCopyLines(history: EffectiveHistory, copy: SourceCopy): string[] {
+  if (history.source === 'codex') {
+    return [`Source copy: ${copy.directory}`, 'The source rollout as it was when imported, decompressed. Beyond the full history it holds history from before compaction and rolled-back turns.'];
+  }
+  const session = basename(history.sourcePath, '.jsonl');
+  return [
+    `Source copy: ${copy.directory}`,
+    copy.folder
+      ? `The source session file and its folder as they were when imported, minus Claude Code's API request log. Beyond the full history they hold history from before compaction, abandoned branches, subagent transcripts and saved tool output; a path under ${join(dirname(history.sourcePath), session)} maps to ${join(copy.directory, session)}.`
+      : "The source session file as it was when imported, minus Claude Code's API request log. Beyond the full history it holds history from before compaction and abandoned branches.",
+  ];
+}
+
+function frame(history: EffectiveHistory, files: Attachments, issues: readonly ConversionIssue[], scope: Scope): { head: string; tail: string } {
   const source = SOURCE_NAMES[history.source];
   const total = String(history.turns.length);
   const period = activity(history);
@@ -163,12 +183,13 @@ function frame(history: EffectiveHistory, historyPath: string, issues: readonly 
     scope.omitted
       ? `Turns: ${total} in total; turns ${String(scope.first)} to ${String(scope.last)} are below and earlier turns are only in the full history.`
       : `Turns: ${total}, all below.`,
-    ...scope.summary === 'none' ? [] : [`The source compacted earlier history; its summary ${scope.summary === 'included' ? 'comes first below' : 'is only in the full history'}.`],
+    ...scope.summary === 'none' ? [] : [`The source compacted earlier history; its summary ${scope.summary === 'included' ? 'comes first below' : 'is only in the full history'}, and the records from before compaction are in the source copy.`],
     ...scope.shortened ? ['Part of the history below is shortened to fit the context budget.'] : [],
   ];
   const attachments = [
-    `Full history: ${historyPath}`,
-    'JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records.',
+    `Full history: ${files.historyPath}`,
+    'The conversation as the source agent last saw it: the current branch, after any compaction in the source. JSONL: line 1 is the session header; line N + 1 is turn N with every step, including thinking, complete tool input and output, and source records.',
+    ...sourceCopyLines(history, files.sourceCopy),
     ...history.imageReferenceIndexPath ? [`Image index: ${history.imageReferenceIndexPath} (${String(history.imageReferences.length)} images)`] : [],
   ];
   const limitations = issues.map(issue => `- ${issue.message} (${issue.code}${issue.count === undefined ? '' : `, ${String(issue.count)}`})`);
@@ -179,13 +200,13 @@ function frame(history: EffectiveHistory, historyPath: string, issues: readonly 
       `<attachments>\n${attachments.join('\n')}\n</attachments>`,
       ...limitations.length > 0 ? [`<known_limitations>\n${limitations.join('\n')}\n</known_limitations>`] : [],
     ].join('\n\n'),
-    tail: '</imported_conversation>\n\n<system>\nEnd of the imported conversation. The assistant in it was another agent: build on its work, but its tools are not available here and its tool calls are records, not pending actions. Files may have changed since; re-read them before editing. Earlier details are in the full history file. Continue from where it left off when the user asks.\n</system>',
+    tail: '</imported_conversation>\n\n<system>\nEnd of the imported conversation. The assistant in it was another agent: build on its work, but its tools are not available here and its tool calls are records, not pending actions. Files may have changed since; re-read them before editing. Earlier details are in the full history and the source copy. Continue from where it left off when the user asks.\n</system>',
   };
 }
 
 export function renderHistory(
   history: EffectiveHistory,
-  historyPath: string,
+  attachments: Attachments,
   tokenBudget: number,
   issues: readonly ConversionIssue[],
 ): { messages: ImportMessage[]; stats: ConversionStats; truncated: boolean } {
@@ -193,7 +214,7 @@ export function renderHistory(
   if (all.length === 0) throw Object.assign(new Error('The source session contains no conversation to import.'), { code: 'EMPTY_SOURCE_HISTORY' });
   const total = history.turns.length;
   const hasSummary = all[0]?.index === 0;
-  const longest = frame(history, historyPath, issues, { first: total, last: total, omitted: true, shortened: true, summary: hasSummary ? 'omitted' : 'none' });
+  const longest = frame(history, attachments, issues, { first: total, last: total, omitted: true, shortened: true, summary: hasSummary ? 'omitted' : 'none' });
   const reserve = estimateTokens('user') + cost(longest.head) + cost(longest.tail);
   if (reserve > tokenBudget) throw Object.assign(new Error('The token budget cannot fit source attribution and history references.'), { code: 'INSUFFICIENT_TOKEN_BUDGET' });
   let remaining = tokenBudget - reserve;
@@ -219,7 +240,7 @@ export function renderHistory(
   }
   if (selected.length === 0) throw Object.assign(new Error('The token budget cannot fit any source history. The complete history attachment is available.'), { code: 'INSUFFICIENT_TOKEN_BUDGET' });
   const turns = selected.filter(item => item.unit.index > 0);
-  const { head, tail } = frame(history, historyPath, issues, {
+  const { head, tail } = frame(history, attachments, issues, {
     first: turns[0]?.unit.index ?? 0,
     last: turns.at(-1)?.unit.index ?? 0,
     omitted: turns.length < all.filter(unit => unit.index > 0).length,
