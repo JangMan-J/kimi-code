@@ -2,33 +2,32 @@ import {
   IAgentTaskService,
   resumeSessionById,
   type AgentTaskOutputChunk,
+  type AgentTaskOutputTail,
   type IDisposable,
   type Scope,
 } from '@moonshot-ai/agent-core-v2';
 import { z } from 'zod';
 
+import { ErrorCode } from '../../../protocol/error-codes';
 import { ensureMainAgent } from '../../mainAgent';
 
 export const TASK_OUTPUT_TAIL_BYTES = 4096;
 
 const CODE_OK = 0;
-const CODE_INVALID_REQUEST = 40001;
-const CODE_SESSION_NOT_FOUND = 40401;
-const CODE_TASK_NOT_FOUND = 40406;
 
 const taskAttachSchema = z.object({
   type: z.literal('task.attach'),
   request_id: z.string(),
-  session_id: z.string(),
-  task_id: z.string(),
+  session_id: z.string().min(1),
+  task_id: z.string().min(1),
   since_offset: z.number().int().nonnegative().optional(),
 });
 
 const taskDetachSchema = z.object({
   type: z.literal('task.detach'),
   request_id: z.string(),
-  session_id: z.string(),
-  task_id: z.string(),
+  session_id: z.string().min(1),
+  task_id: z.string().min(1),
 });
 
 export interface TaskOutputFrame {
@@ -109,7 +108,7 @@ export class TaskOutputAttachments {
     this.sink.respond({
       type: 'response',
       request_id: requestId,
-      code: CODE_INVALID_REQUEST,
+      code: ErrorCode.VALIDATION_FAILED,
       msg: 'invalid task output message',
     });
   }
@@ -127,21 +126,25 @@ export class TaskOutputAttachments {
     const attachment: Attachment = { generation: ++this.generation };
     this.attachments.set(key, attachment);
     const isCurrent = (): boolean => !this.disposed && this.attachments.get(key) === attachment;
+    const fail = (code: number, msg: string): void => {
+      attachment.subscription?.dispose();
+      if (this.attachments.get(key) === attachment) this.attachments.delete(key);
+      this.sink.respond({ type: 'response', request_id: requestId, code, msg });
+    };
 
     let resolved: TaskOutputSourceResult;
     try {
       resolved = await this.source(sessionId, taskId);
     } catch {
-      resolved = { kind: 'session_not_found' };
+      fail(ErrorCode.INTERNAL_ERROR, 'internal error');
+      return;
     }
-    if (resolved.kind !== 'found') {
-      if (this.attachments.get(key) === attachment) this.attachments.delete(key);
-      this.sink.respond({
-        type: 'response',
-        request_id: requestId,
-        code: resolved.kind === 'session_not_found' ? CODE_SESSION_NOT_FOUND : CODE_TASK_NOT_FOUND,
-        msg: resolved.kind === 'session_not_found' ? 'session not found' : 'task not found',
-      });
+    if (resolved.kind === 'session_not_found') {
+      fail(ErrorCode.SESSION_NOT_FOUND, 'session not found');
+      return;
+    }
+    if (resolved.kind === 'task_not_found') {
+      fail(ErrorCode.TASK_NOT_FOUND, 'task not found');
       return;
     }
     if (!isCurrent()) {
@@ -166,9 +169,13 @@ export class TaskOutputAttachments {
       else pending.push(chunk);
     });
 
-    const tail = await resolved.tasks
-      .readOutputTail(taskId, TASK_OUTPUT_TAIL_BYTES)
-      .catch(() => ({ offset: 0, data: new Uint8Array() }));
+    let tail: AgentTaskOutputTail;
+    try {
+      tail = await resolved.tasks.readOutputTail(taskId, TASK_OUTPUT_TAIL_BYTES);
+    } catch {
+      fail(ErrorCode.PERSISTENCE_FAILURE, 'task output unavailable');
+      return;
+    }
     if (!isCurrent()) {
       attachment.subscription.dispose();
       this.sink.respond({ type: 'response', request_id: requestId, code: CODE_OK });
@@ -208,17 +215,26 @@ export function firstChunk(
   sinceOffset: number | undefined,
 ): { readonly offset: number; readonly text: string } | undefined {
   const end = tailOffset + data.byteLength;
-  const requested =
-    sinceOffset !== undefined && sinceOffset >= tailOffset && sinceOffset <= end
-      ? sinceOffset
-      : tailOffset;
-  let start = requested - tailOffset;
-  while (start < data.byteLength && isUtf8Continuation(data[start]!)) start += 1;
+  let start = 0;
+  if (
+    sinceOffset !== undefined &&
+    sinceOffset >= tailOffset &&
+    sinceOffset <= end &&
+    isCharBoundary(data, sinceOffset - tailOffset)
+  ) {
+    start = sinceOffset - tailOffset;
+  } else {
+    while (start < data.byteLength && isUtf8Continuation(data[start]!)) start += 1;
+  }
   if (start >= data.byteLength) return undefined;
   return {
     offset: tailOffset + start,
     text: Buffer.from(data.buffer, data.byteOffset + start, data.byteLength - start).toString('utf-8'),
   };
+}
+
+function isCharBoundary(data: Uint8Array, index: number): boolean {
+  return index >= data.byteLength || !isUtf8Continuation(data[index]!);
 }
 
 function isUtf8Continuation(byte: number): boolean {

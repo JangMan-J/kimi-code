@@ -913,12 +913,14 @@ describe('WsConnectionV1 task output', () => {
     write(text: string): void;
     readonly listenerCount: () => number;
     holdTailRead(): () => void;
+    failTailRead(): void;
   }
 
   function makeTaskOutput(taskId: string, initial = ''): FakeTaskOutput {
     let bytes = Buffer.from(initial, 'utf-8');
     const listeners = new Set<(chunk: AgentTaskOutputChunk) => void>();
     let gate: Promise<void> | undefined;
+    let tailReadFails = false;
     const tasks = {
       getTask: (id: string) => (id === taskId ? { taskId } : undefined),
       onDidAppendOutput: (listener: (chunk: AgentTaskOutputChunk) => void) => {
@@ -927,6 +929,7 @@ describe('WsConnectionV1 task output', () => {
       },
       readOutputTail: async (_id: string, maxBytes: number) => {
         await gate;
+        if (tailReadFails) throw new Error('EACCES: permission denied');
         const offset = Math.max(0, bytes.byteLength - maxBytes);
         return { offset, data: new Uint8Array(bytes.subarray(offset)) };
       },
@@ -952,6 +955,9 @@ describe('WsConnectionV1 task output', () => {
           gate = undefined;
           release();
         };
+      },
+      failTailRead: () => {
+        tailReadFails = true;
       },
     };
   }
@@ -1060,6 +1066,31 @@ describe('WsConnectionV1 task output', () => {
     conn.close();
   });
 
+  it('falls back to the tail start when since_offset splits a character', async () => {
+    const output = makeTaskOutput('bash-k3f9x2ab', startLines);
+    const socket = new FakeSocket();
+    const conn = makeConn(socket, { taskOutputSource: output.source });
+    const arrowStart = Buffer.from(startLines, 'utf-8').indexOf(Buffer.from('➜', 'utf-8'));
+
+    send(socket, {
+      type: 'task.attach',
+      request_id: 'r1',
+      session_id: 's1',
+      task_id: 'bash-k3f9x2ab',
+      since_offset: arrowStart + 1,
+    });
+    await vi.waitFor(() => expect(taskFrames(socket)).toHaveLength(2));
+
+    expect(taskFrames(socket)[1]).toEqual({
+      type: 'task.output',
+      session_id: 's1',
+      task_id: 'bash-k3f9x2ab',
+      offset: 0,
+      text: startLines,
+    });
+    conn.close();
+  });
+
   it('drops output already covered by the first chunk and forwards output written during the read', async () => {
     const output = makeTaskOutput('bash-k3f9x2ab', startLines);
     const socket = new FakeSocket();
@@ -1112,7 +1143,9 @@ describe('WsConnectionV1 task output', () => {
     send(socket, { type: 'task.attach', request_id: 'r1', session_id: 's2', task_id: 'bash-k3f9x2ab' });
     send(socket, { type: 'task.attach', request_id: 'r2', session_id: 's1', task_id: 'bash-00000000' });
     send(socket, { type: 'task.attach', request_id: 'r3', session_id: 's1' });
-    await vi.waitFor(() => expect(taskFrames(socket)).toHaveLength(3));
+    send(socket, { type: 'task.attach', request_id: 'r4', session_id: 's1', task_id: '' });
+    send(socket, { type: 'task.detach', request_id: 'r5', session_id: '', task_id: 'bash-k3f9x2ab' });
+    await vi.waitFor(() => expect(taskFrames(socket)).toHaveLength(5));
 
     const codes = Object.fromEntries(
       (taskFrames(socket) as Array<{ request_id: string; code: number }>).map((frame) => [
@@ -1120,7 +1153,42 @@ describe('WsConnectionV1 task output', () => {
         frame.code,
       ]),
     );
-    expect(codes).toEqual({ r1: 40401, r2: 40406, r3: 40001 });
+    expect(codes).toEqual({ r1: 40401, r2: 40406, r3: 40001, r4: 40001, r5: 40001 });
+    conn.close();
+  });
+
+  it('replies with an internal error when the task lookup throws', async () => {
+    const socket = new FakeSocket();
+    const conn = makeConn(socket, {
+      taskOutputSource: async () => {
+        throw new Error('session restore failed');
+      },
+    });
+
+    send(socket, { type: 'task.attach', request_id: 'r1', session_id: 's1', task_id: 'bash-k3f9x2ab' });
+    await vi.waitFor(() => expect(taskFrames(socket)).toHaveLength(1));
+
+    expect(taskFrames(socket)).toEqual([
+      { type: 'response', request_id: 'r1', code: 50001, msg: 'internal error' },
+    ]);
+    conn.close();
+  });
+
+  it('replies with a persistence error and releases the attachment when the output cannot be read', async () => {
+    const output = makeTaskOutput('bash-k3f9x2ab', startLines);
+    output.failTailRead();
+    const socket = new FakeSocket();
+    const conn = makeConn(socket, { taskOutputSource: output.source });
+
+    send(socket, { type: 'task.attach', request_id: 'r1', session_id: 's1', task_id: 'bash-k3f9x2ab' });
+    await vi.waitFor(() => expect(taskFrames(socket)).toHaveLength(1));
+    output.write(hmrLine);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(taskFrames(socket)).toEqual([
+      { type: 'response', request_id: 'r1', code: 50003, msg: 'task output unavailable' },
+    ]);
+    expect(output.listenerCount()).toBe(0);
     conn.close();
   });
 

@@ -1008,7 +1008,6 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
     const offset = entry.outputSizeBytes;
     entry.outputSizeBytes += chunkBytes;
     this.appendRetainedOutput(entry, chunk, chunkBytes);
-    this._onDidAppendOutput.fire({ taskId: entry.taskId, offset, text: chunk });
 
     if (
       !entry.outputLimitTripped &&
@@ -1020,6 +1019,7 @@ export class AgentTaskService extends Disposable implements IAgentTaskService {
     }
 
     if (entry.outputLimitTripped) return;
+    this._onDidAppendOutput.fire({ taskId: entry.taskId, offset, text: chunk });
 
     if (!entry.outputPersistStarted) {
       entry.pendingOutput.push(chunk);
