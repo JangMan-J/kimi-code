@@ -199,7 +199,7 @@ describe('importing sessions', () => {
   });
 
   it('sizes imports below the compaction threshold of the default model input limit', () => {
-    const config = (maxContextSize: number, extra: { maxInputSize?: number } = {}) => ({
+    const config = (maxContextSize: number, extra: { maxInputSize?: number; overrides?: { maxContextSize: number } } = {}) => ({
       defaultModel: 'example',
       models: { example: { provider: 'example', model: 'example-model', maxContextSize, ...extra } },
     });
@@ -207,6 +207,7 @@ describe('importing sessions', () => {
     expect(importBudget(config(262_144))).toEqual({ contextWindow: 262_144, tokenBudget: 145_715 });
     expect(importBudget(config(400_000, { maxInputSize: 272_000 }))).toEqual({ contextWindow: 272_000, tokenBudget: 153_600 });
     expect(importBudget(config(200_000, { maxInputSize: 300_000 }))).toEqual({ contextWindow: 200_000, tokenBudget: 96_000 });
+    expect(importBudget(config(400_000, { maxInputSize: 272_000, overrides: { maxContextSize: 128_000 } }))).toEqual({ contextWindow: 128_000, tokenBudget: 38_400 });
     expect(importBudget({ ...config(1_000_000), loopControl: { reservedContextSize: 0, compactionTriggerRatio: 0.95 } })).toEqual({ contextWindow: 1_000_000, tokenBudget: 736_000 });
     expect(importBudget(config(32_768))).toEqual({ contextWindow: 32_768, tokenBudget: 16_384 });
   });

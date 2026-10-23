@@ -11,7 +11,7 @@ import { mkdir, rm, rmdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import type { KimiConfig } from '@moonshot-ai/kimi-code-sdk';
+import { effectiveModelAlias, type KimiConfig } from '@moonshot-ai/kimi-code-sdk';
 import { importedSessionDir, writeImportedSession } from '@moonshot-ai/migration-legacy';
 import { convertSession, DEFAULT_IMPORT_RATIO, findSessions, type SessionCandidate } from '@moonshot-ai/session-import';
 
@@ -93,7 +93,8 @@ export function importedSessionId(session: SessionCandidate): string {
 }
 
 /**
- * Size imports for the default model. The window is its input limit. The
+ * Size imports for the default model, with its `overrides` applied the way
+ * the engine applies them. The window is its input limit. The
  * budget keeps the imported message below the engine's automatic compaction
  * threshold (trigger ratio or reserved context, whichever comes first), with
  * room for the system prompt, tools and the first exchange, so continuing an
@@ -101,7 +102,8 @@ export function importedSessionId(session: SessionCandidate): string {
  * estimator undercounts code and JSON by about a quarter, hence the divisor.
  */
 export function importBudget(config: Pick<KimiConfig, 'defaultModel' | 'models' | 'loopControl'>): ImportBudget {
-  const model = config.defaultModel === undefined ? undefined : config.models?.[config.defaultModel];
+  const alias = config.defaultModel === undefined ? undefined : config.models?.[config.defaultModel];
+  const model = alias === undefined ? undefined : effectiveModelAlias(alias);
   const limit = Math.min(model?.maxInputSize ?? Infinity, model?.maxContextSize ?? Infinity);
   const contextWindow = Number.isFinite(limit) ? limit : FALLBACK_CONTEXT_WINDOW;
   const reserved = config.loopControl?.reservedContextSize ?? RESERVED_CONTEXT_SIZE;
