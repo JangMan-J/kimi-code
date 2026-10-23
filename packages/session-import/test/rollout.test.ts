@@ -272,6 +272,31 @@ test('SQLite thread name lookup is read-only, scoped to the selected thread and 
   expect((await readSession(path, { stateDatabasePath: join(path, '..', 'missing.sqlite') })).title).toBeUndefined();
 });
 
+test('SQLite thread name lookup waits for a write lock to be released', async (t) => {
+  const path = await fixture(t, [meta(), response(message('user', 'Request'))]);
+  const { DatabaseSync } = await import('node:sqlite');
+  const { Worker } = await import('node:worker_threads');
+  const databasePath = join(path, '..', 'state_5.sqlite');
+  const database = new DatabaseSync(databasePath);
+  database.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, name TEXT)');
+  database.prepare('INSERT INTO threads VALUES (?, ?)').run('example-session', 'Renamed thread');
+  database.close();
+  const writer = new Worker(`
+    const { DatabaseSync } = require('node:sqlite');
+    const { parentPort, workerData } = require('node:worker_threads');
+    const database = new DatabaseSync(workerData);
+    database.exec('BEGIN EXCLUSIVE');
+    parentPort.postMessage('locked');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+    database.exec('COMMIT');
+    database.close();
+  `, { eval: true, workerData: databasePath });
+  const exited = new Promise((resolve) => writer.once('exit', resolve));
+  await new Promise((resolve) => writer.once('message', resolve));
+  expect((await readSession(path, { stateDatabasePath: databasePath })).title).toBe('Renamed thread');
+  await exited;
+});
+
 test('interrupts and shell commands the user ran become user events', async (t) => {
   const shell = '<user_shell_command>\n<command>\nls\n</command>\n<result>\nExit code: 0\nOutput:\nREADME.md\n</result>\n</user_shell_command>';
   const actual = await readSession(await fixture(t, [meta(), response(message('user', 'Inspect')), response(message('assistant', 'Looking.')),

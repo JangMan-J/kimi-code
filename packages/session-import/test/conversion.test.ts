@@ -215,34 +215,59 @@ describe('session conversion', () => {
     expect(text).not.toContain('[Imported image reference:');
   });
 
-  it('merges answers without a prompt into the previous turn and drops answers before the first prompt', () => {
+  it('merges answers without a prompt into the previous turn and shows what came before the first prompt at the start of its turn', () => {
     const source = history([
       { id: 'context', user: '', steps: [{ kind: 'assistant', text: 'LEADING_ANSWER' }] },
-      { id: 'one', user: 'First request', steps: [{ kind: 'assistant', text: 'First answer' }] },
+      { id: 'one', user: 'First request', steps: [{ kind: 'user_event', text: '/model example-model', beforeUser: true }, { kind: 'assistant', text: 'First answer' }] },
       { id: 'two', user: '', steps: [{ kind: 'assistant', text: 'Continued answer' }] },
       { id: 'three', user: 'Second request', steps: [] },
     ]);
     const result = renderHistory(source, ATTACHMENTS, 8000, []);
     const text = body(result.messages);
-    expect(text).toContain('<turn index="2">\n<user>\nFirst request\n</user>\n<assistant>\nFirst answer\n\nContinued answer\n</assistant>\n</turn>\n\n<turn index="4">\n<user>\nSecond request\n</user>\n</turn>');
-    expect(text).not.toContain('LEADING_ANSWER');
+    expect(text).toContain([
+      '<turn index="2">', '<assistant>', 'LEADING_ANSWER', '', '[user_event]\n/model example-model\n[/user_event]', '</assistant>',
+      '<user>', 'First request', '</user>', '<assistant>', 'First answer', '', 'Continued answer', '</assistant>', '</turn>',
+      '', '<turn index="4">', '<user>', 'Second request', '</user>', '</turn>',
+    ].join('\n'));
     expect(result.stats).toMatchObject({ sourceTurns: 4, includedTurns: 4, omittedTurns: 0 });
   });
-  it('shows the work after a source compaction and before the next prompt with the source summary', () => {
-    const source = history([{ id: 'one', user: 'Next request', steps: [
-      { kind: 'source_context', text: 'CONTEXT_BEFORE_PROMPT', beforeUser: true },
-      { kind: 'assistant', text: 'Continuing the task.', beforeUser: true },
-      { kind: 'tool_call', name: 'Bash', text: '{"command":"npm test"}', beforeUser: true },
-      { kind: 'user_event', text: '[Request interrupted by user]', beforeUser: true },
-      { kind: 'assistant', text: 'Next answer' },
-    ] }], 'Summary of earlier work');
-    const text = body(renderHistory(source, ATTACHMENTS, 8000, []).messages);
+
+  it('shows the work recorded after a source compaction at the start of the next turn, or with the summary when no prompt follows', () => {
+    const work = [
+      { kind: 'source_context' as const, text: 'CONTEXT_BEFORE_PROMPT', beforeUser: true },
+      { kind: 'assistant' as const, text: 'Continuing the task.', beforeUser: true },
+      { kind: 'tool_call' as const, name: 'Bash', text: '{"command":"npm test"}', beforeUser: true },
+      { kind: 'user_event' as const, text: '[Request interrupted by user]', beforeUser: true },
+    ];
+    const lead = ['<assistant>', 'Continuing the task.', '', '[external_agent_tool_call: Bash]\ninput: {"command":"npm test"}\n[/external_agent_tool_call]', '', '[user_event]\n[Request interrupted by user]\n[/user_event]', '</assistant>'];
+    const text = body(renderHistory(history([{ id: 'one', user: 'Next request', steps: [...work, { kind: 'assistant', text: 'Next answer' }] }], 'Summary of earlier work'), ATTACHMENTS, 8000, []).messages);
     expect(text).toContain([
       '<source_summary>', 'Summary of earlier work', '</source_summary>',
-      '<assistant>', 'Continuing the task.', '', '[external_agent_tool_call: Bash]\ninput: {"command":"npm test"}\n[/external_agent_tool_call]', '', '[user_event]\n[Request interrupted by user]\n[/user_event]', '</assistant>',
-      '', '<turn index="1">', '<user>', 'Next request', '</user>', '<assistant>', 'Next answer', '</assistant>', '</turn>',
+      '', '<turn index="1">', ...lead, '<user>', 'Next request', '</user>', '<assistant>', 'Next answer', '</assistant>', '</turn>',
     ].join('\n'));
     expect(text).not.toContain('CONTEXT_BEFORE_PROMPT');
+    const unanswered = renderHistory(history([{ id: 'one', user: '', steps: work.map(step => ({ ...step, beforeUser: undefined })) }], 'Summary of earlier work'), ATTACHMENTS, 8000, []);
+    expect(body(unanswered.messages)).toContain(['<source_summary>', 'Summary of earlier work', '</source_summary>', ...lead].join('\n'));
+    expect(unanswered.stats).toMatchObject({ sourceTurns: 1, includedTurns: 1 });
+  });
+
+  it('keeps Codex work recorded before the first prompt at the start of the first turn', async () => {
+    const paths = await fixture([
+      { type: 'session_meta', payload: { id: 'thread-example', cwd: '/example/project', source: 'cli' } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'WORK_BEFORE_FIRST_PROMPT' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'FIRST_PROMPT' }] } },
+      { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'ANSWER_AFTER_FIRST_PROMPT' }] } },
+    ]);
+    const result = await convertSession({ ...paths, source: 'codex', contextWindow: 32768 });
+    if (result.status === 'unreliable') throw new Error(result.error.message);
+    expect(body(result.messages)).toContain('<turn index="1">\n<assistant>\nWORK_BEFORE_FIRST_PROMPT\n</assistant>\n<user>\nFIRST_PROMPT\n</user>\n<assistant>\nANSWER_AFTER_FIRST_PROMPT\n</assistant>\n</turn>');
+  });
+
+  it('replaces what came before the prompt with an omission marker when the turn has to be shortened', () => {
+    const source = history([{ id: 'one', user: 'Request', steps: [{ kind: 'assistant', text: 'b'.repeat(20000), beforeUser: true }, { kind: 'assistant', text: 'Answer' }] }]);
+    const result = renderHistory(source, ATTACHMENTS, 1500, []);
+    expect(body(result.messages)).toContain('<turn index="1">\n<assistant>\n[Earlier source text omitted: 20000 characters. See the full history attachment.]\n</assistant>\n<user>\nRequest\n</user>\n<assistant>\nAnswer\n</assistant>\n</turn>');
+    expect(result.stats.truncatedCharacters).toBe(20000);
   });
 
   it('keeps recent whole turns and reports omission of the earlier ones', () => {

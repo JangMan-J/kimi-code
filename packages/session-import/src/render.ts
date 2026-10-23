@@ -27,6 +27,7 @@ export function estimateMessages(messages: readonly ImportMessage[]): number {
 interface Unit {
   index: number;
   time?: string;
+  before: string;
   user: string;
   assistant: string;
   turns: number;
@@ -50,6 +51,8 @@ function clip(text: string, limit: number): string {
   return `${text.slice(0, end)}${CLIPPED}`;
 }
 
+const omitted = (characters: number) => `[Earlier source text omitted: ${String(characters)} characters. See the full history attachment.]`;
+
 function suffixWithinBudget(text: string, budget: number): Excerpt | undefined {
   const references = imageReferences(text);
   let low = 1;
@@ -62,7 +65,7 @@ function suffixWithinBudget(text: string, budget: number): Excerpt | undefined {
       if (start > reference.start && start < reference.end) start = reference.end;
     }
     if (/[\uDC00-\uDFFF]/.test(text[start] ?? '')) start++;
-    const candidate = `[Earlier source text omitted: ${start} characters. See the full history attachment.]\n${text.slice(start)}`;
+    const candidate = `${omitted(start)}\n${text.slice(start)}`;
     if (start < text.length && estimateTokens(candidate) <= budget) {
       best = { text: candidate, removed: start };
       high = middle - 1;
@@ -102,30 +105,42 @@ function answer(steps: readonly HistoryStep[]): string {
   }).filter(text => text.trim()).join('\n\n');
 }
 
+const joined = (...parts: string[]) => parts.filter(Boolean).join('\n\n');
+
 function units(history: EffectiveHistory): Unit[] {
-  const result: Unit[] = history.summary?.trim() ? [{ index: 0, user: history.summary, assistant: '', turns: 0 }] : [];
+  const result: Unit[] = history.summary?.trim() ? [{ index: 0, before: '', user: history.summary, assistant: '', turns: 0 }] : [];
+  let leading = '';
   let unattached = 0;
   for (const [position, turn] of history.turns.entries()) {
     const before = answer(turn.steps.filter(step => step.beforeUser));
     const reply = answer(turn.steps.filter(step => !step.beforeUser));
-    const previous = result.at(-1);
-    if (previous && before) previous.assistant = [previous.assistant, before].filter(Boolean).join('\n\n');
+    const previous = result.findLast(unit => unit.index > 0);
     if (turn.user.trim()) {
-      result.push({ index: position + 1, time: turn.timestamp, user: turn.user, assistant: reply, turns: unattached + 1 });
+      result.push({ index: position + 1, time: turn.timestamp, before: joined(leading, before), user: turn.user, assistant: reply, turns: unattached + 1 });
+      leading = '';
       unattached = 0;
     } else if (previous) {
-      previous.assistant = [previous.assistant, reply].filter(Boolean).join('\n\n');
+      previous.assistant = joined(previous.assistant, before, reply);
       previous.turns++;
-    } else unattached++;
+    } else {
+      leading = joined(leading, before, reply);
+      unattached++;
+    }
+  }
+  const summary = result[0];
+  if (summary?.index === 0 && result.length === 1) {
+    summary.assistant = leading;
+    summary.turns = unattached;
   }
   return result;
 }
 
-function block(unit: Unit, user: string, assistant: string): string {
+function block(unit: Unit, before: string, user: string, assistant: string): string {
   const reply = assistant ? [`<assistant>\n${assistant}\n</assistant>`] : [];
   if (unit.index === 0) return [`<source_summary>\n${user}\n</source_summary>`, ...reply].join('\n');
   const time = unit.time ? ` time="${unit.time}"` : '';
-  return [`<turn index="${String(unit.index)}"${time}>`, `<user>\n${user}\n</user>`, ...reply, '</turn>'].join('\n');
+  const lead = before ? [`<assistant>\n${before}\n</assistant>`] : [];
+  return [`<turn index="${String(unit.index)}"${time}>`, ...lead, `<user>\n${user}\n</user>`, ...reply, '</turn>'].join('\n');
 }
 
 function cost(text: string): number {
@@ -133,14 +148,15 @@ function cost(text: string): number {
 }
 
 function shorten(unit: Unit, budget: number): Excerpt | undefined {
-  const available = budget - cost(block(unit, '', unit.assistant ? ' ' : ''));
+  const before = unit.before ? omitted(unit.before.length) : '';
+  const available = budget - cost(block(unit, before, '', unit.assistant ? ' ' : ''));
   const userCost = estimateTokens(unit.user);
   const keepUser = userCost < available;
   const reply = unit.assistant ? fit(unit.assistant, keepUser ? available - userCost : available - EXCERPT_RESERVE) : undefined;
   const user = keepUser ? { text: unit.user, removed: 0 } : suffixWithinBudget(unit.user, available - (reply ? estimateTokens(reply.text) : 0));
   if (!user) return undefined;
-  const text = block(unit, user.text, reply?.text ?? '');
-  return cost(text) <= budget ? { text, removed: user.removed + (reply ? reply.removed : unit.assistant.length) } : undefined;
+  const text = block(unit, before, user.text, reply?.text ?? '');
+  return cost(text) <= budget ? { text, removed: unit.before.length + user.removed + (reply ? reply.removed : unit.assistant.length) } : undefined;
 }
 
 interface Scope {
@@ -232,7 +248,7 @@ export function renderHistory(
   let truncatedCharacters = 0;
   for (let index = all.length - 1; index >= 0; index--) {
     const unit = all[index]!;
-    const text = block(unit, unit.user, unit.assistant);
+    const text = block(unit, unit.before, unit.user, unit.assistant);
     if (cost(text) <= remaining) {
       selected.unshift({ unit, text });
       remaining -= cost(text);

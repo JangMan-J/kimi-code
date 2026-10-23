@@ -298,7 +298,7 @@ function imageKeys(value: unknown, cwd?: string, result = new Set<string>()) {
 async function threadName(databasePath: string, id: string): Promise<string | undefined> {
   try {
     const { DatabaseSync } = await import('node:sqlite');
-    const database = new DatabaseSync(databasePath, { readOnly: true });
+    const database = new DatabaseSync(databasePath, { readOnly: true, timeout: 3000 });
     try {
       const value = database.prepare('SELECT name FROM threads WHERE id = ?').get(id)?.['name'];
       return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
