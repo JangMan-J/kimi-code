@@ -193,6 +193,12 @@ Each card: **decision** and **why not in the app**. Status is `keep` or `absorbe
 
 **Why not in the app:** The settled scroll state and the opportunity to repeat layout before terminal output belong to the alternate-screen render path. Hosts cannot reach this point through component composition alone.
 
+### image-transcoder-cache-includes-mime — keep
+
+**Decision:** Shared PNG conversion results are keyed by both source data and MIME type, so one MIME type's conversion or failure is never reused for another.
+
+**Why not in the app:** The cache sits inside the reusable `Image` render path, before any host-specific rendering policy runs.
+
 ### program-status-optional-capability — keep
 
 **Decision:** `Terminal` implementations may omit `setProgramStatus`. Hosts that require reporting declare that capability locally instead of forcing every custom terminal to add a no-op method.
