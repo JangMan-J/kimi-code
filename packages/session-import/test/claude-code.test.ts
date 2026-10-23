@@ -615,6 +615,11 @@ test('a parent written after its child still links the main chain in conversatio
   expect(session.turns.map((turn) => turn.user)).toEqual(['Early question', 'Middle question', 'Latest question']);
   expect(session.turns[0]!.steps.map((step) => step.text)).toEqual(['Early answer', 'Answer written late']);
   expect(session.stats['unresolvedParentReferences']).toBe(0);
+  const ending = await read([
+    user('root', null, 'Early question'), assistant('root-answer', 'root', [txt('Early answer')]),
+    user('middle', 'late-parent', 'Middle question'), assistant('late-parent', 'root-answer', [txt('Answer written late')]),
+  ]);
+  expect(ending.turns.map((turn) => turn.user)).toEqual(['Early question', 'Middle question']);
   const cycle = await read([user('first', 'second', 'First'), user('second', 'first', 'Second')]);
   expect(cycle.stats['chainCycles']).toBe(1);
   expect(cycle.turns.map((turn) => turn.user)).toEqual(['First', 'Second']);

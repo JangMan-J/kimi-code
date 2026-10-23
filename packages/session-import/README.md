@@ -54,7 +54,7 @@ Effective history means the selected branch and source compaction replacement, n
 
 Embedded PNG, JPEG, GIF, and WebP images are saved byte-for-byte under `images/`, deduplicated by SHA-256, and represented as paths at their original positions. Existing local paths are resolved against the source working directory; URLs are retained without downloading. Their existence and continued availability are not guaranteed. The image index includes references in effective history that the context budget later omits. Image paths use the same text budget as other content.
 
-Attachments are written to private temporary files before atomic publication. Existing mismatched files and symbolic or persistent hard links are rejected rather than overwritten. A failed conversion can leave completed content-addressed attachments or an unexposed temporary file; callers own the target session directory lifecycle.
+Attachments are written to private temporary files before atomic publication through a hard link; on filesystems without hard links they are published with an exclusive copy instead. Existing mismatched files and symbolic or persistent hard links are rejected rather than overwritten. A failed conversion can leave completed content-addressed attachments or an unexposed temporary file; callers own the target session directory lifecycle.
 
 ## Result states
 

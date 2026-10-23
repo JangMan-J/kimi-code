@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
-import { chmod, link, lstat, mkdir, open, unlink } from 'node:fs/promises';
+import { chmod, copyFile, link, lstat, mkdir, open, unlink } from 'node:fs/promises';
 import { isAbsolute, join, resolve, win32 } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import type { ImageReference } from '#/types';
 
 const imageTypes = new Set(['image', 'input_image', 'local_image', 'image_url']);
+const HARD_LINK_UNSUPPORTED = new Set(['ENOTSUP', 'ENOSYS', 'EPERM']);
 const formats = new Map([
   ['image/png', 'png'],
   ['image/jpeg', 'jpg'],
@@ -133,7 +134,10 @@ export async function writeAttachmentFile(
       }
       const expectedHash = digest.digest('hex');
       try {
-        await link(temporaryPath, path);
+        await link(temporaryPath, path).catch(async (error: unknown) => {
+          if (!HARD_LINK_UNSUPPORTED.has(errorCode(error) ?? '')) throw error;
+          await copyFile(temporaryPath, path, constants.COPYFILE_EXCL);
+        });
       } catch (error) {
         if (errorCode(error) !== 'EEXIST') throw error;
         await verifyExisting(path, expectedHash);

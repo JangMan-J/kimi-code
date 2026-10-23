@@ -263,7 +263,9 @@ function selectHistory(entries: Entry[], stats: ReaderStats) {
   const eligible = (row: SourceRecord) => sidechainMode || !row.isSidechain;
   const find = (id: string | undefined, before = Infinity): Entry | undefined => versions.get(id ?? '')?.findLast((entry) => entry.order < before && eligible(entry.row));
   const findLater = (id: string | undefined, after: number): Entry | undefined => versions.get(id ?? '')?.find((entry) => entry.order > after && eligible(entry.row));
-  const leaf = entries.findLast(({ row }) => row.uuid && eligible(row) && isChainRecord(row));
+  const chainRecords = entries.filter(({ row }) => row.uuid && eligible(row) && isChainRecord(row));
+  const parents = new Set(chainRecords.flatMap(({ row }) => [row.parentUuid, row.logicalParentUuid]));
+  const leaf = chainRecords.findLast(({ row }) => !parents.has(row.uuid)) ?? chainRecords.at(-1);
   if (!leaf) return { selected: [], boundary: undefined, leaf: undefined, find, sidechainMode };
   const selected = new Map<string | undefined, Entry>();
   const traversed = new Set<number>();

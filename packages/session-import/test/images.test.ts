@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { link, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import { createImageStore, writeAttachmentFile } from '#/images';
 
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/6d8AAAAASUVORK5CYII=', 'base64');
@@ -314,6 +314,26 @@ test('failed input streams remove staging files without publishing partial outpu
   }
   await expect(writeAttachmentFile(directory, 'history.jsonl', chunks())).rejects.toThrow('source failed');
   expect(await readdir(directory)).toEqual([]);
+});
+
+test('publishes by exclusive copy on filesystems without hard links', async () => {
+  const { directory } = await fixture();
+  vi.resetModules();
+  vi.doMock('node:fs/promises', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('node:fs/promises')>()),
+    link: async () => { throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' }); },
+  }));
+  try {
+    const { writeAttachmentFile: writeWithoutLinks } = await import('#/images');
+    const path = join(directory, 'history.jsonl');
+    await expect(writeWithoutLinks(directory, 'history.jsonl', Buffer.from('content'))).resolves.toEqual({ path, reused: false });
+    expect(await readFile(path, 'utf8')).toBe('content');
+    expect(await readdir(directory)).toEqual(['history.jsonl']);
+    await expect(writeWithoutLinks(directory, 'history.jsonl', Buffer.from('content'))).resolves.toEqual({ path, reused: true });
+  } finally {
+    vi.doUnmock('node:fs/promises');
+    vi.resetModules();
+  }
 });
 
 test.each(['../outside.json', '/outside.json', '..\\outside.json', '.', '..', 'file\0.json'])('rejects unsafe attachment filename %s', async (name) => {
