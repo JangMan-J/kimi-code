@@ -387,11 +387,6 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     event: TuiMouseEvent,
   ): TuiMouseEventResult | undefined {
     const index = part === 'foot' ? this.choiceRows.indexOf(event.y) : -1;
-    if (event.type === 'leave') {
-      if (this.hoverIndex === undefined) return undefined;
-      this.hoverIndex = undefined;
-      return { handled: true, render: true };
-    }
     if (event.type === 'move') {
       const hovered = index === -1 || this.feedbackMode || !this.focused ? undefined : index;
       if (hovered === this.hoverIndex) return index === -1 ? undefined : { handled: true };

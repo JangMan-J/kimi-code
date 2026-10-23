@@ -230,7 +230,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private pressedUrl?: string;
 	private selectionDragged = false;
 	private mouseCapture?: TuiMouseDispatchTarget;
-	private mouseHoverTarget?: TuiMouseDispatchTarget;
 	private mousePressTarget?: TuiMouseDispatchTarget;
 	private mousePressPoint?: { x: number; y: number };
 	private mousePressMoved = false;
@@ -685,25 +684,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.mousePressMoved = false;
 	}
 
-	private updateMouseHover(event: TuiMouseEvent, result: TuiMouseDispatchResult | undefined): void {
-		const next = result?.target;
-		if (next?.component === this.mouseHoverTarget?.component) {
-			this.mouseHoverTarget = next;
-			return;
-		}
-		this.clearMouseHover(event);
-		this.mouseHoverTarget = next;
-	}
-
-	private clearMouseHover(event: TuiMouseEvent): void {
-		const previous = this.mouseHoverTarget;
-		if (!previous) return;
-		this.mouseHoverTarget = undefined;
-		const leaveEvent = { ...event, type: "leave" as const };
-		const result = this.dispatchMouseToTarget(leaveEvent, previous);
-		if (result && this.applyMouseDispatchResult(leaveEvent, result)) this.requestRender();
-	}
-
 	private handleViewportInput(data: string): { consume?: boolean } | undefined {
 		if (data === FOCUS_OUT) {
 			const hadActiveSelection = this.selectionPressActive;
@@ -737,7 +717,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			const event = this.createMouseEvent("wheel", wheelEvent.button, wheelEvent.x, wheelEvent.y, {
 				wheelDelta: wheelEvent.direction * this.getWheelScrollLines(wheelEvent.button),
 			});
-			this.clearMouseHover(event);
 			const overlay = this.dispatchMouseToOverlay(event);
 			const result = overlay.result ?? (overlay.hit ? undefined : this.dispatchMouseToLayout(event));
 			if (result) {
@@ -981,7 +960,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 
 		const result = overlay.result ?? (overlay.hit ? undefined : this.dispatchMouseToLayout(event));
-		if (type === "move") this.updateMouseHover(event, result);
 		if (result) {
 			const render = this.applyMouseDispatchResult(event, result);
 			if (type === "press") {

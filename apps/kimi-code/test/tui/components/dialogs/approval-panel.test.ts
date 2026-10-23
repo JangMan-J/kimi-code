@@ -587,10 +587,10 @@ describe('ApprovalPanelComponent', () => {
       return lines.slice(lines.findIndex((line) => line.includes('1. ')) - 1);
     }
 
-    function mouse(type: 'move' | 'leave' | 'press' | 'release' | 'click', y: number): TuiMouseEvent {
+    function mouse(type: 'move' | 'press' | 'release' | 'click', y: number): TuiMouseEvent {
       return {
         type,
-        button: type === 'move' || type === 'leave' ? 'none' : 'left',
+        button: type === 'move' ? 'none' : 'left',
         x: 4,
         y,
         screenX: 4,
@@ -699,10 +699,6 @@ describe('ApprovalPanelComponent', () => {
       expect(lines).not.toContain('   Ask every time.');
       expect(lines).toContain('   Tools are approved automatically, and questions are');
       expect(dialog.render(60).join('\n')).not.toContain(hoverBackground);
-
-      footPart(dialog).handleMouse?.(mouse('move', row));
-      expect(footPart(dialog).handleMouse?.(mouse('leave', -1))).toEqual({ handled: true, render: true });
-      expect(foot(dialog)).not.toContain('   Ask every time.');
 
       footPart(dialog).handleMouse?.(mouse('move', row));
       dialog.handleInput('\u001B[B');
