@@ -2,4 +2,4 @@
 "@moonshot-ai/kimi-code": patch
 ---
 
-Add Kimi-branded NotifyUser cards with a single-line streaming title and an expandable streaming message.
+Show NotifyUser updates in Kimi-branded cards with streaming titles and expandable messages.

@@ -2,4 +2,4 @@
 "@moonshot-ai/kimi-code": patch
 ---
 
-Show the todo list as a card in the transcript instead of a panel above the input box.
+Move todo lists into expandable transcript cards and remove the old input-area panel and `Ctrl-T` shortcut.

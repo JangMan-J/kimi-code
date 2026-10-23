@@ -14,7 +14,7 @@ The following keys are always available in the input box:
 | `Esc` | Close a popup / cancel completion / interrupt streaming output or context compaction |
 | `Ctrl-C` | Interrupt the current streaming output, or clear the input box |
 | `Ctrl-D` | Exit Kimi Code CLI when the input box is empty |
-| `Ctrl-N` | Focus the experimental `Updates` panel, also while an approval or question waits; in fullscreen mode, clicking the panel does the same. While it is focused, `←` / `→` switch agents, `Shift-←` / `Shift-→` page through updates, and `↑` / `↓` scroll a long update in fullscreen mode. `Esc`, `Ctrl-N`, or `Enter` returns to the input box, or to the waiting approval or question, without submitting anything; typing or any other input-box key also returns to the input box and takes effect there, but never answers an approval or question |
+| `Ctrl-N` | Focus the experimental `Updates` panel, including while an approval or question waits |
 
 Pressing `Ctrl-C` **during streaming** cancels immediately — no second confirmation needed.
 
@@ -84,11 +84,9 @@ When the Agent initiates a tool call that requires confirmation, the TUI display
 | `Ctrl-E` | Expand or collapse the full content when the panel contains a diff or file preview |
 | `Ctrl-O` | Toggle the collapsed state of other tool output |
 | `Shift-↑` / `Shift-↓` | Scroll a request that is longer than the panel (fullscreen mode) |
-| `Ctrl-N` | Move the keyboard to the `Updates` panel to read what the Agent is doing; the approval panel fades until you come back with `Esc` or `Ctrl-N` |
+| `Ctrl-N` | Focus the `Updates` panel |
 
-In fullscreen mode, hovering an option highlights its row and previews its description without moving the keyboard selection when the terminal provides its background color; otherwise, there is no hover effect. Clicking an option chooses it. A click right after the panel appears is ignored, and while the panel is faded, the first click only brings the keyboard back.
-
-In fullscreen mode, `/settings`, the permission selector, and the workspace trust prompt also accept mouse input. Moving the pointer over an option moves the `❯` selection, and clicking confirms it. The mouse wheel turns pages in `/settings`. `/settings` and the permission selector fade when `Updates` takes the keyboard; the first click then only restores focus.
+Fullscreen approval, `/settings`, the permission selector, and the workspace trust prompt also support mouse selection.
 
 Options that require feedback (such as "Reject" or "Revise") switch to a feedback input state after confirmation: type the feedback text and press `Enter` to submit; press `Esc` to exit feedback input and return to the candidate list.
 

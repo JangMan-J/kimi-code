@@ -2,4 +2,4 @@
 "@moonshot-ai/pi-tui": patch
 ---
 
-Send a leave event to the previous mouse hover target and clear hover before wheel scrolling.
+Prevent stale mouse hover styling after pointer movement or wheel scrolling.
