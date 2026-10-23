@@ -86,17 +86,32 @@ describe('NotifyPanelComponent', () => {
     expect(render(panel).join('\n')).toContain('Reading the parser first.');
   });
 
-  it('stays on main when another agent posts while unfocused', () => {
+  it('follows the newest update across agents while unfocused', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main phase one'));
     panel.upsert(entry('tc-2', 'main phase two'));
     expect(titleOf(panel)).toContain('Updates < 2/2 > · ctrl+n to browse');
 
     panel.upsert(entry('a0:c1', 'explore finding', 'a0', 'explore'));
-    const lines = render(panel);
-    expect(lines[0]).toContain('main · explore● · Updates < 2/2 > · ctrl+n to browse');
-    expect(lines.join('\n')).toContain('main phase two');
-    expect(lines.join('\n')).not.toContain('explore finding');
+    expect(render(panel).join('\n')).toContain('explore finding');
+    expect(render(panel).join('\n')).not.toContain('main phase two');
+    panel.upsert(entry('tc-3', 'main phase three'));
+    expect(render(panel).join('\n')).toContain('main phase three');
+  });
+
+  it('freezes automatic following while focused and does not jump on blur', () => {
+    const panel = new NotifyPanelComponent();
+    panel.upsert(entry('tc-1', 'main one'));
+    panel.focus();
+    panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    expect(render(panel).join('\n')).toContain('main one');
+    expect(titleOf(panel)).toContain('explore●');
+
+    panel.blur();
+    expect(render(panel).join('\n')).toContain('main one');
+    panel.upsert(entry('a0:c2', 'explore two', 'a0', 'explore'));
+    expect(render(panel).join('\n')).toContain('explore two');
+    expect(render(panel).join('\n')).not.toContain('main one');
   });
 
   it('switches channels with prev/nextChannel and pages inside a channel', () => {
@@ -106,7 +121,6 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
 
     expect(panel.focus()).toBe(true);
-    expect(panel.nextChannel()).toBe(true);
     expect(panel.nextChannel()).toBe(false);
 
     expect(panel.prevChannel()).toBe(true);
@@ -133,7 +147,6 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
 
     panel.focus();
-    expect(panel.nextChannel()).toBe(true);
     expect(panel.prevChannel()).toBe(true);
     expect(titleOf(panel)).not.toContain('●');
 
@@ -197,6 +210,29 @@ describe('NotifyPanelComponent', () => {
     panel.blur();
     expect(panel.blur()).toBe(false);
     expect(titleOf(panel)).toContain('ctrl+n to browse');
+  });
+
+  it('colors the title and pager by focus rather than turn completion', () => {
+    const previousLevel = chalk.level;
+    chalk.level = 3;
+    onTestFinished(() => {
+      chalk.level = previousLevel;
+    });
+    const panel = new NotifyPanelComponent();
+    panel.upsert(entry('tc-1', 'phase one'));
+    panel.upsert(entry('tc-2', 'phase two'));
+    const rawTitle = () => panel.render(80)[0]!;
+
+    expect(rawTitle()).toContain(currentTheme.boldFg('textDim', ' · Updates'));
+    expect(rawTitle()).toContain(currentTheme.boldFg('textDim', '<'));
+    panel.focus();
+    expect(rawTitle()).toContain(currentTheme.boldFg('primary', ' · Updates'));
+    expect(rawTitle()).toContain(currentTheme.boldFg('primary', '<'));
+    panel.setEnded(true);
+    expect(rawTitle()).toContain(currentTheme.boldFg('primary', ' · Updates'));
+    panel.blur();
+    expect(rawTitle()).toContain(currentTheme.boldFg('textDim', ' · Updates'));
+    expect(rawTitle()).toContain(currentTheme.boldFg('textDim', '<'));
   });
 
   it('folds to a stub when the turn ends, expands on focus, and folds on an explicit close', () => {
@@ -263,7 +299,7 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('a0:c1', 'background finding', 'a0', 'explore'));
     panel.upsert(entry('tc-2', 'late main update'));
     expect(render(panel)).toEqual([
-      ' ▸ main · explore● · 3 updates · late main update · ctrl+n to expand',
+      ' ▸ main · explore · 3 updates · late main update · ctrl+n to expand',
     ]);
   });
 
@@ -305,7 +341,6 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
     expect(panel.focus()).toBe(true);
-    expect(panel.nextChannel()).toBe(true);
 
     panel.upsert(entry('tc-2', 'main two'));
     const before = panel.getChannels().find((ch) => ch.label === 'main');
@@ -321,7 +356,6 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
     expect(panel.focus()).toBe(true);
-    expect(panel.nextChannel()).toBe(true);
 
     panel.upsert(entry('tc-2', 'delegation'));
     expect(panel.getChannels().find((ch) => ch.label === 'main')?.unread).toBe(1);
@@ -350,6 +384,21 @@ describe('NotifyPanelComponent', () => {
     expect(titleOf(panel)).not.toContain('turn ended');
   });
 
+  it('restores automatic following when updates are cleared', () => {
+    const panel = new NotifyPanelComponent();
+    panel.upsert(entry('tc-1', 'main one'));
+    panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    click(panel, 'explore');
+    panel.upsert(entry('tc-2', 'main two'));
+    expect(render(panel).join('\n')).toContain('explore one');
+
+    panel.clearUpdates();
+    panel.upsert(entry('tc-3', 'main fresh'));
+    panel.upsert(entry('a0:c2', 'explore fresh', 'a0', 'explore'));
+    expect(render(panel).join('\n')).toContain('explore fresh');
+    expect(render(panel).join('\n')).not.toContain('main fresh');
+  });
+
   it('never renders wider than the requested width', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', `${'word '.repeat(60)}\n\n- a very long bullet ${'x'.repeat(120)}`));
@@ -375,13 +424,14 @@ describe('NotifyPanelComponent', () => {
     const panel = new NotifyPanelComponent({ maxBodyRows: 6, screenRows: () => screenRows });
     panel.upsert({ ...entry('a0:c1', 'details', 'a0', 'explore'), title: 'Checking the auth tests' });
     panel.upsert({ ...entry('tc-1', 'main is planning'), time: 1 });
+    expect(panel.nextChannel()).toBe(true);
     panel.focus();
 
     panel.setPrompt(true);
     expect(panel.focused).toBe(true);
     expect(titleOf(panel)).toMatch(/ esc back ─$/);
     panel.blur();
-    expect(titleOf(panel)).toMatch(/^ ─ main● · explore · Updates · ctrl\+n to browse ─+$/);
+    expect(titleOf(panel)).toMatch(/^ ─ main · explore · Updates · ctrl\+n to browse ─+$/);
     expect(render(panel).join('\n')).toContain('details');
 
     screenRows = 31;
@@ -448,7 +498,7 @@ describe('NotifyPanelComponent', () => {
     panel.setEnded(true);
     const body = (): string[] => render(panel).slice(1).map((line) => line.trimEnd());
     expect(body()).toEqual([]);
-    click(panel, 'explore●');
+    click(panel, 'explore');
     panel.focused = true;
     expect(body()).toEqual(['  explore one']);
 
@@ -460,26 +510,29 @@ describe('NotifyPanelComponent', () => {
     expect(body()).toEqual(['  explore two']);
   });
 
-  it('keeps the head row still from the focusing click on: a docked body only grows', () => {
+  it('uses the current content height without retaining rows across focus or blur', () => {
     const panel = new NotifyPanelComponent({ maxBodyRows: 6 });
     panel.upsert(entry('tc-1', listRows(4)));
     panel.upsert(entry('a0:c1', 'short', 'a0', 'explore'));
+    expect(panel.prevChannel()).toBe(true);
     expect(render(panel)).toHaveLength(5);
 
-    click(panel, 'explore●');
+    click(panel, 'explore');
     panel.focused = true;
     const lines = render(panel);
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(2);
     expect(lines[1]).toContain('short');
 
     panel.focused = false;
     expect(render(panel)).toHaveLength(2);
     panel.focused = true;
-    expect(render(panel)).toHaveLength(2);
     panel.handleInput('\u001B[D');
     expect(render(panel)).toHaveLength(5);
-    panel.handleInput('\u001B[C');
+    panel.focused = false;
     expect(render(panel)).toHaveLength(5);
+    panel.focused = true;
+    panel.handleInput('\u001B[C');
+    expect(render(panel)).toHaveLength(2);
   });
 
   it('folds a clicked-open ended panel on an explicit Escape close', () => {
@@ -516,10 +569,10 @@ describe('NotifyPanelComponent', () => {
     const panel = new NotifyPanelComponent();
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('a0:c1', 'explore one', 'a0', 'explore'));
+    expect(panel.prevChannel()).toBe(true);
     expect(render(panel).join('\n')).toContain('main one');
-    expect(titleOf(panel)).toContain('explore●');
 
-    click(panel, 'explore●');
+    click(panel, 'explore');
     panel.upsert(entry('tc-2', 'main two'));
     expect(render(panel).join('\n')).toContain('explore one');
     expect(titleOf(panel)).toContain('main●');
@@ -537,6 +590,7 @@ describe('NotifyPanelComponent', () => {
     panel.upsert(entry('tc-1', 'main one'));
     panel.upsert(entry('tc-2', 'main two'));
     panel.upsert(entry('a0:c1', listRows(10), 'a0', 'explore'));
+    expect(panel.prevChannel()).toBe(true);
     panel.focused = true;
     expect(titleOf(panel)).toContain('Updates < 2/2 > · ←→ agent · shift+←→ update ─');
 

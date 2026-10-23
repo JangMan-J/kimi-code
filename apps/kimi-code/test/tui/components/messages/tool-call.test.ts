@@ -430,6 +430,17 @@ describe('ToolCallComponent', () => {
       expect(component.hasHiddenContent()).toBe(true);
     });
 
+    it('keeps the Kimi mark on fixed brand colors', () => {
+      const component = new ToolCallComponent(
+        { id: 'call_notify_brand', name: 'NotifyUser', args: { message } },
+        { tool_call_id: 'call_notify_brand', output: 'Update shown to the user.', is_error: false },
+      );
+
+      const output = component.render(100).join('\n');
+      const expectedMark = chalk.bgHex('#1783FF')(chalk.hex('#FFFFFF')(NOTIFY_USER_MARK));
+      expect(output).toContain(expectedMark);
+    });
+
     it('uses the title as the header and keeps the message behind ctrl+o', () => {
       const component = new ToolCallComponent(
         {
@@ -559,6 +570,31 @@ describe('ToolCallComponent', () => {
       }
     });
 
+    it('uses tool-output dim for the message while it streams', () => {
+      const previousLevel = chalk.level;
+      chalk.level = 3;
+      try {
+        const component = new ToolCallComponent(
+          {
+            id: 'call_notify_stream_color',
+            name: 'NotifyUser',
+            args: {},
+            streamingArguments:
+              '{"title":"Root cause found","message":"`refreshSession()` returns a new token.',
+          },
+          undefined,
+        );
+        component.setExpanded(true);
+
+        const body = component
+          .render(100)
+          .find((line) => line.includes('refreshSession()'));
+        expect(body).toBe(chalk.dim('  refreshSession() returns a new token.'));
+      } finally {
+        chalk.level = previousLevel;
+      }
+    });
+
     it('keeps a failed delivery on the existing error card', () => {
       const component = new ToolCallComponent(
         { id: 'call_notify_error', name: 'NotifyUser', args: { title: 'Failed', message } },
@@ -571,20 +607,74 @@ describe('ToolCallComponent', () => {
       expect(rendered).not.toContain(NOTIFY_USER_MARK);
     });
 
-    it('switches from the sending header to the notification card on delivery', () => {
+    it('streams the collapsed title and the expanded message before delivery', () => {
       const component = new ToolCallComponent(
-        { id: 'call_notify_transition', name: 'NotifyUser', args: { title: 'Done', message } },
+        {
+          id: 'call_notify_transition',
+          name: 'NotifyUser',
+          args: {},
+          streamingArguments: '{"title":"Root c',
+        },
         undefined,
       );
-      expect(strip(component.render(100).join('\n'))).toContain('Sending you an update');
+      let rows = component.render(100).map(strip).filter((line) => line.trim().length > 0);
+      expect(rows).toEqual([`${NOTIFY_USER_MARK} Root c`]);
+      expect(component.hasHiddenContent()).toBe(false);
 
+      component.updateToolCall({
+        id: 'call_notify_transition',
+        name: 'NotifyUser',
+        args: { title: 'Root cause' },
+        streamingArguments: '{"title":"Root cause","message":"Login module is cl',
+      });
+      rows = component.render(100).map(strip).filter((line) => line.trim().length > 0);
+      expect(rows).toEqual([`${NOTIFY_USER_MARK} Root cause`]);
+      expect(component.hasHiddenContent()).toBe(true);
+
+      component.setExpanded(true);
+      rows = component
+        .render(100)
+        .map(strip)
+        .filter((line) => line.trim().length > 0)
+        .map((line) => line.trimEnd());
+      expect(rows).toEqual([`${NOTIFY_USER_MARK} Root cause`, '  Login module is cl']);
+      expect(rows.join('\n')).not.toContain('sending');
+      component.setExpanded(false);
+
+      component.updateToolCall({
+        id: 'call_notify_transition',
+        name: 'NotifyUser',
+        args: { title: 'Root cause', message },
+        streamingArguments: undefined,
+      });
+      expect(component.hasHiddenContent()).toBe(true);
       component.setResult({
         tool_call_id: 'call_notify_transition',
         output: 'Update shown to the user.',
         is_error: false,
       });
-      const rows = component.render(100).map(strip).filter((line) => line.trim().length > 0);
-      expect(rows).toEqual([`${NOTIFY_USER_MARK} Done`]);
+      rows = component.render(100).map(strip).filter((line) => line.trim().length > 0);
+      expect(rows).toEqual([`${NOTIFY_USER_MARK} Root cause`]);
+      expect(component.hasHiddenContent()).toBe(true);
+    });
+
+    it('keeps the collapsed card to one row while a long title and message stream', () => {
+      const component = new ToolCallComponent(
+        {
+          id: 'call_notify_stream_narrow',
+          name: 'NotifyUser',
+          args: {},
+          streamingArguments: `{"title":"${'x'.repeat(100)}","message":"Streaming body`,
+        },
+        undefined,
+      );
+
+      for (const width of [20, 40, 60]) {
+        const rows = component.render(width).map(strip).filter((line) => line.trim().length > 0);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toContain(NOTIFY_USER_MARK);
+        expect(visibleWidth(rows[0]!)).toBeLessThanOrEqual(width);
+      }
     });
 
     it('renders historical calls as ordinary tool records when disabled', () => {
@@ -600,14 +690,17 @@ describe('ToolCallComponent', () => {
       expect(output).toContain('Update shown to the user.');
     });
 
-    it('labels the in-flight call as sending', () => {
+    it('shows only the Kimi mark before streamed content is available', () => {
       const component = new ToolCallComponent(
         { id: 'call_notify_live', name: 'NotifyUser', args: {}, streamingArguments: '{"mess' },
         undefined,
       );
-      const rendered = strip(component.render(100).join('\n'));
-      expect(rendered).toContain('Sending you an update');
-      expect(rendered).not.toContain(NOTIFY_USER_MARK);
+      const rows = component
+        .render(100)
+        .map(strip)
+        .filter((line) => line.trim().length > 0)
+        .map((line) => line.trimEnd());
+      expect(rows).toEqual([NOTIFY_USER_MARK]);
       expect(component.hasHiddenContent()).toBe(false);
     });
 

@@ -5,6 +5,8 @@
 
 import { isAbsolute, relative, sep } from 'node:path';
 
+import chalk from 'chalk';
+
 import {
   Container,
   Spacer,
@@ -31,7 +33,14 @@ import {
   STREAMING_ARGS_FIELD_RE,
   STREAMING_ARGS_PREVIEW_MAX_CHARS,
 } from '#/tui/constant/streaming';
-import { FAILURE_MARK, NOTIFY_USER_MARK, STATUS_BULLET, SUCCESS_MARK } from '#/tui/constant/symbols';
+import {
+  FAILURE_MARK,
+  NOTIFY_USER_MARK,
+  NOTIFY_USER_MARK_BACKGROUND,
+  NOTIFY_USER_MARK_FOREGROUND,
+  STATUS_BULLET,
+  SUCCESS_MARK,
+} from '#/tui/constant/symbols';
 import { currentTheme } from '#/tui/theme';
 import { createMarkdownTheme } from '#/tui/theme/pi-tui-theme';
 import type { ToolCallBlockData, ToolResultBlockData } from '#/tui/types';
@@ -608,7 +617,19 @@ function isNotifyUserHeaderContent(content: HeaderContent): content is NotifyUse
 }
 
 function notifyUserIcon(): string {
-  return currentTheme.bg('notifyBrand', currentTheme.fg('notifyBrandText', NOTIFY_USER_MARK));
+  return chalk.bgHex(NOTIFY_USER_MARK_BACKGROUND)(
+    chalk.hex(NOTIFY_USER_MARK_FOREGROUND)(NOTIFY_USER_MARK),
+  );
+}
+
+function notifyUserLiveArgs(toolCall: ToolCallBlockData): Record<string, unknown> {
+  const stream = toolCall.streamingArguments;
+  if (stream === undefined) return toolCall.args;
+  return {
+    ...toolCall.args,
+    title: extractPartialStringField(stream, 'title') ?? toolCall.args['title'],
+    message: extractPartialStringField(stream, 'message') ?? toolCall.args['message'],
+  };
 }
 
 function notifyUserTitle(args: Record<string, unknown>): string {
@@ -972,6 +993,13 @@ export class ToolCallComponent extends Container {
     // Arguments cut off by max_tokens: the card shows a fixed "call never
     // executed" note in place of any preview, so there is nothing to expand.
     if (this.toolCall.truncated === true && this.result === undefined) return false;
+    if (
+      name === 'NotifyUser' &&
+      isExperimentalFlagEnabled('notify_user') &&
+      this.result === undefined
+    ) {
+      return str(notifyUserLiveArgs(this.toolCall)['message']).trim().length > 0;
+    }
     if (this.result === undefined && this.toolCall.streamingArguments !== undefined) {
       // While the arguments stream, the Write tail and the Edit progress row
       // ignore the toggle; only Bash reveals its partial command when expanded.
@@ -1878,18 +1906,17 @@ export class ToolCallComponent extends Container {
     }
 
     if (toolCall.name === 'NotifyUser' && isExperimentalFlagEnabled('notify_user')) {
-      // The update itself lives in the panel above the input box; the card
-      // is the durable trace in the transcript, so the header carries the
-      // title (or the message's first line for updates without one) and
-      // ctrl+o shows the whole message.
+      // Stream the title and message while arguments arrive. Delivered
+      // updates remain as a durable transcript trace: the header carries
+      // the title (or the message's first line) and ctrl+o shows the message.
       if (isTruncated) {
         // max_tokens cut the arguments short: the call never ran and the
         // panel entry was dropped, so the card must not read as in flight.
         return `${bullet}${currentTheme.boldFg('error', 'Update cut off')}${currentTheme.dim(' (arguments truncated by max_tokens)')}`;
       }
       const delivery = notifyResultState(result?.output);
-      if (isFinished && !isError && delivery === 'displayed') {
-        const title = notifyUserTitle(toolCall.args);
+      if (!isFinished || (!isError && delivery === 'displayed')) {
+        const title = notifyUserTitle(isFinished ? toolCall.args : notifyUserLiveArgs(toolCall));
         const content: NotifyUserHeaderContent = {
           head: `${notifyUserIcon()} `,
           flex: { text: title, style: notifyTitleStyle, keep: 'head' },
@@ -1898,15 +1925,13 @@ export class ToolCallComponent extends Container {
         };
         return content;
       }
-      const label = isFinished
-        ? isError
-          ? 'Could not send you an update'
-          : delivery === 'displayed'
-            ? 'Sent you an update'
-            : delivery === 'suppressed'
-              ? 'Update not displayed'
-              : 'Update completed'
-        : 'Sending you an update';
+      const label = isError
+        ? 'Could not send you an update'
+        : delivery === 'displayed'
+          ? 'Sent you an update'
+          : delivery === 'suppressed'
+            ? 'Update not displayed'
+            : 'Update completed';
       const tone = isError ? 'error' : 'primary';
       const preview = extractKeyArgumentDetail(toolCall.name, toolCall.args, this.workspaceDir);
       const head = `${bullet}${currentTheme.boldFg(tone, label)}`;
@@ -2445,16 +2470,18 @@ export class ToolCallComponent extends Container {
       return;
     }
     if (name === 'NotifyUser' && isExperimentalFlagEnabled('notify_user')) {
-      // Collapsed: header only (the panel shows the live text). Expanded:
-      // the full message as Markdown, indented under the header.
+      // Collapsed cards always keep one title row. Expansion reveals the
+      // message, including its live stream while the call is in flight.
       if (!this.expanded) return;
-      const message = str(this.toolCall.args['message']).trim();
+      const inFlight = this.result === undefined;
+      const args = inFlight ? notifyUserLiveArgs(this.toolCall) : this.toolCall.args;
+      const message = str(args['message']).trim();
       if (message.length === 0) return;
       const displayed =
         this.result !== undefined &&
         this.result.is_error !== true &&
         notifyResultState(this.result.output) === 'displayed';
-      const MarkdownComponent = displayed ? ToolOutputMarkdown : Markdown;
+      const MarkdownComponent = inFlight || displayed ? ToolOutputMarkdown : Markdown;
       this.addChild(
         new MarkdownComponent(message, MESSAGE_INDENT.length, 0, this.markdownTheme, undefined, {
           ...createMarkdownOptions(),

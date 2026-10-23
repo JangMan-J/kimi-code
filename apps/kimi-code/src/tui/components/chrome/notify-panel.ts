@@ -9,13 +9,14 @@
  * a docked body, and `Esc`/`Ctrl+N`/`↵` hand focus back to the input area.
  * Any other key hands focus back and goes to the editor, or is ignored while
  * an approval or question stands in for the editor. The wheel scrolls without
- * taking focus. Updates never change the selected channel automatically. An
- * unfocused panel follows new pages in its current channel while already on
- * the latest page; other channels collect an unread dot.
+ * taking focus. Until the user picks a channel or page, an unfocused panel
+ * follows the newest update across channels. A manual selection pins that
+ * view; its channel follows its own tail only while unfocused and already on
+ * the latest page. Focus freezes the view, and other channels collect an
+ * unread dot. Clearing for a new turn restores automatic following.
  *
- * The panel only changes size on a scene change or a user action, never
- * because an update arrived: it folds to a one-line stub when the turn ends,
- * and while an approval or question waits on a short screen. Focus always
+ * The panel folds to a one-line stub when the turn ends, and while an
+ * approval or question waits on a short screen. Focus always
  * unfolds it; once the turn has ended, an ordinary blur keeps it open until
  * an explicit close. The host clears the panel when the next turn starts.
  */
@@ -100,16 +101,14 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   private readonly channels: NotifyChannel[] = [];
   /** Key of the channel on display; channels themselves are append-only. */
   private activeKey = MAIN_AGENT_ID;
+  /** Follow updates across channels until the user picks a channel or page. */
+  private followLatest = true;
   private hasFocus = false;
   private ended = false;
   /** Focused since the turn ended: stays open after an ordinary blur, until an explicit close. */
   private keptOpen = false;
   /** Set while an approval or question waits. */
   private promptPending = false;
-  /** Docked body rows in the last render. */
-  private renderedBodyRows = 0;
-  /** Tallest docked body since focus was gained, so a click or paging never moves the head. */
-  private focusedBodyRows = 0;
   private readonly screenRows: (() => number) | undefined;
   private hitTargets: readonly HitTarget[] = [];
   /**
@@ -124,10 +123,10 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   }
 
   /**
-   * Add or update an entry without changing the selected channel. A repeated
-   * `id` updates in place. A new id appends and marks a background channel
-   * unread. The current channel follows its own tail only while unfocused and
-   * already on its latest page.
+   * Add or update an entry. A repeated `id` updates in place. An unfocused
+   * panel follows activity across channels until a manual selection pins it.
+   * While pinned, the current channel follows its own tail only at the latest
+   * page, and other channels collect unread entries.
    */
   upsert(entry: NotifyEntry): void {
     const ch = this.channelFor(entry);
@@ -138,6 +137,14 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
       ch.entries[ch.entries.indexOf(existing)] = entry;
     } else {
       ch.entries.push(entry);
+    }
+    if (!this.hasFocus && this.followLatest) {
+      const moved = this.activeKey !== ch.key || ch.page !== ch.entries.length - 1;
+      this.activeKey = ch.key;
+      ch.page = ch.entries.length - 1;
+      ch.unreadIds.clear();
+      if (moved) this.scrollBodyToTop();
+    } else if (existing === undefined) {
       if (ch.key !== this.activeKey) ch.unreadIds.add(entry.id);
       else if (following) {
         ch.page = ch.entries.length - 1;
@@ -153,18 +160,25 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     ch.entries.splice(index, 1);
     if (ch.entries.length === 0) {
       this.channels.splice(this.channels.indexOf(ch), 1);
-      if (ch.key === this.activeKey) this.activeKey = this.channels.at(-1)?.key ?? MAIN_AGENT_ID;
+      if (ch.key === this.activeKey) {
+        this.activeKey = this.channels.at(-1)?.key ?? MAIN_AGENT_ID;
+        this.followLatest = true;
+      }
     } else {
       ch.page = Math.min(ch.page, ch.entries.length - 1);
       ch.unreadIds.delete(id);
     }
-    if (this.channels.length === 0) this.dropFocus();
+    if (this.channels.length === 0) {
+      this.followLatest = true;
+      this.dropFocus();
+    }
     return true;
   }
 
   clearUpdates(): void {
     this.channels.length = 0;
     this.activeKey = MAIN_AGENT_ID;
+    this.followLatest = true;
     this.dropFocus();
     this.ended = false;
     this.keptOpen = false;
@@ -188,8 +202,8 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   }
 
   /**
-   * The turn that produced these updates has ended: dim the title and fold
-   * the panel down to a one-line stub so the final reply owns the screen. A
+   * The turn that produced these updates has ended: fold the panel down to
+   * a one-line stub so the final reply owns the screen. A
    * focused user keeps reading, and an ordinary blur does not fold it. Only
    * an explicit Escape, Ctrl+N or close action folds it after the turn ends.
    */
@@ -224,7 +238,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   focus(): boolean {
     if (!this.canFocus()) return false;
     if (this.ended) this.keptOpen = true;
-    if (!this.hasFocus) this.focusedBodyRows = this.renderedBodyRows;
     this.hasFocus = true;
     this.activeChannel().unreadIds.clear();
     return true;
@@ -233,7 +246,6 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
   blur(): boolean {
     if (!this.hasFocus) return false;
     this.hasFocus = false;
-    this.focusedBodyRows = 0;
     return true;
   }
 
@@ -305,6 +317,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
     if (ch.page <= 0) return false;
+    this.followLatest = false;
     ch.page -= 1;
     this.scrollBodyToTop();
     return true;
@@ -315,6 +328,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     if (this.channels.length === 0) return false;
     const ch = this.activeChannel();
     if (ch.page >= ch.entries.length - 1) return false;
+    this.followLatest = false;
     ch.page += 1;
     this.scrollBodyToTop();
     return true;
@@ -324,7 +338,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     if (this.channels.length === 0) return [];
     if (part === 'foot') return [];
     const folded = this.isFolded();
-    if (part === 'body') return this.padFocusedBody(folded ? [] : this.bodyRows(width));
+    if (part === 'body') return folded ? [] : this.bodyRows(width);
     const segments = folded ? this.stubSegments(width) : this.headSegments(width);
     return [this.paintSegments(segments, width)];
   }
@@ -371,23 +385,10 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     }
   }
 
-  /**
-   * While focused, a docked body never gets shorter than it was, so the click
-   * that took focus and the paging after it never move the head.
-   */
-  private padFocusedBody(rows: string[]): string[] {
-    if (this.layout === undefined) return rows;
-    if (this.hasFocus) {
-      this.focusedBodyRows = Math.max(this.focusedBodyRows, Math.min(rows.length, this.layout.maxBodyRows));
-      while (rows.length < this.focusedBodyRows) rows.push('');
-    }
-    this.renderedBodyRows = Math.min(rows.length, this.layout.maxBodyRows);
-    return rows;
-  }
-
   private showChannel(key: string): void {
     const ch = this.channels.find((channel) => channel.key === key);
     if (ch === undefined) return;
+    this.followLatest = false;
     const moved = this.activeKey !== key || ch.page !== ch.entries.length - 1;
     this.activeKey = key;
     ch.page = ch.entries.length - 1;
@@ -439,7 +440,7 @@ export class NotifyPanelComponent extends DockSection implements Focusable {
     const rule = (text: string) => currentTheme.fg(this.hasFocus ? 'primary' : 'border', text);
     const dim = (text: string) => currentTheme.fg('textDim', text);
     const strong = (text: string) =>
-      this.ended ? currentTheme.boldFg('textDim', text) : currentTheme.boldFg('primary', text);
+      this.hasFocus ? currentTheme.boldFg('primary', text) : currentTheme.boldFg('textDim', text);
     const ch = this.activeChannel();
     const label = (tabs: HeadSegment[], hint: string): HeadSegment[] => {
       const segments: HeadSegment[] = [

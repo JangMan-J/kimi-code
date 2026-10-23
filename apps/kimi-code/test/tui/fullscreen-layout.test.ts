@@ -28,8 +28,10 @@ import { CHROME_GUTTER } from '#/tui/constant/rendering';
 import { createTUIState, KimiTUI, type KimiTUIOptions } from '#/tui/kimi-tui';
 import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
 import { GoalStartPermissionPromptComponent } from '#/tui/components/dialogs/goal-start-permission-prompt';
+import { SettingsSelectorComponent } from '#/tui/components/dialogs/settings-selector';
 import { NotifyController } from '#/tui/controllers/notify';
 import { mountFooter, setEditorSlot } from '#/tui/tui-state';
+import { currentTheme } from '#/tui/theme';
 import type { AppState, TranscriptEntry } from '#/tui/types';
 import { beginScreenTakeover, endScreenTakeover } from '#/tui/utils/screen-takeover';
 import { markTranscriptComponent } from '#/tui/utils/transcript-component-metadata';
@@ -1066,7 +1068,9 @@ describe('fullscreen layout', () => {
   it('docks the local goal start prompt and keeps its choices and hint visible', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(10_000);
+    currentTheme.setTerminalBackground('#282C34');
     onTestFinished(() => {
+      currentTheme.setTerminalBackground(undefined);
       vi.useRealTimers();
     });
     const { state, vt } = await mountFullscreen(24);
@@ -1114,12 +1118,47 @@ describe('fullscreen layout', () => {
     state.ui.stop();
   });
 
+  it('keeps Settings usable with pointer selection, wheel paging, and focus loss at 24 rows', async () => {
+    const { state, vt } = await mountFullscreen(24);
+    vt.resize(80, 24);
+    const picker = new SettingsSelectorComponent({ onSelect: vi.fn(), onCancel: vi.fn() });
+    setEditorSlot(state, picker);
+    state.ui.setFocus(picker);
+    state.ui.requestRender();
+    await vt.waitForRender();
+
+    let rows = screenRows(vt);
+    expect(rows.join('\n')).toContain('Settings');
+    expect(rows.join('\n')).toContain('Page 1/2');
+    const permissionRow = rows.findIndex((row) => row.includes('Permission'));
+    expect(permissionRow).toBeGreaterThan(0);
+
+    vt.sendInput(`\u001B[<35;5;${String(permissionRow + 1)}M`);
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows[permissionRow]).toContain('❯ Permission');
+
+    vt.sendInput(`\u001B[<65;5;${String(permissionRow + 1)}M`);
+    await vt.waitForRender();
+    rows = screenRows(vt);
+    expect(rows.join('\n')).toContain('Page 2/2');
+    expect(rows.join('\n')).toContain('❯ Usage');
+
+    state.ui.setFocus(state.notifyPanel);
+    state.ui.requestRender();
+    await vt.waitForRender();
+    expect(picker.focused).toBe(false);
+
+    state.ui.stop();
+  });
+
   it('keeps Updates expanded when Ctrl+N is followed by an editor click', async () => {
     const { state, vt } = await mountFullscreen(24);
     const notifications = new NotifyController(state);
     notifications.setEnabled(true);
     state.notifyPanel.upsert({ id: 'n1', agentId: 'main', time: 0, text: 'main update' });
     state.notifyPanel.upsert({ id: 'n2', agentId: 'agent-1', agentName: 'explore', time: 1, text: 'explore update' });
+    expect(state.notifyPanel.prevChannel()).toBe(true);
     state.notifyPanelContainer.addChild(state.notifyPanel);
     state.notifyPanel.setEnded(true);
     state.ui.requestRender();
@@ -1165,6 +1204,7 @@ describe('fullscreen layout', () => {
     notifications.setEnabled(true);
     state.notifyPanel.upsert({ id: 'n1', agentId: 'main', time: 0, title: 'Running the tests', text: 'main body' });
     state.notifyPanel.upsert({ id: 'n2', agentId: 'agent-1', agentName: 'coder', time: 1, text: 'coder body' });
+    expect(state.notifyPanel.prevChannel()).toBe(true);
     state.notifyPanelContainer.addChild(state.notifyPanel);
     expect(notifications.focusPanel()).toBe(true);
     await vt.waitForRender();
@@ -1214,7 +1254,7 @@ describe('fullscreen layout', () => {
     await vt.waitForRender();
     rows = screenRows(vt);
     expect(rows.filter((row) => row.includes('Running the tests'))).toEqual([
-      '  ▸ main · coder● · 2 updates · Running the tests · ctrl+n to expand',
+      '  ▸ main · coder · 2 updates · Running the tests · ctrl+n to expand',
     ]);
     vt.sendInput('\u000E');
     await vt.waitForRender();

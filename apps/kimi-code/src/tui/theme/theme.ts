@@ -14,11 +14,13 @@ import { SGR_FAINT, SGR_NORMAL_INTENSITY, SGR_SEQUENCE } from '#/tui/constant/te
 
 import type { ColorPalette } from './colors';
 import { darkColors } from './colors';
+import { deriveHoverBackground } from './hover-color';
 
 export type ColorToken = keyof ColorPalette;
 
 export class Theme {
   private _palette: ColorPalette;
+  private _terminalBackground: string | undefined;
 
   constructor(palette: ColorPalette) {
     this._palette = palette;
@@ -34,6 +36,16 @@ export class Theme {
 
   color(token: ColorToken): string {
     return this._palette[token];
+  }
+
+  setTerminalBackground(background: string | undefined): void {
+    this._terminalBackground = background;
+  }
+
+  hoverBackground(): string | undefined {
+    return this._terminalBackground === undefined
+      ? undefined
+      : deriveHoverBackground(this._terminalBackground, this.color('textStrong'));
   }
 
   /* ── Foreground helpers ── */

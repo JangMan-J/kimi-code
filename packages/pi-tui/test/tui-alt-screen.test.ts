@@ -1989,6 +1989,41 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("sends leave to the previous hover target and before wheel scrolling", async () => {
+		const terminal = new VirtualTerminal(20, 4);
+		const tui = new TuiAltScreen(terminal);
+		const events: string[] = [];
+		const hoverComponent = (name: string) => ({
+			render: () => [name],
+			invalidate: () => {},
+			handleMouse: (event: TuiMouseEvent) => {
+				if (event.type === "move") {
+					events.push(`move:${name}`);
+					return { handled: true };
+				}
+				if (event.type === "leave") {
+					events.push(`leave:${name}`);
+					return { handled: true, render: true };
+				}
+				return undefined;
+			},
+		});
+		tui.addChild(hoverComponent("a"));
+		tui.addChild(hoverComponent("b"));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<35;1;1M");
+		terminal.sendInput("\x1b[<35;1;2M");
+		terminal.sendInput("\x1b[<35;1;4M");
+		terminal.sendInput("\x1b[<35;1;1M");
+		terminal.sendInput("\x1b[<64;1;1M");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(events, ["move:a", "move:b", "leave:a", "leave:b", "move:a", "leave:a"]);
+		tui.stop();
+	});
+
 	it("lets mouse-aware components consume wheel events before viewport scrolling", async () => {
 		const terminal = new VirtualTerminal(20, 3);
 		const tui = new TuiAltScreen(terminal);

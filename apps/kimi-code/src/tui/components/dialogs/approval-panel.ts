@@ -24,6 +24,8 @@ import { DockSection, type DockLayout, type DockPart } from '#/tui/components/ch
 import { normalizeCapsLockedCtrl } from '#/tui/components/editor/custom-editor';
 import { currentTheme } from '#/tui/theme';
 import { isSettlingClick } from '#/tui/utils/terminal-focus';
+
+import { paintHoverRow } from './hover-row';
 import { highlightLines, langFromPath } from '#/tui/components/media/code-highlight';
 import { renderDiffLinesClustered } from '#/tui/components/media/diff-preview';
 import type {
@@ -245,7 +247,7 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
   private readonly shownAt = Date.now();
   /** Foot row of each choice in the last render, for mouse hit-testing. */
   private choiceRows: readonly number[] = [];
-  /** Choice under the pointer: underlined and previewed, but not selected. */
+  /** Choice under the pointer: highlighted and previewed, but not selected. */
   private hoverIndex: number | undefined;
 
   constructor(
@@ -374,7 +376,7 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
   }
 
   /**
-   * Hovering a choice underlines it and previews its description without
+   * Hovering a choice highlights it and previews its description without
    * selecting it; a click picks it like its number key. A click on a faded
    * panel only takes the keyboard back. Clicks right after the panel
    * appeared or the terminal window regained focus are ignored, and a click
@@ -385,6 +387,11 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     event: TuiMouseEvent,
   ): TuiMouseEventResult | undefined {
     const index = part === 'foot' ? this.choiceRows.indexOf(event.y) : -1;
+    if (event.type === 'leave') {
+      if (this.hoverIndex === undefined) return undefined;
+      this.hoverIndex = undefined;
+      return { handled: true, render: true };
+    }
     if (event.type === 'move') {
       const hovered = index === -1 || this.feedbackMode || !this.focused ? undefined : index;
       if (hovered === this.hoverIndex) return index === -1 ? undefined : { handled: true };
@@ -453,9 +460,8 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
     const selectColorBold = (text: string) => currentTheme.boldFg('accent', text);
     const indent = (text: string): string => `  ${text}`;
     const docked = this.layout !== undefined;
-    const hovered = this.focused && !this.feedbackMode ? this.hoverIndex : undefined;
-    const label = (idx: number, text: string): string =>
-      idx === hovered ? currentTheme.underline(text) : text;
+    const hoverBackground = this.focused && !this.feedbackMode ? currentTheme.hoverBackground() : undefined;
+    const hovered = hoverBackground === undefined ? undefined : this.hoverIndex;
     const descriptionRows = (option: ApprovalPanelChoice, rowWidth: number): string[] =>
       option.description === undefined || option.description.length === 0
         ? []
@@ -468,13 +474,17 @@ export class ApprovalPanelComponent extends DockSection implements Focusable {
       const labelWithNum = `${String(idx + 1)}. ${option.label}`;
       const typingFeedback = this.feedbackMode && option.requires_feedback === true && isSelected;
       choiceRows.push(lines.length);
-      if (typingFeedback) {
-        lines.push(indent(this.renderInlineFeedbackLine(width - 2, labelWithNum)));
-      } else if (isSelected) {
-        lines.push(indent(`${selectColorBold('▶')} ${label(idx, selectColorBold(labelWithNum))}`));
-      } else {
-        lines.push(indent(`  ${label(idx, strong(labelWithNum))}`));
-      }
+      const choiceLine = typingFeedback
+        ? this.renderInlineFeedbackLine(width - 2, labelWithNum)
+        : isSelected
+          ? `${selectColorBold('▶')} ${selectColorBold(labelWithNum)}`
+          : `  ${strong(labelWithNum)}`;
+      const line = indent(choiceLine);
+      lines.push(
+        idx === hovered && hoverBackground !== undefined
+          ? paintHoverRow(line, width, hoverBackground)
+          : line,
+      );
       if (!docked && !typingFeedback) {
         for (const descLine of descriptionRows(option, Math.max(20, width - 7))) {
           lines.push(indent(`     ${dim(descLine)}`));

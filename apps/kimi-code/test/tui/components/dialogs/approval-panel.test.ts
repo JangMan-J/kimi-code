@@ -4,6 +4,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { GutterContainer } from '#/tui/components/chrome/gutter-container';
 import { ApprovalPanelComponent } from '#/tui/components/dialogs/approval-panel';
+import { currentTheme } from '#/tui/theme';
 import type {
   DiffDisplayBlock,
   FileContentDisplayBlock,
@@ -586,10 +587,10 @@ describe('ApprovalPanelComponent', () => {
       return lines.slice(lines.findIndex((line) => line.includes('1. ')) - 1);
     }
 
-    function mouse(type: 'move' | 'press' | 'release' | 'click', y: number): TuiMouseEvent {
+    function mouse(type: 'move' | 'leave' | 'press' | 'release' | 'click', y: number): TuiMouseEvent {
       return {
         type,
-        button: type === 'move' ? 'none' : 'left',
+        button: type === 'move' || type === 'leave' ? 'none' : 'left',
         x: 4,
         y,
         screenX: 4,
@@ -668,15 +669,17 @@ describe('ApprovalPanelComponent', () => {
       };
     }
 
-    it('underlines and previews a hovered choice without selecting it', () => {
+    it('highlights and previews a hovered choice without selecting it', () => {
       const previousLevel = chalk.level;
       chalk.level = 3;
+      currentTheme.setTerminalBackground('#282C34');
       onTestFinished(() => {
         chalk.level = previousLevel;
+        currentTheme.setTerminalBackground(undefined);
       });
       const { dialog } = dockedDialog(goalPending());
       const row = footRow(dialog, 'Start in Always Ask');
-      const underline = '\u001B[4m';
+      const hoverBackground = '\u001B[48;2;51;55;63m';
 
       expect(footPart(dialog).handleMouse?.(mouse('move', row))).toEqual({ handled: true, render: true });
       expect(footPart(dialog).handleMouse?.(mouse('move', row))).toEqual({ handled: true });
@@ -684,7 +687,9 @@ describe('ApprovalPanelComponent', () => {
       expect(lines[row - 1]).toContain('▶ 1. Switch to Never Ask and start');
       expect(lines[row]).toBe('     2. Start in Always Ask');
       expect(lines).toContain('   Ask every time.');
-      expect(dialog.render(60).find((line) => line.includes('Start in Always Ask'))).toContain(underline);
+      expect(dialog.render(60).find((line) => line.includes('Start in Always Ask'))).toContain(
+        hoverBackground,
+      );
 
       expect(footPart(dialog).handleMouse?.(mouse('move', footRow(dialog, '↑/↓ select')))).toEqual({
         handled: true,
@@ -693,13 +698,29 @@ describe('ApprovalPanelComponent', () => {
       lines = foot(dialog);
       expect(lines).not.toContain('   Ask every time.');
       expect(lines).toContain('   Tools are approved automatically, and questions are');
-      expect(dialog.render(60).join('\n')).not.toContain(underline);
+      expect(dialog.render(60).join('\n')).not.toContain(hoverBackground);
+
+      footPart(dialog).handleMouse?.(mouse('move', row));
+      expect(footPart(dialog).handleMouse?.(mouse('leave', -1))).toEqual({ handled: true, render: true });
+      expect(foot(dialog)).not.toContain('   Ask every time.');
 
       footPart(dialog).handleMouse?.(mouse('move', row));
       dialog.handleInput('\u001B[B');
       dialog.handleInput('\u001B[B');
       expect(foot(dialog)).toContain('   ▶ 3. Do not start');
       expect(foot(dialog)).not.toContain('   Ask every time.');
+    });
+
+    it('has no hover effect without a terminal background color', () => {
+      currentTheme.setTerminalBackground(undefined);
+      const { dialog } = dockedDialog(goalPending());
+      const row = footRow(dialog, 'Start in Always Ask');
+
+      footPart(dialog).handleMouse?.(mouse('move', row));
+      const lines = foot(dialog);
+      expect(lines).not.toContain('   Ask every time.');
+      expect(lines).toContain('   Tools are approved automatically, and questions are');
+      expect(dialog.render(60).join('\n')).not.toContain('\u001B[4m');
     });
 
     it('submits a deliberate click, ignoring clicks right after it appeared or the window was focused', () => {

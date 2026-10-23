@@ -784,13 +784,13 @@ describe('NotifyController', () => {
 
     h.send('s2', 'coder progress', 'agent-2');
     h.emit('subagent.completed', { subagentId: 'agent-1' });
-    expect(h.rendered()).toContain('▸ explore · coder● · 2 updates · bg intro');
+    expect(h.rendered()).toContain('▸ explore · coder · 2 updates · coder progress');
     expect(h.rendered()).not.toContain('bg detail');
 
     h.controller.focusPanel();
-    expect(h.rendered()).toContain('bg detail');
+    expect(h.rendered()).toContain('coder progress');
     h.emit('subagent.completed', { subagentId: 'agent-2' });
-    expect(h.rendered()).toContain('bg detail');
+    expect(h.rendered()).toContain('coder progress');
   });
 
   it('returns focus to whatever stands in the input area, and never answers a prompt', () => {

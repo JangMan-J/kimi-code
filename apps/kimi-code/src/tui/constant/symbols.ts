@@ -9,6 +9,8 @@ export const FAILURE_MARK = '✗ ';
 
 // Kimi's fixed-width notification mark, including its left padding.
 export const NOTIFY_USER_MARK = ' ▘▘';
+export const NOTIFY_USER_MARK_BACKGROUND = '#1783FF';
+export const NOTIFY_USER_MARK_FOREGROUND = '#FFFFFF';
 
 // Shared selector markers — keep every list picker visually consistent.
 // SELECT_POINTER marks the highlighted row; CURRENT_MARK is appended to the

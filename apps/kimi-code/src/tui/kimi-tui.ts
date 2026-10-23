@@ -149,7 +149,7 @@ import { registerReverseRPCHandlers } from './reverse-rpc/index';
 import { QuestionController } from './reverse-rpc/question/controller';
 import { createQuestionAskHandler } from './reverse-rpc/question/handler';
 import type { ApprovalPanelData, QuestionPanelData } from './reverse-rpc/types';
-import { currentTheme, getColorPalette, getBuiltInPalette, isBuiltInTheme } from './theme';
+import { currentTheme, getColorPalette, getBuiltInPalette } from './theme';
 import type { ColorToken, ResolvedTheme, ThemeName } from './theme';
 import { createTUIState, mountFooter, setEditorSlot, type TUIState } from './tui-state';
 import {
@@ -4238,11 +4238,16 @@ export class KimiTUI {
 
   refreshTerminalThemeTracking(): void {
     this.stopTerminalThemeTracking();
-    if (!isBuiltInTheme(this.state.appState.theme) || this.state.appState.theme !== 'auto') return;
-
-    this.terminalThemeTrackingDispose = installTerminalThemeTracking(this.state, (resolved) => {
-      void this.applyResolvedAutoTheme(resolved);
-    });
+    this.terminalThemeTrackingDispose = installTerminalThemeTracking(
+      this.state,
+      (resolved) => {
+        void this.applyResolvedAutoTheme(resolved);
+      },
+      (background) => {
+        currentTheme.setTerminalBackground(background);
+        this.state.ui.requestRender();
+      },
+    );
   }
 
   private stopTerminalThemeTracking(): void {
@@ -4446,6 +4451,7 @@ export class KimiTUI {
           info,
           getAvailableRows: () =>
             this.state.terminal.rows - (this.state.ui instanceof TuiAltScreen ? 1 : 0),
+          isFocusingClick: () => isFocusingClick(this.state.terminalState),
           onSelect: (c) => {
             resolve(c);
           },

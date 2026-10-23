@@ -2,4 +2,4 @@
 "@moonshot-ai/kimi-code": patch
 ---
 
-Restyle NotifyUser cards with a Kimi icon and aligned, expandable content.
+Add Kimi-branded NotifyUser cards with a single-line streaming title and an expandable streaming message.

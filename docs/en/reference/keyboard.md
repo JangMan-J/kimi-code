@@ -86,7 +86,9 @@ When the Agent initiates a tool call that requires confirmation, the TUI display
 | `Shift-↑` / `Shift-↓` | Scroll a request that is longer than the panel (fullscreen mode) |
 | `Ctrl-N` | Move the keyboard to the `Updates` panel to read what the Agent is doing; the approval panel fades until you come back with `Esc` or `Ctrl-N` |
 
-In fullscreen mode, hovering an option underlines it and previews its description without selecting it, and clicking an option chooses it. A click right after the panel appears is ignored, and while the panel is faded, the first click only brings the keyboard back.
+In fullscreen mode, hovering an option highlights its row and previews its description without moving the keyboard selection when the terminal provides its background color; otherwise, there is no hover effect. Clicking an option chooses it. A click right after the panel appears is ignored, and while the panel is faded, the first click only brings the keyboard back.
+
+In fullscreen mode, `/settings`, the permission selector, and the workspace trust prompt also accept mouse input. Moving the pointer over an option moves the `❯` selection, and clicking confirms it. The mouse wheel turns pages in `/settings`. `/settings` and the permission selector fade when `Updates` takes the keyboard; the first click then only restores focus.
 
 Options that require feedback (such as "Reject" or "Revise") switch to a feedback input state after confirmation: type the feedback text and press `Enter` to submit; press `Esc` to exit feedback input and return to the candidate list.
 
