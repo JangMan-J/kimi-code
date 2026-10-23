@@ -182,6 +182,7 @@ export interface SlashCommandHost {
   // UI
   showLoginProgressSpinner(label: string): LoginProgressSpinnerHandle;
   showLoginAuthorizationPrompt(auth: DeviceAuthorization): LoginProgressSpinnerHandle;
+  beginAuthBlock(): () => void;
   showProgressSpinner(label: string): LoginProgressSpinnerHandle;
 
   // Theme
