@@ -130,6 +130,7 @@ Each entry in the `providers` table defines an API provider, keyed by a unique n
 | `oauth` | `table` | No | OAuth credential reference (`storage` and `key` fields); injected automatically by the login flow, so you normally never write this by hand |
 | `env` | `table<string, string>` | No | Fallback source for provider credentials; see the `env` sub-table |
 | `custom_headers` | `table<string, string>` | No | Custom HTTP headers attached to each request |
+| `wire_protocol` | `string` | No | Managed Kimi Code only: which wire dialect every model of this login uses — `chat` (default, `/chat/completions`), `responses` (`/responses`), or `messages` (`/messages`, the beta Messages API). Set it with `kimi provider protocol` rather than by hand; a model refresh re-stamps the per-model `protocol` from this field |
 
 **`env` sub-table**: You can write provider-conventional key names (such as `KIMI_API_KEY`) inside `[providers.<name>.env]` as a fallback source for `api_key` / `base_url`. This sub-table is **read only from the config file** and does not modify the shell environment:
 

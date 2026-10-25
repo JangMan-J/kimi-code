@@ -18,6 +18,7 @@ import {
   type ManagedKimiConfigShape,
 } from '../src/managed-kimi-code';
 import { OAuthUnauthorizedError } from '../src/errors';
+import { DEFAULT_KIMI_CODE_BASE_URL, GLOBAL_KIMI_CODE_BASE_URL } from '../src/managed-usage';
 
 function makeModelsResponse(): Response {
   return new Response(
@@ -153,6 +154,64 @@ describe('provisionManagedKimiCodeConfig', () => {
     ).toEqual({
       baseUrl,
       oauthRef: configuredOAuthRef,
+    });
+  });
+
+  it('keeps a global login when the API base is repointed at the mainland endpoint', () => {
+    const configuredOAuthRef = resolveKimiCodeOAuthRef({
+      oauthHost: 'https://auth.kimi.ai',
+      baseUrl: GLOBAL_KIMI_CODE_BASE_URL,
+    });
+
+    expect(
+      resolveKimiCodeRuntimeAuth({
+        configuredBaseUrl: DEFAULT_KIMI_CODE_BASE_URL,
+        configuredOAuthRef,
+        env: {},
+      }),
+    ).toEqual({ baseUrl: DEFAULT_KIMI_CODE_BASE_URL, oauthRef: configuredOAuthRef });
+
+    expect(
+      resolveKimiCodeRuntimeAuth({
+        configuredBaseUrl: GLOBAL_KIMI_CODE_BASE_URL,
+        configuredOAuthRef,
+        env: { KIMI_CODE_BASE_URL: `${DEFAULT_KIMI_CODE_BASE_URL}/` },
+      }),
+    ).toEqual({ baseUrl: DEFAULT_KIMI_CODE_BASE_URL, oauthRef: configuredOAuthRef });
+  });
+
+  it('keeps the default mainland login when the API base is repointed at the global endpoint', () => {
+    expect(
+      resolveKimiCodeRuntimeAuth({
+        configuredBaseUrl: DEFAULT_KIMI_CODE_BASE_URL,
+        configuredOAuthRef: { storage: 'keyring', key: KIMI_CODE_OAUTH_KEY },
+        env: { KIMI_CODE_BASE_URL: GLOBAL_KIMI_CODE_BASE_URL },
+      }),
+    ).toEqual({
+      baseUrl: GLOBAL_KIMI_CODE_BASE_URL,
+      oauthRef: { storage: 'keyring', key: KIMI_CODE_OAUTH_KEY, oauthHost: undefined },
+    });
+  });
+
+  it('still scopes credentials away from custom endpoints on the same OAuth host', () => {
+    const configuredOAuthRef = resolveKimiCodeOAuthRef({
+      oauthHost: 'https://auth.dev.example.test',
+      baseUrl: 'https://api.dev.example.test/coding/v1',
+    });
+    const otherBaseUrl = 'https://api.staging.example.test/coding/v1';
+
+    expect(
+      resolveKimiCodeRuntimeAuth({
+        configuredBaseUrl: otherBaseUrl,
+        configuredOAuthRef,
+        env: {},
+      }),
+    ).toEqual({
+      baseUrl: otherBaseUrl,
+      oauthRef: resolveKimiCodeOAuthRef({
+        oauthHost: 'https://auth.dev.example.test',
+        baseUrl: otherBaseUrl,
+      }),
     });
   });
 
@@ -1256,6 +1315,107 @@ describe('selective merge', () => {
     expect(alias?.['maxOutputSize']).toBe(4096);
     expect(alias?.['supportEfforts']).toBeUndefined();
     expect(alias?.['maxContextSize']).toBe(262144);
+  });
+
+  it('stamps a declared wire dialect onto every model and keeps it across refreshes', () => {
+    const config: ManagedKimiConfigShape = {
+      providers: {
+        [KIMI_CODE_PROVIDER_NAME]: {
+          type: 'kimi',
+          baseUrl: baseOptions.baseUrl,
+          wireProtocol: 'responses',
+        },
+      },
+    };
+    const models: ManagedKimiCodeModelInfo[] = [
+      {
+        id: 'k3.1-pro',
+        contextLength: 1048576,
+        supportsReasoning: true,
+        supportsImageIn: true,
+        supportsVideoIn: true,
+      },
+    ];
+
+    applyManagedKimiCodeConfig(config, { ...baseOptions, models });
+
+    expect(config.models?.['kimi-code/k3.1-pro']?.protocol).toBe('openai_responses');
+    expect(config.providers[KIMI_CODE_PROVIDER_NAME]).toMatchObject({ wireProtocol: 'responses' });
+
+    applyManagedKimiCodeConfig(config, { ...baseOptions, models });
+
+    expect(config.models?.['kimi-code/k3.1-pro']?.protocol).toBe('openai_responses');
+    expect(config.providers[KIMI_CODE_PROVIDER_NAME]).toMatchObject({ wireProtocol: 'responses' });
+  });
+
+  it('routes the messages dialect through the beta Messages API', () => {
+    const config: ManagedKimiConfigShape = {
+      providers: {
+        [KIMI_CODE_PROVIDER_NAME]: {
+          type: 'kimi',
+          baseUrl: baseOptions.baseUrl,
+          wireProtocol: 'messages',
+        },
+      },
+    };
+
+    applyManagedKimiCodeConfig(config, {
+      ...baseOptions,
+      models: [
+        {
+          id: 'k3.1-pro',
+          contextLength: 1048576,
+          supportsReasoning: true,
+          supportsImageIn: true,
+          supportsVideoIn: true,
+          supportsThinkingType: 'both',
+        },
+      ],
+    });
+
+    expect(config.models?.['kimi-code/k3.1-pro']).toMatchObject({
+      protocol: 'anthropic',
+      betaApi: true,
+      adaptiveThinking: true,
+    });
+  });
+
+  it('clears the stamped dialect when the choice returns to chat', () => {
+    const config: ManagedKimiConfigShape = {
+      providers: {
+        [KIMI_CODE_PROVIDER_NAME]: {
+          type: 'kimi',
+          baseUrl: baseOptions.baseUrl,
+          wireProtocol: 'chat',
+        },
+      },
+      models: {
+        'kimi-code/k3.1-pro': {
+          provider: KIMI_CODE_PROVIDER_NAME,
+          model: 'k3.1-pro',
+          maxContextSize: 1048576,
+          protocol: 'anthropic',
+          betaApi: true,
+        },
+      },
+    };
+
+    applyManagedKimiCodeConfig(config, {
+      ...baseOptions,
+      models: [
+        {
+          id: 'k3.1-pro',
+          contextLength: 1048576,
+          supportsReasoning: true,
+          supportsImageIn: true,
+          supportsVideoIn: true,
+        },
+      ],
+    });
+
+    const alias = config.models?.['kimi-code/k3.1-pro'];
+    expect(alias?.['protocol']).toBeUndefined();
+    expect(alias?.['betaApi']).toBeUndefined();
   });
 
   it('preserves overrides when upstream declares managed fields', () => {

@@ -326,6 +326,8 @@ kimi vis --host 0.0.0.0 --port 8123 --no-open
 
 Manage providers in the shell — the non-interactive equivalent of `/provider` in the TUI. Suitable for scripted deployments, CI initialization, and one-line setup on a new machine.
 
+In the TUI, `/provider` with no argument is a toggle between the two endpoints (`EN` · api.kimi.ai, `CN` · api.kimi.com); `/provider manage` opens the full provider manager, and `/wire` switches the wire protocol (Chat / Responses / Messages).
+
 ```sh
 kimi provider <action> [options]
 ```
@@ -368,6 +370,24 @@ Print each configured provider on a separate line, including type, model count, 
 ```sh
 kimi provider list
 kimi provider list --json | jq '.providers | keys'
+```
+
+#### `kimi provider endpoint [com|ai]`
+
+Show or switch which managed Kimi Code endpoint the CLI talks to: `com` is `https://api.kimi.com/coding/v1` (mainland China), `ai` is `https://api.kimi.ai/coding/v1` (global). Both serve the same account and models, so the switch needs no new login — the stored credential keeps working. The command retargets the provider's `base_url` plus the managed `moonshot_search` / `moonshot_fetch` services (hand-configured service endpoints are left alone), then refreshes the model list from the new endpoint. Run it with no argument to print the current endpoint and wire protocol.
+
+```sh
+kimi provider endpoint        # "Kimi Code endpoint: ai (https://api.kimi.ai/coding/v1)"
+kimi provider endpoint com    # switch to the mainland endpoint and refresh models
+```
+
+#### `kimi provider protocol [chat|responses|messages]`
+
+Show or switch the wire dialect every Kimi Code model alias uses. The Kimi Code API serves the same models over three routes, and all three are selectable: `chat` (`/chat/completions`), `responses` (the OpenAI Responses API, `/responses`), and `messages` (the Anthropic Messages API, `/messages?beta=true`). The choice is stored as `wire_protocol` on the `managed:kimi-code` provider and re-stamped onto every model alias by each model refresh, so it survives later refreshes and logins.
+
+```sh
+kimi provider protocol            # show the current dialect
+kimi provider protocol responses  # use the Responses API for every Kimi Code model
 ```
 
 #### `kimi provider catalog list [providerId]`

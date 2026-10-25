@@ -102,6 +102,8 @@ This group of variables redirects OAuth authentication and managed service endpo
 `KIMI_CODE_BASE_URL` (OAuth-managed service, targeting `kimi.com`) and `KIMI_BASE_URL` (direct API key connection, targeting `moonshot.ai`) are two distinct variables. Use each one in its appropriate context.
 :::
 
+`KIMI_CODE_BASE_URL` also points an existing Kimi Code login at the other managed endpoint without a new login: `https://api.kimi.ai/coding/v1` (global) or `https://api.kimi.com/coding/v1` (mainland). The credential keeps working in both directions. Chat traffic itself follows the `base_url` of the `managed:kimi-code` provider in `config.toml` — `KIMI_CODE_BASE_URL` only feeds the managed endpoints (quota, userinfo, model list) and is written into that record by the next model refresh. To switch without editing the file, use `kimi provider endpoint com|ai` (see [`kimi provider`](../reference/kimi-command.md#kimi-provider-endpoint-comai)); `kimi provider protocol` selects the wire dialect (`chat`, `responses`, `messages`). Only the two managed endpoints are interchangeable; any other base URL still gets its own credential slot.
+
 ## Define a model from environment variables (`KIMI_MODEL_*`)
 
 Want to switch models for testing without touching `config.toml`? When `KIMI_MODEL_NAME` is set, the CLI synthesizes a temporary provider and model alias from the `KIMI_MODEL_*` variables in memory; nothing is written back to the config file. These variables take priority over `default_model` in `config.toml`, but the `-m <alias>` option at startup still has the highest priority.

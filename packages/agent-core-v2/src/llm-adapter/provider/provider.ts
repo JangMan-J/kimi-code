@@ -11,6 +11,8 @@ export interface OAuthRef {
 
 export type ModelSource = 'static' | 'discover' | 'oauth-catalog';
 
+export type WireProtocol = 'chat' | 'responses' | 'messages';
+
 export interface ProviderConfig {
   modelSource?: ModelSource;
 
@@ -23,6 +25,7 @@ export interface ProviderConfig {
   apiKeyEnv?: string;
   oauth?: OAuthRef;
   env?: Record<string, string>;
+  wireProtocol?: WireProtocol;
   source?: Record<string, unknown>;
 }
 

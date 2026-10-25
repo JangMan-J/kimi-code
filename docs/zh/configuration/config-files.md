@@ -130,6 +130,7 @@ timeout = 5
 | `oauth` | `table` | 否 | OAuth 凭据引用（`storage`、`key` 两个字段），由登录流程自动注入，通常无需手写 |
 | `env` | `table<string, string>` | 否 | 供应商凭证的备用来源，见 `env` 子表 |
 | `custom_headers` | `table<string, string>` | 否 | 每次请求附加的自定义 HTTP 头 |
+| `wire_protocol` | `string` | 否 | 仅托管 Kimi Code：此登录下所有模型使用的传输协议 — `chat`（默认，`/chat/completions`）、`responses`（`/responses`）或 `messages`（`/messages`，beta Messages API）。建议用 `kimi provider protocol` 设置；模型刷新会依据该字段重新写入每个模型的 `protocol` |
 
 **`env` 子表**：可以把供应商惯用的键名（如 `KIMI_API_KEY`）写在 `[providers.<name>.env]` 里，作为 `api_key` / `base_url` 的备用来源。这个子表**只在配置文件里读取**，不会修改 shell 环境：
 

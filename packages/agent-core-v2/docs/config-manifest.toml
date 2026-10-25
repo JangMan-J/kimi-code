@@ -349,6 +349,7 @@ merge_all_available_skills = true
     # key: string
     # oauth_host: string
   # env: record<string, string>
+  # wire_protocol: "chat" | "responses" | "messages"
   # source: record<string, any>
 
 # ##########################################################################

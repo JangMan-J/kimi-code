@@ -8,11 +8,22 @@ import {
   resolveCatalogImport,
   SECONDARY_DERIVED_MODEL_ALIAS,
   type Catalog,
+  type KimiConfig,
   type RefreshProviderModelsResponse,
   type ThinkingEffort,
 } from '@moonshot-ai/kimi-code-sdk';
 
+import { KIMI_CODE_PROVIDER_NAME } from '@moonshot-ai/kimi-code-oauth';
+
 import { createKimiCodeUserAgent } from '#/cli/version';
+import {
+  MANAGED_ENDPOINTS,
+  managedEndpointName,
+  managedProvider,
+  managedProviderConfigPatch,
+  type ManagedEndpointName,
+  type ManagedProviderRecord,
+} from '#/utils/managed-endpoint';
 import { fetchCatalogOrBuiltIn } from '#/utils/catalog-fetch';
 import { refreshKimiRegion } from '#/utils/region';
 import { ChoicePickerComponent } from '../components/dialogs/choice-picker';
@@ -35,29 +46,159 @@ import {
   promptBaseUrl,
   promptCatalogProviderSelection,
 } from './prompts';
+import type { LoginProgressSpinnerHandle } from '../types';
 import type { SlashCommandHost } from './dispatch';
 
 // ---------------------------------------------------------------------------
 // /provider command
 // ---------------------------------------------------------------------------
 
+const PROVIDER_USAGE = 'Usage: /provider [en|cn|manage|refresh [providerId]]';
+
+/** `/provider en` / `/provider cn` short names for the two managed endpoints. */
+const ENDPOINT_ARG_ALIASES: Readonly<Record<string, 'ai' | 'com'>> = {
+  en: 'ai',
+  ai: 'ai',
+  cn: 'com',
+  com: 'com',
+};
+
 export async function handleProviderCommand(host: SlashCommandHost, rawArgs = ''): Promise<void> {
   const args = rawArgs.trim().split(/\s+/).filter((part) => part.length > 0);
   if (args[0] === 'refresh') {
     if (args.length > 2) {
-      host.showError('Usage: /provider [refresh [providerId]]');
+      host.showError('Usage: /provider refresh [providerId]');
       return;
     }
     await handleProviderRefresh(host, args[1]);
     return;
   }
-  if (args.length > 0) {
-    host.showError('Usage: /provider [refresh [providerId]]');
+  if (args[0] === 'manage') {
+    if (args.length > 1) {
+      host.showError('Usage: /provider manage');
+      return;
+    }
+    host.mountEditorReplacement(new ProviderManagerComponent(buildProviderManagerOptions(host)));
     return;
   }
-  const options = buildProviderManagerOptions(host);
-  const component = new ProviderManagerComponent(options);
-  host.mountEditorReplacement(component);
+  if (args.length > 1) {
+    host.showError(PROVIDER_USAGE);
+    return;
+  }
+  if (args[0] === undefined) {
+    await showEndpointToggle(host);
+    return;
+  }
+  const target = ENDPOINT_ARG_ALIASES[args[0]!.toLowerCase()];
+  if (target === undefined) {
+    host.showError(`Unknown endpoint "${args[0]}". ${PROVIDER_USAGE}`);
+    return;
+  }
+  await applyManagedEndpoint(host, target);
+}
+
+function endpointLabel(target: ManagedEndpointName): string {
+  return target === 'ai' ? 'EN · api.kimi.ai (global)' : 'CN · api.kimi.com (mainland)';
+}
+
+async function showEndpointToggle(host: SlashCommandHost): Promise<void> {
+  let provider: ManagedProviderRecord | undefined;
+  try {
+    provider = managedProvider(await host.harness.getConfig());
+  } catch (error) {
+    host.showError(`Failed to read config: ${formatErrorMessage(error)}`);
+    return;
+  }
+  if (provider === undefined) {
+    host.showError('No Kimi Code login yet — run /login first.');
+    return;
+  }
+  const current = managedEndpointName(provider.baseUrl);
+  host.mountEditorReplacement(
+    new ChoicePickerComponent({
+      title: 'Kimi Code endpoint',
+      hint: '↑↓ navigate · Enter switch · Esc cancel',
+      currentValue: current,
+      options: [
+        {
+          value: 'ai',
+          label: 'EN · api.kimi.ai',
+          description: 'Global endpoint. Same account and models, no re-login.',
+        },
+        {
+          value: 'com',
+          label: 'CN · api.kimi.com',
+          description: 'Mainland China endpoint. Same account and models, no re-login.',
+        },
+      ],
+      onSelect: (value) => {
+        void applyManagedEndpoint(host, value === 'ai' ? 'ai' : 'com');
+      },
+      onCancel: () => {
+        host.restoreEditor();
+        host.showStatus('Kimi Code endpoint unchanged.');
+      },
+    }),
+  );
+}
+
+async function applyManagedEndpoint(
+  host: SlashCommandHost,
+  target: ManagedEndpointName,
+): Promise<void> {
+  host.restoreEditor();
+  let config: KimiConfig;
+  try {
+    config = await host.harness.getConfig();
+  } catch (error) {
+    host.showError(`Failed to read config: ${formatErrorMessage(error)}`);
+    return;
+  }
+  const provider = managedProvider(config);
+  if (provider === undefined) {
+    host.showError('No Kimi Code login yet — run /login first.');
+    return;
+  }
+  const baseUrl = MANAGED_ENDPOINTS[target].baseUrl;
+  if (managedEndpointName(provider.baseUrl) === target) {
+    host.showStatus(`Kimi Code endpoint is already ${endpointLabel(target)}.`);
+    return;
+  }
+
+  const spinner = host.showProgressSpinner(`Switching to ${endpointLabel(target)}…`);
+  try {
+    await host.harness.setConfig(managedProviderConfigPatch(config, { ...provider, baseUrl }));
+  } catch (error) {
+    spinner.stop({ ok: false, label: 'Endpoint switch failed.' });
+    host.showError(formatErrorMessage(error));
+    return;
+  }
+  host.showStatus(`Kimi Code endpoint: ${endpointLabel(target)}`);
+  await refreshAfterSwitch(host, spinner);
+}
+
+/**
+ * Re-fetch the managed model list after a provider-record change. Shared by
+ * the `/provider` endpoint toggle and `/wire`: the write only lands in
+ * config.toml, and the refresh is what re-stamps every model alias.
+ */
+export async function refreshAfterSwitch(
+  host: SlashCommandHost,
+  spinner: LoginProgressSpinnerHandle,
+): Promise<void> {
+  let result: RefreshProviderModelsResponse;
+  try {
+    result = await host.authFlow.refreshProviderModels({ providerId: KIMI_CODE_PROVIDER_NAME });
+  } catch (error) {
+    spinner.stop({ ok: false, label: 'Model refresh failed.' });
+    host.showError(`Setting saved, but refreshing models failed: ${formatErrorMessage(error)}`);
+    return;
+  }
+  spinner.stop({ ok: true, label: 'Models refreshed.' });
+  reportProviderRefresh(host, result);
+  if (result.retired_default !== undefined) {
+    await host.modelMigration.retire(result.retired_default);
+  }
 }
 
 async function handleProviderRefresh(

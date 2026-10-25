@@ -138,6 +138,7 @@ const config = withMermaid(defineConfig({
                 { text: 'Using in IDEs', link: '/en/guides/ides' },
                 { text: 'Using Kimi Code in the browser', link: '/en/guides/web' },
                 { text: 'Remote Control', link: '/en/guides/remote-control' },
+                { text: 'Using kimi.com instead of kimi.ai', link: '/en/guides/kimi-com-migration' },
               ],
             },
           ],

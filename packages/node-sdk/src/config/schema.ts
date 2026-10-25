@@ -43,6 +43,10 @@ export type OAuthRef = z.infer<typeof OAuthRefSchema>;
 
 const StringRecordSchema = z.record(z.string(), z.string());
 
+export const WireProtocolSchema = z.enum(['chat', 'responses', 'messages']);
+
+export type WireProtocol = z.infer<typeof WireProtocolSchema>;
+
 export const ProviderConfigSchema = z.object({
   type: ProviderTypeSchema,
   apiKey: z.string().optional(),
@@ -52,6 +56,7 @@ export const ProviderConfigSchema = z.object({
   oauth: OAuthRefSchema.optional(),
   env: StringRecordSchema.optional(),
   customHeaders: StringRecordSchema.optional(),
+  wireProtocol: WireProtocolSchema.optional(),
   source: z.record(z.string(), z.unknown()).optional(),
 });
 

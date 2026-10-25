@@ -14,8 +14,9 @@ Some commands are only available in the idle state. Executing these commands whi
 | --- | --- | --- | --- |
 | `/login` | — | Select an account or platform and log in: Kimi Code uses OAuth device-code flow; Kimi Platform uses API key login | No |
 | `/logout` | — | Clear credentials for the currently selected account | No |
-| `/provider` | — | Open the interactive provider manager to view, add, and remove configured providers. See [Platforms & Models — `/provider` and provider management](../configuration/providers.md#provider-—-interactive-provider-management) | Yes |
+| `/provider` | — | With no argument, toggle the managed Kimi Code endpoint (`EN` · api.kimi.ai, `CN` · api.kimi.com) — same account and models on both, no re-login. `en`/`cn` set it directly, `manage` opens the interactive provider manager ([Platforms & Models](../configuration/providers.md#provider-—-interactive-provider-management)) | Yes |
 | `/provider refresh [providerId]` | — | Re-fetch model lists from providers at runtime: without an argument, refresh every provider; with one, refresh only that provider. Added and removed models are reported per provider | Yes |
+| `/wire [chat\|responses\|messages]` | — | Switch the wire protocol for every managed Kimi Code model: chat completions, the OpenAI Responses API, or the Anthropic Messages API. No argument opens a picker | Yes |
 | `/model` | — | Switch the LLM model used in the current session | Yes |
 | `/secondary-model` | `/subagent-model` | Pick the default model for subagents (writes `[secondary_model] default_model`; see the [subagent model pool](../configuration/config-files.md#subagent-model-pool)) | Yes |
 | `/settings` | `/config` | Open the settings panel inside the TUI | Yes |

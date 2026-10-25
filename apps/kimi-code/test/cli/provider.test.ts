@@ -19,7 +19,9 @@ import {
   handleCatalogAdd,
   handleCatalogList,
   handleProviderAdd,
+  handleProviderEndpoint,
   handleProviderList,
+  handleProviderProtocol,
   handleProviderRemove,
   registerProviderCommand,
   type ProviderDeps,
@@ -55,6 +57,14 @@ interface FakeHarness {
   getConfig: () => Promise<KimiConfig>;
   setConfig: (patch: Partial<KimiConfig>) => Promise<KimiConfig>;
   removeProvider: (providerId: string) => Promise<KimiConfig>;
+  refreshProviderModels: (options?: {
+    providerId?: string;
+    scope?: 'all' | 'oauth';
+  }) => Promise<{
+    changed: Array<{ provider_id: string; provider_name: string; added: number; removed: number }>;
+    unchanged: string[];
+    failed: Array<{ provider: string; reason: string }>;
+  }>;
   close: () => Promise<void>;
 }
 
@@ -63,6 +73,12 @@ function makeHarness(initial: KimiConfig): {
   current: () => KimiConfig;
   setConfigCalls: Array<Partial<KimiConfig>>;
   removeCalls: string[];
+  refreshCalls: Array<{ providerId?: string; scope?: 'all' | 'oauth' } | undefined>;
+  refreshResult: {
+    changed: Array<{ provider_id: string; provider_name: string; added: number; removed: number }>;
+    unchanged: string[];
+    failed: Array<{ provider: string; reason: string }>;
+  };
 } {
   // `persisted` simulates the on-disk config; the real RPC's `removeProvider`
   // reads from / writes to disk on every call. Tests must
@@ -72,6 +88,17 @@ function makeHarness(initial: KimiConfig): {
   let persisted: KimiConfig = structuredClone(initial);
   const setConfigCalls: Array<Partial<KimiConfig>> = [];
   const removeCalls: string[] = [];
+  const refreshCalls: Array<{ providerId?: string; scope?: 'all' | 'oauth' } | undefined> = [];
+  const refreshResult = {
+    changed: [] as Array<{
+      provider_id: string;
+      provider_name: string;
+      added: number;
+      removed: number;
+    }>,
+    unchanged: ['managed:kimi-code'],
+    failed: [] as Array<{ provider: string; reason: string }>,
+  };
   const harness: FakeHarness = {
     ensureConfigFile: async () => {},
     getConfig: async () => structuredClone(persisted),
@@ -89,6 +116,10 @@ function makeHarness(initial: KimiConfig): {
       }
       persisted = next as KimiConfig;
       return structuredClone(persisted);
+    },
+    refreshProviderModels: async (options) => {
+      refreshCalls.push(options);
+      return structuredClone(refreshResult);
     },
     removeProvider: async (providerId) => {
       removeCalls.push(providerId);
@@ -113,6 +144,8 @@ function makeHarness(initial: KimiConfig): {
     current: () => persisted,
     setConfigCalls,
     removeCalls,
+    refreshCalls,
+    refreshResult,
   };
 }
 
@@ -1161,5 +1194,141 @@ describe('kimi provider engine routing', () => {
     await program.parseAsync(['node', 'kimi', 'provider', 'list'], { from: 'node' });
 
     expect(harnessRouting.kimiHarnessConstructor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('kimi provider endpoint / protocol', () => {
+  const MANAGED = 'managed:kimi-code';
+
+  function managedConfig(): KimiConfig {
+    return {
+      providers: {
+        [MANAGED]: {
+          type: 'kimi',
+          baseUrl: 'https://api.kimi.ai/coding/v1',
+          apiKey: '',
+          oauth: {
+            storage: 'file',
+            key: 'oauth/kimi-code-env-0e4f99c69cc27850',
+            oauthHost: 'https://auth.kimi.ai',
+          },
+        },
+      },
+      models: {
+        'kimi-code/k3': {
+          provider: MANAGED,
+          model: 'k3',
+          maxContextSize: 1048576,
+        },
+      },
+      services: {
+        moonshotSearch: { baseUrl: 'https://api.kimi.ai/coding/v1/search', apiKey: '' },
+        moonshotFetch: { baseUrl: 'https://search.example.test/fetch', apiKey: 'sk-custom' },
+      },
+    } as KimiConfig;
+  }
+
+  it('prints the current endpoint and wire protocol', async () => {
+    const { harness } = makeHarness(managedConfig());
+    const { deps, stdout, exitCodes } = makeDeps(harness);
+
+    await tryRun(() => handleProviderEndpoint(deps, undefined));
+
+    const out = stdout.join('');
+    expect(exitCodes).toEqual([]);
+    expect(out).toContain('Kimi Code endpoint: ai (https://api.kimi.ai/coding/v1)');
+    expect(out).toContain('Wire protocol:      chat (POST /chat/completions)');
+  });
+
+  it('switches the endpoint, retargets managed services, and refreshes models', async () => {
+    const { harness, current, setConfigCalls, refreshCalls } = makeHarness(managedConfig());
+    const { deps, stdout, exitCodes } = makeDeps(harness);
+
+    await tryRun(() => handleProviderEndpoint(deps, 'com'));
+
+    expect(exitCodes).toEqual([]);
+    expect(stdout.join('')).toContain(
+      'Kimi Code endpoint set to com (https://api.kimi.com/coding/v1)',
+    );
+    const config = current();
+    expect(config.providers[MANAGED]?.baseUrl).toBe('https://api.kimi.com/coding/v1');
+    expect(config.providers[MANAGED]?.oauth).toEqual({
+      storage: 'file',
+      key: 'oauth/kimi-code-env-0e4f99c69cc27850',
+      oauthHost: 'https://auth.kimi.ai',
+    });
+    expect(config.services?.moonshotSearch?.baseUrl).toBe(
+      'https://api.kimi.com/coding/v1/search',
+    );
+    expect(config.services?.moonshotFetch?.baseUrl).toBe('https://search.example.test/fetch');
+    expect(refreshCalls).toEqual([{ providerId: MANAGED }]);
+    expect(setConfigCalls).toHaveLength(1);
+  });
+
+  it('is a no-op when the endpoint is already active', async () => {
+    const { harness, setConfigCalls, refreshCalls } = makeHarness(managedConfig());
+    const { deps, stdout } = makeDeps(harness);
+
+    await tryRun(() => handleProviderEndpoint(deps, 'ai'));
+
+    expect(stdout.join('')).toContain('Kimi Code endpoint is already ai');
+    expect(setConfigCalls).toHaveLength(0);
+    expect(refreshCalls).toHaveLength(0);
+  });
+
+  it('rejects an unknown endpoint without writing config', async () => {
+    const { harness, setConfigCalls } = makeHarness(managedConfig());
+    const { deps, stderr, exitCodes } = makeDeps(harness);
+
+    await tryRun(() => handleProviderEndpoint(deps, 'eu'));
+
+    expect(exitCodes).toEqual([1]);
+    expect(stderr.join('')).toContain('Unknown endpoint "eu"');
+    expect(setConfigCalls).toHaveLength(0);
+  });
+
+  it('records the wire protocol on the provider and refreshes to re-stamp aliases', async () => {
+    const { harness, current, refreshCalls } = makeHarness(managedConfig());
+    const { deps, stdout, exitCodes } = makeDeps(harness);
+
+    await tryRun(() => handleProviderProtocol(deps, 'responses'));
+
+    expect(exitCodes).toEqual([]);
+    expect(stdout.join('')).toContain('Kimi Code wire protocol set to responses');
+    expect(current().providers[MANAGED]?.wireProtocol).toBe('responses');
+    expect(refreshCalls).toEqual([{ providerId: MANAGED }]);
+  });
+
+  it('rejects an unknown wire protocol', async () => {
+    const { harness, setConfigCalls } = makeHarness(managedConfig());
+    const { deps, stderr, exitCodes } = makeDeps(harness);
+
+    await tryRun(() => handleProviderProtocol(deps, 'grpc'));
+
+    expect(exitCodes).toEqual([1]);
+    expect(stderr.join('')).toContain('Unknown wire protocol "grpc"');
+    expect(setConfigCalls).toHaveLength(0);
+  });
+
+  it('keeps the setting but exits non-zero when the refresh fails', async () => {
+    const { harness, current, refreshResult } = makeHarness(managedConfig());
+    refreshResult.failed = [{ provider: MANAGED, reason: 'HTTP 401' }];
+    const { deps, stderr, exitCodes } = makeDeps(harness);
+
+    await tryRun(() => handleProviderEndpoint(deps, 'com'));
+
+    expect(exitCodes).toEqual([1]);
+    expect(stderr.join('')).toContain('Models were not refreshed: HTTP 401');
+    expect(current().providers[MANAGED]?.baseUrl).toBe('https://api.kimi.com/coding/v1');
+  });
+
+  it('reports when no Kimi Code login is configured', async () => {
+    const { harness } = makeHarness({ providers: {} } as KimiConfig);
+    const { deps, stderr, exitCodes } = makeDeps(harness);
+
+    await tryRun(() => handleProviderEndpoint(deps, 'com'));
+
+    expect(exitCodes).toEqual([1]);
+    expect(stderr.join('')).toContain('No Kimi Code login found in config.toml');
   });
 });

@@ -26,9 +26,21 @@ import {
   type KimiConfig,
   type KimiHarness,
 } from '@moonshot-ai/kimi-code-sdk';
+import { KIMI_CODE_PROVIDER_NAME, MANAGED_KIMI_WIRE_PROTOCOLS } from '@moonshot-ai/kimi-code-oauth';
 import type { Command } from 'commander';
 
 import { createKimiCodeHostIdentity, createKimiCodeUserAgent } from '#/cli/version';
+import {
+  compareEnumArg,
+  currentWireProtocol,
+  describeManagedEndpoint,
+  MANAGED_ENDPOINT_NAMES,
+  MANAGED_ENDPOINTS,
+  managedEndpointName,
+  managedProvider,
+  managedProviderConfigPatch,
+  type ManagedProviderRecord,
+} from '#/utils/managed-endpoint';
 import { fetchCatalogOrBuiltIn } from '#/utils/catalog-fetch';
 
 interface WritableLike {
@@ -171,6 +183,99 @@ export async function handleProviderList(
   }
   if (config.defaultModel !== undefined) {
     deps.stdout.write(`\nDefault model: ${config.defaultModel}\n`);
+  }
+}
+
+export async function handleProviderEndpoint(
+  deps: ProviderDeps,
+  value: string | undefined,
+): Promise<void> {
+  const harness = deps.getHarness();
+  await harness.ensureConfigFile();
+  const config = await harness.getConfig();
+  const provider = requireManagedProvider(deps, config);
+
+  if (value === undefined) {
+    deps.stdout.write(describeManagedEndpoint(provider));
+    return;
+  }
+
+  const target = compareEnumArg(value, MANAGED_ENDPOINT_NAMES);
+  if (target === undefined) {
+    deps.stderr.write(`Unknown endpoint "${value}". Expected "com" or "ai".\n`);
+    deps.exit(1);
+  }
+  const { baseUrl } = MANAGED_ENDPOINTS[target];
+  if (managedEndpointName(provider.baseUrl) === target) {
+    deps.stdout.write(`Kimi Code endpoint is already ${target} (${baseUrl}).\n`);
+    return;
+  }
+
+  await harness.setConfig(managedProviderConfigPatch(config, { ...provider, baseUrl }));
+  deps.stdout.write(`Kimi Code endpoint set to ${target} (${baseUrl}).\n`);
+  await refreshManagedModels(deps, harness);
+}
+
+export async function handleProviderProtocol(
+  deps: ProviderDeps,
+  value: string | undefined,
+): Promise<void> {
+  const harness = deps.getHarness();
+  await harness.ensureConfigFile();
+  const config = await harness.getConfig();
+  const provider = requireManagedProvider(deps, config);
+  const current = currentWireProtocol(provider);
+
+  if (value === undefined) {
+    deps.stdout.write(describeManagedEndpoint(provider));
+    return;
+  }
+
+  const target = compareEnumArg(value, MANAGED_KIMI_WIRE_PROTOCOLS);
+  if (target === undefined) {
+    deps.stderr.write(
+      `Unknown wire protocol "${value}". Expected one of: ${MANAGED_KIMI_WIRE_PROTOCOLS.join(', ')}.\n`,
+    );
+    deps.exit(1);
+  }
+  if (target === current) {
+    deps.stdout.write(`Kimi Code wire protocol is already ${target}.\n`);
+    return;
+  }
+
+  await harness.setConfig(managedProviderConfigPatch(config, { ...provider, wireProtocol: target }));
+  deps.stdout.write(`Kimi Code wire protocol set to ${target}.\n`);
+  // The protocol lives on every model alias, so a refresh is what actually
+  // re-stamps it — `applyManagedKimiCodeConfig` reads the provider's choice.
+  await refreshManagedModels(deps, harness);
+}
+
+function requireManagedProvider(deps: ProviderDeps, config: KimiConfig): ManagedProviderRecord {
+  const provider = managedProvider(config);
+  if (provider === undefined) {
+    deps.stderr.write(
+      `No Kimi Code login found in config.toml (provider "${KIMI_CODE_PROVIDER_NAME}"). Run \`kimi login\` first.\n`,
+    );
+    deps.exit(1);
+  }
+  return provider;
+}
+
+async function refreshManagedModels(deps: ProviderDeps, harness: KimiHarness): Promise<void> {
+  const result = await harness.refreshProviderModels({ providerId: KIMI_CODE_PROVIDER_NAME });
+  const failure = result.failed.find((entry) => entry.provider === KIMI_CODE_PROVIDER_NAME);
+  if (failure !== undefined) {
+    deps.stderr.write(`Models were not refreshed: ${failure.reason}\n`);
+    deps.stderr.write('The setting is saved; the next launch retries the refresh.\n');
+    deps.exit(1);
+  }
+  const changed = result.changed.find((entry) => entry.provider_id === KIMI_CODE_PROVIDER_NAME);
+  if (changed !== undefined) {
+    deps.stdout.write(
+      `Models refreshed: ${String(changed.added)} added, ${String(changed.removed)} removed.\n`,
+    );
+  } else {
+    deps.stdout.write('Models unchanged.\n');
   }
 }
 
@@ -469,6 +574,26 @@ export function registerProviderCommand(parent: Command, deps?: Partial<Provider
     .action(async (options: { json?: boolean }) => {
       const resolved = resolveDeps(deps);
       await runAction(resolved, () => handleProviderList(resolved, { json: options.json === true }));
+    });
+
+  provider
+    .command('endpoint [value]')
+    .description(
+      'Show or switch the managed Kimi Code API endpoint ("com" = api.kimi.com, "ai" = api.kimi.ai). Refreshes the model list from the new endpoint.',
+    )
+    .action(async (value: string | undefined) => {
+      const resolved = resolveDeps(deps);
+      await runAction(resolved, () => handleProviderEndpoint(resolved, value));
+    });
+
+  provider
+    .command('protocol [value]')
+    .description(
+      'Show or switch the managed Kimi Code wire protocol ("chat", "responses", or "messages"). Re-stamps every Kimi Code model alias.',
+    )
+    .action(async (value: string | undefined) => {
+      const resolved = resolveDeps(deps);
+      await runAction(resolved, () => handleProviderProtocol(resolved, value));
     });
 
   const catalog = provider

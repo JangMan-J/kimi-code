@@ -14,7 +14,10 @@ import type { ModelAlias, RefreshProviderModelsResponse } from '@moonshot-ai/kim
 import { describe, expect, it, vi } from 'vitest';
 
 import type { SlashCommandHost } from '#/tui/commands';
+import { ChoicePickerComponent } from '#/tui/components/dialogs/choice-picker';
+import { ProviderManagerComponent } from '#/tui/components/dialogs/provider-manager';
 import { handleProviderCommand, setDefaultModel } from '#/tui/commands/provider';
+import { handleWireCommand } from '#/tui/commands/wire';
 
 function makeHost(
   options: {
@@ -263,7 +266,9 @@ describe('handleProviderCommand refresh', () => {
 
     await handleProviderCommand(host, 'refres');
 
-    expect(host.showError).toHaveBeenCalledWith('Usage: /provider [refresh [providerId]]');
+    expect(host.showError).toHaveBeenCalledWith(
+      expect.stringContaining('Usage: /provider [en|cn|manage|refresh [providerId]]'),
+    );
     expect(host.showProgressSpinner).not.toHaveBeenCalled();
     expect(host.authFlow.refreshProviderModels).not.toHaveBeenCalled();
     expect(spinner.stop).not.toHaveBeenCalled();
@@ -286,8 +291,145 @@ describe('handleProviderCommand refresh', () => {
 
     await handleProviderCommand(host, 'refresh custom unexpected');
 
-    expect(host.showError).toHaveBeenCalledWith('Usage: /provider [refresh [providerId]]');
+    expect(host.showError).toHaveBeenCalledWith('Usage: /provider refresh [providerId]');
     expect(host.authFlow.refreshProviderModels).not.toHaveBeenCalled();
     expect(spinner.stop).not.toHaveBeenCalled();
+  });
+});
+
+describe('/provider endpoint toggle and /wire', () => {
+  const MANAGED = 'managed:kimi-code';
+
+  function makeSwitchHost(baseUrl = 'https://api.kimi.ai/coding/v1', wireProtocol?: string) {
+    const mounted: unknown[] = [];
+    const config = {
+      providers: {
+        [MANAGED]: {
+          type: 'kimi',
+          baseUrl,
+          apiKey: '',
+          oauth: {
+            storage: 'file',
+            key: 'oauth/kimi-code-env-0e4f99c69cc27850',
+            oauthHost: 'https://auth.kimi.ai',
+          },
+          ...(wireProtocol === undefined ? {} : { wireProtocol }),
+        },
+      },
+      services: {
+        moonshotSearch: { baseUrl: `${baseUrl}/search`, apiKey: '' },
+        moonshotFetch: { baseUrl: 'https://search.example.test/fetch', apiKey: 'sk-custom' },
+      },
+    };
+    const setConfig = vi.fn(async (_patch: unknown) => ({} as never));
+    const refreshProviderModels = vi.fn(async () => ({
+      changed: [],
+      unchanged: [MANAGED],
+      failed: [],
+    }));
+    const host = {
+      state: {
+        appState: {
+          streamingPhase: 'idle',
+          model: 'k3.1-pro',
+          availableModels: {
+            'k3.1-pro': { provider: 'managed:kimi-code', model: 'k3.1-pro', maxContextSize: 1 },
+          },
+          availableProviders: { 'managed:kimi-code': { type: 'kimi' } },
+        },
+      },
+      harness: { getConfig: vi.fn(async () => structuredClone(config)), setConfig },
+      authFlow: { refreshProviderModels },
+      modelMigration: { retire: vi.fn(async () => {}) },
+      mountEditorReplacement: vi.fn((panel: unknown) => {
+        mounted.push(panel);
+      }),
+      restoreEditor: vi.fn(),
+      showStatus: vi.fn(),
+      showError: vi.fn(),
+      showProgressSpinner: vi.fn(() => ({ stop: vi.fn(), setLabel: vi.fn() })),
+      track: vi.fn(),
+    } as unknown as SlashCommandHost & {
+      harness: { setConfig: ReturnType<typeof vi.fn> };
+      authFlow: { refreshProviderModels: ReturnType<typeof vi.fn> };
+      mountEditorReplacement: ReturnType<typeof vi.fn>;
+      showError: ReturnType<typeof vi.fn>;
+      showStatus: ReturnType<typeof vi.fn>;
+    };
+    return { host, setConfig, refreshProviderModels, mounted };
+  }
+
+  it('mounts the EN/CN endpoint toggle when /provider has no argument', async () => {
+    const { host, mounted, setConfig } = makeSwitchHost();
+
+    await handleProviderCommand(host, '');
+
+    expect(mounted).toHaveLength(1);
+    expect(mounted[0]).toBeInstanceOf(ChoicePickerComponent);
+    expect(setConfig).not.toHaveBeenCalled();
+  });
+
+  it('switches to the mainland endpoint via /provider cn and refreshes models', async () => {
+    const { host, setConfig, refreshProviderModels } = makeSwitchHost();
+
+    await handleProviderCommand(host, 'cn');
+
+    expect(setConfig).toHaveBeenCalledTimes(1);
+    const patch = setConfig.mock.calls[0]![0] as {
+      providers: Record<string, { baseUrl?: string; oauth?: unknown }>;
+      services: { moonshotSearch?: { baseUrl?: string }; moonshotFetch?: { baseUrl?: string } };
+    };
+    expect(patch.providers[MANAGED]?.baseUrl).toBe('https://api.kimi.com/coding/v1');
+    expect(patch.providers[MANAGED]?.oauth).toEqual({
+      storage: 'file',
+      key: 'oauth/kimi-code-env-0e4f99c69cc27850',
+      oauthHost: 'https://auth.kimi.ai',
+    });
+    expect(patch.services.moonshotSearch?.baseUrl).toBe('https://api.kimi.com/coding/v1/search');
+    expect(patch.services.moonshotFetch?.baseUrl).toBe('https://search.example.test/fetch');
+    expect(refreshProviderModels).toHaveBeenCalledWith({ providerId: MANAGED });
+  });
+
+  it('reports already-active endpoints without writing', async () => {
+    const { host, setConfig } = makeSwitchHost('https://api.kimi.ai/coding/v1');
+
+    await handleProviderCommand(host, 'en');
+
+    expect(setConfig).not.toHaveBeenCalled();
+    expect(host.showStatus).toHaveBeenCalledWith(
+      'Kimi Code endpoint is already EN · api.kimi.ai (global).',
+    );
+  });
+
+  it('keeps the provider manager reachable through /provider manage', async () => {
+    const { host, mounted } = makeSwitchHost();
+
+    await handleProviderCommand(host, 'manage');
+
+    expect(mounted).toHaveLength(1);
+    expect(mounted[0]).toBeInstanceOf(ProviderManagerComponent);
+  });
+
+  it('mounts the wire toggle and applies a protocol from an argument', async () => {
+    const { host, mounted, setConfig, refreshProviderModels } = makeSwitchHost();
+
+    await handleWireCommand(host, '');
+    expect(mounted[0]).toBeInstanceOf(ChoicePickerComponent);
+
+    await handleWireCommand(host, 'responses');
+    const patch = setConfig.mock.calls[0]![0] as {
+      providers: Record<string, { wireProtocol?: string }>;
+    };
+    expect(patch.providers[MANAGED]?.wireProtocol).toBe('responses');
+    expect(refreshProviderModels).toHaveBeenCalledWith({ providerId: MANAGED });
+  });
+
+  it('rejects an unknown wire protocol', async () => {
+    const { host, setConfig } = makeSwitchHost();
+
+    await handleWireCommand(host, 'grpc');
+
+    expect(host.showError).toHaveBeenCalledWith(expect.stringContaining('Unknown wire protocol'));
+    expect(setConfig).not.toHaveBeenCalled();
   });
 });

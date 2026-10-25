@@ -4,7 +4,11 @@ import { readApiErrorMessage } from './api-error';
 import { DEFAULT_KIMI_CODE_OAUTH_HOST } from './constants';
 import { OAuthUnauthorizedError } from './errors';
 import { parseKimiCodeCustomHeaders } from './identity';
-import { DEFAULT_KIMI_CODE_BASE_URL, kimiCodeBaseUrl } from './managed-usage';
+import {
+  DEFAULT_KIMI_CODE_BASE_URL,
+  GLOBAL_KIMI_CODE_BASE_URL,
+  kimiCodeBaseUrl,
+} from './managed-usage';
 import { MANAGED_KIMI_MODEL_FIELDS, mergeRefreshedModelAlias } from './model-alias-merge';
 import { isRecord } from './utils';
 
@@ -14,6 +18,43 @@ export const KIMI_CODE_OAUTH_KEY = 'oauth/kimi-code';
 const KIMI_CODE_SCOPED_OAUTH_KEY_PREFIX = 'oauth/kimi-code-env-';
 
 export type ManagedKimiCodeProtocol = 'kimi' | 'anthropic' | 'openai_responses';
+
+/**
+ * Wire dialect requested for every model of a managed Kimi Code login. The
+ * Kimi Code API serves the same models over three routes — `/chat/completions`
+ * (`kimi`), `/responses` (`openai_responses`), `/messages` (`anthropic`) — and
+ * `chat` (the provider default) means "let the provider type decide". The
+ * choice lives on the provider record as `wire_protocol` so a model refresh
+ * re-stamps it instead of dropping it.
+ */
+export type ManagedKimiWireProtocol = 'chat' | 'responses' | 'messages';
+
+export const MANAGED_KIMI_WIRE_PROTOCOLS: readonly ManagedKimiWireProtocol[] = [
+  'chat',
+  'responses',
+  'messages',
+];
+
+export function parseManagedKimiWireProtocol(value: unknown): ManagedKimiWireProtocol | undefined {
+  return MANAGED_KIMI_WIRE_PROTOCOLS.find((candidate) => candidate === value);
+}
+
+/**
+ * Model-level protocol for a wire-dialect choice; `undefined` keeps the
+ * provider-type default (`kimi`).
+ */
+export function wireProtocolModelProtocol(
+  wireProtocol: ManagedKimiWireProtocol,
+): ManagedKimiCodeProtocol | undefined {
+  switch (wireProtocol) {
+    case 'responses':
+      return 'openai_responses';
+    case 'messages':
+      return 'anthropic';
+    case 'chat':
+      return undefined;
+  }
+}
 
 export function parseModelProtocol(value: unknown): ManagedKimiCodeProtocol | undefined {
   if (value === 'anthropic') return 'anthropic';
@@ -136,6 +177,7 @@ export interface ManagedKimiProviderConfig {
   apiKey?: string | undefined;
   apiKeyEnv?: string;
   oauth?: ManagedKimiOAuthRef | undefined;
+  wireProtocol?: ManagedKimiWireProtocol | undefined;
   readonly [key: string]: unknown;
 }
 
@@ -321,6 +363,14 @@ const SHARED_DEFAULT_BASE_URLS: ReadonlySet<string> = new Set([
   normalizeEndpoint(DEFAULT_KIMI_CODE_BASE_URL),
 ]);
 
+// Every managed Kimi Code API endpoint. One login can be pointed at either
+// endpoint (`KIMI_CODE_BASE_URL`, or the provider's `base_url` in
+// config.toml) without losing its credential slot.
+const MANAGED_BASE_URLS: ReadonlySet<string> = new Set([
+  normalizeEndpoint(DEFAULT_KIMI_CODE_BASE_URL),
+  normalizeEndpoint(GLOBAL_KIMI_CODE_BASE_URL),
+]);
+
 export function resolveKimiCodeOAuthKey(options: {
   readonly oauthHost?: string | undefined;
   readonly baseUrl?: string | undefined;
@@ -368,18 +418,48 @@ export function resolveKimiCodeRuntimeAuth(options: {
   const env = options.env ?? process.env;
   const envBaseUrl = kimiCodeEnvBaseUrl(env);
   const envOAuthHost = kimiCodeEnvOAuthHost(env);
-  const hasEnvOverride = envBaseUrl !== undefined || envOAuthHost !== undefined;
   const baseUrl =
     envBaseUrl !== undefined ? normalizeBaseUrl(envBaseUrl) : options.configuredBaseUrl;
   const expected = resolveKimiCodeOAuthRef({
-    oauthHost: hasEnvOverride ? envOAuthHost : options.configuredOAuthRef?.oauthHost,
+    oauthHost: envOAuthHost ?? options.configuredOAuthRef?.oauthHost,
     baseUrl,
   });
   const configured = configuredOAuthRef(options.configuredOAuthRef);
   if (configured === undefined) return { baseUrl, oauthRef: expected };
-  if (hasEnvOverride) return { baseUrl, oauthRef: expected };
-  if (configured.key !== expected.key) return { baseUrl, oauthRef: expected };
-  return { baseUrl, oauthRef: configured };
+  if (configured.key === expected.key) return { baseUrl, oauthRef: configured };
+  if (siblingManagedEndpoint({ configured, expected, baseUrl })) {
+    return { baseUrl, oauthRef: configured };
+  }
+  return { baseUrl, oauthRef: expected };
+}
+
+/**
+ * Whether `configured` and `expected` differ only in which managed Kimi Code
+ * endpoint they point at — same OAuth host, both bases inside
+ * {@link MANAGED_BASE_URLS}.
+ *
+ * The credential key hashes (oauthHost, baseUrl), so routing an existing
+ * login at the other region's endpoint (`,com` ↔ `.ai`) otherwise lands on a
+ * slot that holds no token and the user appears logged out. Reusing the
+ * configured slot here is safe: both endpoints are the same product behind the
+ * same identity provider. Custom endpoints still key strictly, because a
+ * non-managed base never matches.
+ */
+function siblingManagedEndpoint(options: {
+  readonly configured: ManagedKimiOAuthRef;
+  readonly expected: ManagedKimiOAuthRef;
+  readonly baseUrl?: string | undefined;
+}): boolean {
+  const configuredHost = normalizeEndpoint(
+    options.configured.oauthHost ?? DEFAULT_KIMI_CODE_OAUTH_HOST,
+  );
+  const expectedHost = normalizeEndpoint(
+    options.expected.oauthHost ?? DEFAULT_KIMI_CODE_OAUTH_HOST,
+  );
+  if (configuredHost !== expectedHost) return false;
+  const baseUrl = options.baseUrl;
+  if (baseUrl === undefined) return false;
+  return MANAGED_BASE_URLS.has(normalizeBaseUrl(baseUrl));
 }
 
 export function resolveKimiCodeLoginAuth(options: {
@@ -646,8 +726,20 @@ export function applyManagedKimiCodeConfig(
     options.oauthKey !== undefined
       ? managedOAuthRef({ key: options.oauthKey, oauthHost: options.oauthHost })
       : resolveKimiCodeOAuthRef({ baseUrl, oauthHost: options.oauthHost });
+  const existingProvider = config.providers[KIMI_CODE_PROVIDER_NAME];
+  const wireProtocol = isRecord(existingProvider)
+    ? parseManagedKimiWireProtocol(existingProvider['wireProtocol'])
+    : undefined;
+  const modelProtocol = wireProtocol === undefined ? undefined : wireProtocolModelProtocol(wireProtocol);
+  // A declared wire dialect outranks the server's per-model `protocol`: the
+  // server currently declares none, and the user's explicit choice must
+  // survive every refresh rather than being re-derived each time.
+  const models =
+    modelProtocol === undefined
+      ? options.models
+      : options.models.map((model) => ({ ...model, protocol: modelProtocol }));
   const existingModels = config.models ?? {};
-  const selectedDefault = selectDefaultModel(config, options.models, {
+  const selectedDefault = selectDefaultModel(config, models, {
     preserveExisting: options.preserveDefaultModel === true,
   });
 
@@ -656,6 +748,7 @@ export function applyManagedKimiCodeConfig(
     baseUrl,
     apiKey: '',
     oauth,
+    ...(wireProtocol !== undefined ? { wireProtocol } : {}),
   };
 
   // Selectively merge upstream models into the existing config so any fields
@@ -663,7 +756,7 @@ export function applyManagedKimiCodeConfig(
   // refresh. Managed models that upstream no longer lists are removed; the
   // rest are merged field-by-field — upstream-owned fields are overwritten,
   // everything else is preserved.
-  const upstreamKeys = new Set(options.models.map((m) => managedModelKey(m.id)));
+  const upstreamKeys = new Set(models.map((m) => managedModelKey(m.id)));
   for (const [key, model] of Object.entries(existingModels)) {
     if (
       isRecord(model) &&
@@ -673,7 +766,7 @@ export function applyManagedKimiCodeConfig(
       delete existingModels[key];
     }
   }
-  for (const model of options.models) {
+  for (const model of models) {
     const key = managedModelKey(model.id);
     const existing = isRecord(existingModels[key]) ? existingModels[key] : {};
     existingModels[key] = mergeRefreshedModelAlias(

@@ -44,6 +44,7 @@ import { handleAddDirCommand } from './add-dir';
 import { parseSlashInput } from './parse';
 import { handlePluginsCommand } from './plugins';
 import { handleProviderCommand } from './provider';
+import { handleWireCommand } from './wire';
 import {
   findBuiltInSlashCommand,
   resolveSlashCommandAvailability,
@@ -471,6 +472,9 @@ async function handleBuiltInSlashCommand(
       return;
     case 'provider':
       await handleProviderCommand(host, args);
+      return;
+    case 'wire':
+      await handleWireCommand(host, args);
       return;
     case 'permission':
       showPermissionPicker(host);

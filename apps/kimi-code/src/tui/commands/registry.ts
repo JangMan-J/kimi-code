@@ -33,6 +33,20 @@ const TOWER_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
   { value: 'off', description: 'Turn tower mode off' },
 ];
 
+/** Subcommands offered when autocompleting `/provider <…>`. */
+const PROVIDER_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
+  { value: 'en', description: 'Use api.kimi.ai (global)' },
+  { value: 'cn', description: 'Use api.kimi.com (mainland)' },
+  { value: 'manage', description: 'Open the provider manager' },
+  { value: 'refresh', description: 'Re-fetch provider model lists' },
+];
+
+const WIRE_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
+  { value: 'chat', description: 'POST /chat/completions' },
+  { value: 'responses', description: 'POST /responses' },
+  { value: 'messages', description: 'POST /messages (beta)' },
+];
+
 const ADD_DIR_ARG_COMPLETIONS: readonly ArgCompletionSpec[] = [
   { value: 'list', description: 'Show configured additional workspace directories' },
 ];
@@ -49,6 +63,16 @@ export function goalArgumentCompletions(argumentPrefix: string): AutocompleteIte
     );
   }
   return completeLeadingArg(GOAL_ARG_COMPLETIONS, argumentPrefix);
+}
+
+/** Argument autocompletion for the `/provider` command (subcommands). */
+export function providerArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+  return completeLeadingArg(PROVIDER_ARG_COMPLETIONS, argumentPrefix);
+}
+
+/** Argument autocompletion for the `/wire` command (protocols). */
+export function wireArgumentCompletions(argumentPrefix: string): AutocompleteItem[] | null {
+  return completeLeadingArg(WIRE_ARG_COMPLETIONS, argumentPrefix);
 }
 
 /** Argument autocompletion for the `/swarm` command (subcommands). */
@@ -226,9 +250,18 @@ export const BUILTIN_SLASH_COMMANDS = [
   {
     name: 'provider',
     aliases: ['providers'],
-    description: 'Manage AI providers (add / delete / refresh)',
+    description: 'Switch the Kimi Code endpoint (EN / CN), or manage AI providers',
     priority: 95,
     availability: 'always',
+    completeArgs: providerArgumentCompletions,
+  },
+  {
+    name: 'wire',
+    aliases: [],
+    description: 'Switch the Kimi Code wire protocol (chat / responses / messages)',
+    priority: 94,
+    availability: 'always',
+    completeArgs: wireArgumentCompletions,
   },
   {
     name: 'btw',

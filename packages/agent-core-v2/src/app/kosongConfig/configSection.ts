@@ -44,6 +44,8 @@ export const ModelSourceSchema = z.enum(['static', 'discover', 'oauth-catalog'])
 
 const StringRecordSchema = z.record(z.string(), z.string());
 
+export const WireProtocolSchema = z.enum(['chat', 'responses', 'messages']);
+
 export const ProviderConfigSchema = z.object({
   modelSource: ModelSourceSchema.optional(),
 
@@ -56,6 +58,7 @@ export const ProviderConfigSchema = z.object({
   apiKeyEnv: z.string().optional(),
   oauth: OAuthRefSchema.optional(),
   env: StringRecordSchema.optional(),
+  wireProtocol: WireProtocolSchema.optional(),
   source: z.record(z.string(), z.unknown()).optional(),
 });
 

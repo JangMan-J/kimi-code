@@ -370,6 +370,24 @@ kimi provider list
 kimi provider list --json | jq '.providers | keys'
 ```
 
+#### `kimi provider endpoint [com|ai]`
+
+查看或切换托管 Kimi Code 使用的端点：`com` 为 `https://api.kimi.com/coding/v1`（中国大陆），`ai` 为 `https://api.kimi.ai/coding/v1`（全球）。两者服务同一账号与同一批模型，切换无需重新登录，已保存的凭证继续可用。命令会改写供应商的 `base_url` 以及托管的 `moonshot_search` / `moonshot_fetch` 服务（手工配置的服务端点保持不变），随后从新端点刷新模型列表。不带参数时打印当前端点与传输协议。
+
+```sh
+kimi provider endpoint        # "Kimi Code endpoint: ai (https://api.kimi.ai/coding/v1)"
+kimi provider endpoint com    # 切换到大陆端点并刷新模型
+```
+
+#### `kimi provider protocol [chat|responses|messages]`
+
+查看或切换所有 Kimi Code 模型别名使用的传输协议。Kimi Code API 用三条路由提供同一批模型，三者均可选：`chat`（`/chat/completions`）、`responses`（OpenAI Responses API，`/responses`）与 `messages`（Anthropic Messages API，`/messages?beta=true`）。该选择保存在 `managed:kimi-code` 供应商的 `wire_protocol` 字段中，每次模型刷新都会重新写入各模型别名，因此能跨刷新与重新登录保留。
+
+```sh
+kimi provider protocol            # 显示当前协议
+kimi provider protocol responses  # 所有 Kimi Code 模型改用 Responses API
+```
+
 #### `kimi provider catalog list [providerId]`
 
 在不修改任何配置的情况下浏览公开的 [models.dev](https://models.dev/) 模型目录。不传参数时列出所有供应商及协议类型和模型数量；传 `providerId` 时列出该供应商下所有模型的上下文窗口和能力。目录地址不可达时会使用内置目录快照。

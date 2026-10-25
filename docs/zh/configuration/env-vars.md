@@ -102,6 +102,8 @@ KIMI_BASE_URL = "https://api.moonshot.ai/v1"
 `KIMI_CODE_BASE_URL`（OAuth 托管服务，指向 `kimi.com`）和 `KIMI_BASE_URL`（API 密钥直连，指向 `moonshot.ai`）是两个不同的变量，请按场景区分。
 :::
 
+`KIMI_CODE_BASE_URL` 也可以把已有的 Kimi Code 登录指向另个托管端点，无需重新登录：`https://api.kimi.ai/coding/v1`（global）或 `https://api.kimi.com/coding/v1`（mainland）；两个方向下已保存的凭证都继续可用。模型调用本身跟随 `config.toml` 中 `managed:kimi-code` 供应商的 `base_url`——`KIMI_CODE_BASE_URL` 只影响托管端点（配额、用户信息、模型列表），并由下一次模型刷新写回该字段。若不想手改文件，可用 `kimi provider endpoint com|ai` 切换（见 [`kimi provider`](../reference/kimi-command.md#kimi-provider-endpoint-comai)）；`kimi provider protocol` 选择传输协议（`chat`、`responses`、`messages`）。只有这两个托管端点可以互换，其他 base URL 仍各自对应独立的凭证槽位。
+
 ## 用环境变量定义模型（`KIMI_MODEL_*`）
 
 测试时想换个模型但不想动 `config.toml`？设置 `KIMI_MODEL_NAME` 后，CLI 会从 `KIMI_MODEL_*` 系列变量在内存里合成出一个临时供应商和模型别名，不写回配置文件。优先级高于 `config.toml` 的 `default_model`，但低于启动时 `-m <alias>` 选项。

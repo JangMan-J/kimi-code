@@ -91,13 +91,16 @@ export {
   KIMI_CODE_OAUTH_KEY,
   KIMI_CODE_PLATFORM_ID,
   KIMI_CODE_PROVIDER_NAME,
+  MANAGED_KIMI_WIRE_PROTOCOLS,
   ManagedKimiCodeModelsAuthError,
+  parseManagedKimiWireProtocol,
   provisionManagedKimiCodeConfig,
   resolveKimiCodeLoginAuth,
   resolveKimiCodeOAuthKey,
   resolveKimiCodeOAuthRef,
   resolveKimiCodeRuntimeAuth,
   toManagedModelAlias,
+  wireProtocolModelProtocol,
 } from './managed-kimi-code';
 export type {
   FetchManagedKimiCodeModelsOptions,
@@ -113,6 +116,7 @@ export type {
   ManagedKimiOAuthRef,
   ManagedKimiOAuthRefInput,
   ManagedKimiRuntimeAuth,
+  ManagedKimiWireProtocol,
   ProvisionManagedKimiCodeConfigOptions,
 } from './managed-kimi-code';
 
